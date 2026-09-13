@@ -60,7 +60,8 @@
  */
 
 /**
- * 群の同一性は**群の名前**(`japanese`/`identifiersSparse`/`identifiersDense`)で取る。
+ * 群の同一性は**群の名前**(`japanese`/`identifiersSparse`/`identifiersDense`/
+ * `japaneseNamesSparse`/`japaneseNamesDense`)で取る。
  * ⛔ `label` では取らない——`label` は `(llm, provider/model/dimensions, haystack)` を
  * 文字列に埋めたものであり、**モデルを差し替えると label ごと変わる**。label を鍵に
  * すると、そのとき出るのは「embeddingSpace.model が変わった」ではなく
@@ -71,7 +72,13 @@
  * ⟹ 基準値ファイルの各群も、この名前を `group` として明示的に持つ
  * (実測 JSON 側はこの名前がそのままキーである)。
  */
-const GROUP_KEYS = ["japanese", "identifiersSparse", "identifiersDense"];
+const GROUP_KEYS = [
+  "japanese",
+  "identifiersSparse",
+  "identifiersDense",
+  "japaneseNamesSparse",
+  "japaneseNamesDense",
+];
 
 const REQUIRED_GROUP_STRING_FIELDS = ["label", "llmMode", "embeddingMode", "haystackKind"];
 const REQUIRED_GROUP_NUMBER_FIELDS = ["mrrOverall", "hit1Count", "hit10Count", "probeCount"];
@@ -390,6 +397,8 @@ export function buildSummaryMarkdown({ measured, baseline }) {
     buildGroupRow(measured.japanese),
     buildGroupRow(measured.identifiersSparse),
     buildGroupRow(measured.identifiersDense),
+    buildGroupRow(measured.japaneseNamesSparse),
+    buildGroupRow(measured.japaneseNamesDense),
     "",
   );
   if (baseline) {

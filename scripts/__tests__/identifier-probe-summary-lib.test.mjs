@@ -60,6 +60,22 @@ function makeMeasured(overrides = {}) {
         "identifier-probes/identifiers-dense(llm=deterministic, embedding=local/ruri-v3-30m/sym/256次元, haystack=dense)",
       haystackKind: "dense",
     }),
+    japaneseNamesSparse: makeGroup({
+      label:
+        "identifier-probes/japanese-names-sparse(llm=deterministic, embedding=local/ruri-v3-30m/sym/256次元, haystack=sparse)",
+      haystackKind: "sparse",
+      probeCount: 12,
+      hit1Count: 12,
+      hit10Count: 12,
+    }),
+    japaneseNamesDense: makeGroup({
+      label:
+        "identifier-probes/japanese-names-dense(llm=deterministic, embedding=local/ruri-v3-30m/sym/256次元, haystack=dense)",
+      haystackKind: "dense",
+      probeCount: 12,
+      hit1Count: 12,
+      hit10Count: 12,
+    }),
     ...overrides,
   };
 }
@@ -77,6 +93,8 @@ function baselineFrom(measured) {
       { group: "japanese", ...structuredClone(measured.japanese) },
       { group: "identifiersSparse", ...structuredClone(measured.identifiersSparse) },
       { group: "identifiersDense", ...structuredClone(measured.identifiersDense) },
+      { group: "japaneseNamesSparse", ...structuredClone(measured.japaneseNamesSparse) },
+      { group: "japaneseNamesDense", ...structuredClone(measured.japaneseNamesDense) },
     ],
   };
 }

@@ -59,11 +59,13 @@ function minimalIdentifierReport(
 }
 
 describe("buildMeasuredIdentifierProbeJson", () => {
-  it("(provider, model, dimensions) と haystackKind を3群すべてに同居させる", () => {
+  it("(provider, model, dimensions) と haystackKind を5群すべてに同居させる", () => {
     const json = buildMeasuredIdentifierProbeJson({
       japaneseReport: minimalJapaneseReport(),
       identifierSparseReport: minimalIdentifierReport("sparse"),
       identifierDenseReport: minimalIdentifierReport("dense", { mrrOverall: 0.5 }),
+      japaneseNameSparseReport: minimalIdentifierReport("sparse", { mrrOverall: 0.25 }),
+      japaneseNameDenseReport: minimalIdentifierReport("dense", { mrrOverall: 0.125 }),
       embeddingSpace: { provider: "local", model: "ruri-v3-30m/sym", dimensions: 256 },
       measuredAt: new Date("2026-09-10T00:00:00.000Z"),
       commit: "abc123",
@@ -76,15 +78,22 @@ describe("buildMeasuredIdentifierProbeJson", () => {
     expect(json.japanese.embeddingSpace).toEqual(expectedSpace);
     expect(json.identifiersSparse.embeddingSpace).toEqual(expectedSpace);
     expect(json.identifiersDense.embeddingSpace).toEqual(expectedSpace);
+    expect(json.japaneseNamesSparse.embeddingSpace).toEqual(expectedSpace);
+    expect(json.japaneseNamesDense.embeddingSpace).toEqual(expectedSpace);
 
-    // haystackKind — 3群のうちどれ1つも落とさない(マネージャー指示)。
+    // haystackKind — 5群のうちどれ1つも落とさない(マネージャー指示)。
     expect(json.japanese.haystackKind).toBe("sparse");
     expect(json.identifiersSparse.haystackKind).toBe("sparse");
     expect(json.identifiersDense.haystackKind).toBe("dense");
+    expect(json.japaneseNamesSparse.haystackKind).toBe("sparse");
+    expect(json.japaneseNamesDense.haystackKind).toBe("dense");
 
     expect(json.japanese.mrrOverall).toBe(0.81);
     expect(json.identifiersSparse.mrrOverall).toBe(1);
     expect(json.identifiersDense.mrrOverall).toBe(0.5);
+    // 🔴 5群が別々の欄として出ること——混ぜた単一の MRR を作らない(ADR 0094 §1)。
+    expect(json.japaneseNamesSparse.mrrOverall).toBe(0.25);
+    expect(json.japaneseNamesDense.mrrOverall).toBe(0.125);
   });
 });
 
@@ -98,6 +107,8 @@ describe("buildWeightsUnavailableIdentifierProbeJson", () => {
     expect(json.status).toBe("weights_unavailable");
     expect(json).not.toHaveProperty("japanese");
     expect(json).not.toHaveProperty("identifiersSparse");
+    expect(json).not.toHaveProperty("japaneseNamesSparse");
+    expect(json).not.toHaveProperty("japaneseNamesDense");
     expect(json).not.toHaveProperty("identifiersDense");
     if (json.status !== "weights_unavailable") {
       throw new Error("unreachable");

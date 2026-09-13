@@ -7,7 +7,8 @@ import {
   identifierDistractorExternalId,
   identifierGoldExternalId,
 } from "./identifier-probe-set.js";
-import type { IdentifierHaystackKind, IdentifierProbe } from "./identifier-probe-set.js";
+import type { IdentifierHaystackKind } from "./identifier-probe-set.js";
+import type { ProbeUtterance } from "./probe-set.js";
 import type { ProviderMode } from "./providers.js";
 import { resolveExternalId } from "./provenance-trace.js";
 import {
@@ -40,7 +41,9 @@ import type { ProbeScoreDetail, TermSpread } from "./retrieval-quality.js";
 
 export interface IdentifierProbeOutcome {
   probeId: string;
-  category: IdentifierProbe["category"];
+  /** probe 集合ごとに語彙が違う（識別子集合は person/channel/... 、日本語固有名詞集合は person/org/...）。
+   *  ⟹ 特定の union に固定せず `string` で受ける。 */
+  category: string;
   /** `recall().memories` の中の gold の順位(1始まり)。居なければ null。 */
   goldRank: number | null;
   distractorRank: number | null;
@@ -77,6 +80,32 @@ export interface IdentifierArmReport {
   probeCount: number;
 }
 
+/**
+ * この arm が回す probe 集合。**既定は識別子 probe 集合**であり、
+ * 渡さなければ既存の呼び出しと1演算も変わらない（ADR 0094 の測定値を動かさないため）。
+ *
+ * ⭐ **arm 側を probe 集合から独立させるためだけの口である。**
+ * 閾値・limit・overFetchFactor・haystack の作り方には一切触れていない。
+ */
+export interface ArmProbeSetSpec {
+  /** `id` / `query` / `category` だけを要求する（arm はそれ以外を見ない）。 */
+  probes: readonly { id: string; query: string; category: string }[];
+  buildConversation: (
+    haystackSize: number | undefined,
+    haystackKind: IdentifierHaystackKind,
+  ) => ProbeUtterance[];
+  goldExternalId: (probeId: string) => string;
+  distractorExternalId: (probeId: string) => string;
+}
+
+/** 既定の probe 集合＝ADR 0094 の識別子 probe。 */
+export const IDENTIFIER_PROBE_SET_SPEC: ArmProbeSetSpec = {
+  probes: IDENTIFIER_PROBES,
+  buildConversation: buildIdentifierProbeSetConversation,
+  goldExternalId: identifierGoldExternalId,
+  distractorExternalId: identifierDistractorExternalId,
+};
+
 export interface RunIdentifierProbeArmOptions {
   armLabel: string;
   /** **必ず、この run で初めて使うテナントを渡すこと。**`./retrieval-quality.js` の
@@ -98,6 +127,8 @@ export interface RunIdentifierProbeArmOptions {
   /** 既定は haystackKind に応じて `./identifier-probe-set.js` 側が決める
    *  (`DEFAULT_HAYSTACK_SIZE`/`DEFAULT_DENSE_HAYSTACK_SIZE`)。 */
   haystackSize?: number;
+  /** 回す probe 集合。**省略時は `IDENTIFIER_PROBE_SET_SPEC`**（＝ADR 0094 の識別子 probe）。 */
+  probeSet?: ArmProbeSetSpec;
 }
 
 function average(values: number[]): number {
@@ -112,7 +143,8 @@ export async function runIdentifierProbeArm(
 ): Promise<IdentifierArmReport> {
   const ctx: Ctx = { tenantId: options.tenantId };
   const haystackKind = options.haystackKind ?? "sparse";
-  const utterances = buildIdentifierProbeSetConversation(options.haystackSize, haystackKind);
+  const probeSet = options.probeSet ?? IDENTIFIER_PROBE_SET_SPEC;
+  const utterances = probeSet.buildConversation(options.haystackSize, haystackKind);
 
   for (const utterance of utterances) {
     await options.runtime.observe(ctx, {
@@ -125,15 +157,15 @@ export async function runIdentifierProbeArm(
   const drain = await drainEmbedTicks(options.runtime, ctx);
 
   const probes: IdentifierProbeOutcome[] = [];
-  for (const probe of IDENTIFIER_PROBES) {
+  for (const probe of probeSet.probes) {
     // ⛔ `text` 以外を渡さない(既存 arm と同じ規律)——閾値・limit・overFetchFactor は
     // 一切変えない。
     const result = await options.runtime.recall(ctx, { text: probe.query });
     const resolvedExternalIds = await Promise.all(
       result.memories.map((m) => resolveExternalId(options.memoryStore, ctx, m.memoryId)),
     );
-    const goldIndex = resolvedExternalIds.indexOf(identifierGoldExternalId(probe.id));
-    const distractorIndex = resolvedExternalIds.indexOf(identifierDistractorExternalId(probe.id));
+    const goldIndex = resolvedExternalIds.indexOf(probeSet.goldExternalId(probe.id));
+    const distractorIndex = resolvedExternalIds.indexOf(probeSet.distractorExternalId(probe.id));
     const goldRank = goldIndex === -1 ? null : goldIndex + 1;
     const distractorRank = distractorIndex === -1 ? null : distractorIndex + 1;
     const distractorBeatsGold =

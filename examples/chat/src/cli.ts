@@ -27,6 +27,7 @@ import {
 import { formatRecall } from "./format.js";
 import { tryGitRevParseHead } from "./git-info.js";
 import { formatIdentifierArmReport, runIdentifierProbeArm } from "./identifier-arm.js";
+import { JAPANESE_NAME_PROBE_SET_SPEC } from "./japanese-name-probe-set.js";
 import {
   buildMeasuredIdentifierProbeJson,
   buildWeightsUnavailableIdentifierProbeJson,
@@ -855,9 +856,39 @@ async function runIdentifierProbes(): Promise<void> {
     });
     console.log(formatIdentifierArmReport(identifierDenseReport));
 
+    console.log(
+      "\n=== 群4: 日本語の固有名詞 probe 12件(./japanese-name-probe-set.js、haystack=sparse) ===",
+    );
+    const japaneseNameSparseReport = await runIdentifierProbeArm({
+      armLabel: `identifier-probes/japanese-names-sparse(llm=${handle.llmMode}, embedding=${handle.embeddingMode}/${embeddingSpace.model}/${embeddingSpace.dimensions}次元, haystack=sparse)`,
+      tenantId: `identifier-probes-jp-sparse-${runToken}`,
+      runtime: handle.runtime,
+      memoryStore: handle.memoryStore,
+      llmMode: handle.llmMode,
+      embeddingMode: handle.embeddingMode,
+      haystackKind: "sparse",
+      probeSet: JAPANESE_NAME_PROBE_SET_SPEC,
+    });
+    console.log(formatIdentifierArmReport(japaneseNameSparseReport));
+
+    console.log(
+      "\n=== 群5: 日本語の固有名詞 probe 12件(./japanese-name-probe-set.js、haystack=dense) ===",
+    );
+    const japaneseNameDenseReport = await runIdentifierProbeArm({
+      armLabel: `identifier-probes/japanese-names-dense(llm=${handle.llmMode}, embedding=${handle.embeddingMode}/${embeddingSpace.model}/${embeddingSpace.dimensions}次元, haystack=dense)`,
+      tenantId: `identifier-probes-jp-dense-${runToken}`,
+      runtime: handle.runtime,
+      memoryStore: handle.memoryStore,
+      llmMode: handle.llmMode,
+      embeddingMode: handle.embeddingMode,
+      haystackKind: "dense",
+      probeSet: JAPANESE_NAME_PROBE_SET_SPEC,
+    });
+    console.log(formatIdentifierArmReport(japaneseNameDenseReport));
+
     const jpHeadline = armHeadline(japaneseReport);
     console.log(
-      "\n=== まとめ(3群は別々——混ぜた単一の MRR は作らない) ===\n" +
+      "\n=== まとめ(5群は別々——混ぜた単一の MRR は作らない) ===\n" +
         `  日本語意味probe(${jpHeadline.probeCount}件, llm=${handle.llmMode}, ` +
         `embedding=${handle.embeddingMode}/${embeddingSpace.model}/${embeddingSpace.dimensions}次元, ` +
         `haystack=sparse): MRR=${jpHeadline.mrrOverall.toFixed(3)} ` +
@@ -872,7 +903,17 @@ async function runIdentifierProbes(): Promise<void> {
         `embedding=${handle.embeddingMode}/${embeddingSpace.model}/${embeddingSpace.dimensions}次元, ` +
         `haystack=dense): MRR=${identifierDenseReport.mrrOverall.toFixed(3)} ` +
         `hit@1=${identifierDenseReport.hit1Count}/${identifierDenseReport.probeCount} ` +
-        `hit@10=${identifierDenseReport.hit10Count}/${identifierDenseReport.probeCount}`,
+        `hit@10=${identifierDenseReport.hit10Count}/${identifierDenseReport.probeCount}\n` +
+        `  日本語固有名詞probe(${japaneseNameSparseReport.probeCount}件, llm=${handle.llmMode}, ` +
+        `embedding=${handle.embeddingMode}/${embeddingSpace.model}/${embeddingSpace.dimensions}次元, ` +
+        `haystack=sparse): MRR=${japaneseNameSparseReport.mrrOverall.toFixed(3)} ` +
+        `hit@1=${japaneseNameSparseReport.hit1Count}/${japaneseNameSparseReport.probeCount} ` +
+        `hit@10=${japaneseNameSparseReport.hit10Count}/${japaneseNameSparseReport.probeCount}\n` +
+        `  日本語固有名詞probe(${japaneseNameDenseReport.probeCount}件, llm=${handle.llmMode}, ` +
+        `embedding=${handle.embeddingMode}/${embeddingSpace.model}/${embeddingSpace.dimensions}次元, ` +
+        `haystack=dense): MRR=${japaneseNameDenseReport.mrrOverall.toFixed(3)} ` +
+        `hit@1=${japaneseNameDenseReport.hit1Count}/${japaneseNameDenseReport.probeCount} ` +
+        `hit@10=${japaneseNameDenseReport.hit10Count}/${japaneseNameDenseReport.probeCount}`,
     );
     console.log(
       `\n(注) ADR 0033 §3: 標本${japaneseReport.probes.length}件・${identifierSparseReport.probeCount}件からは` +
@@ -885,6 +926,8 @@ async function runIdentifierProbes(): Promise<void> {
         japaneseReport,
         identifierSparseReport,
         identifierDenseReport,
+        japaneseNameSparseReport,
+        japaneseNameDenseReport,
         embeddingSpace,
         measuredAt,
         commit,

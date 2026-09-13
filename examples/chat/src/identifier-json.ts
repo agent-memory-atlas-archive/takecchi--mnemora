@@ -58,6 +58,14 @@ export type IdentifierProbeRunJson =
       /** 同じ識別子 probe を、同じ書式ファミリーの識別子が密な haystack で走らせた結果
        *  (#106 の「同じ形式の別の識別子が近傍に来て埋もれる」を表す条件)。 */
       identifiersDense: IdentifierProbeGroupJson;
+      /** 日本語の固有名詞 probe(`./japanese-name-probe-set.js`)、固有名詞を含まない既定 haystack。
+       *  ⚠ **これは埋め込み(ANN)が日本語の固有名詞を弁別できるかを測るものであり、
+       *  語彙チャンネルの日本語の制限(ADR 0092)を測るものではない**——語彙チャンネルは
+       *  `examples/chat` で配線されていない(Issue #179 で製品の判断待ち)。 */
+      japaneseNamesSparse: IdentifierProbeGroupJson;
+      /** 同じ固有名詞 probe を、同じ姓/組織/製品/地名ファミリーの固有名詞が密な haystack で
+       *  走らせた結果。密度は 60/12 = 5:1 で、識別子ベンチが最初に設計されたときと同じ。 */
+      japaneseNamesDense: IdentifierProbeGroupJson;
     }
   | {
       schemaVersion: 2;
@@ -119,6 +127,8 @@ export function buildMeasuredIdentifierProbeJson(options: {
   japaneseReport: ArmReport;
   identifierSparseReport: IdentifierArmReport;
   identifierDenseReport: IdentifierArmReport;
+  japaneseNameSparseReport: IdentifierArmReport;
+  japaneseNameDenseReport: IdentifierArmReport;
   embeddingSpace: EmbeddingSpaceJson;
   measuredAt: Date;
   commit: string | null;
@@ -131,6 +141,14 @@ export function buildMeasuredIdentifierProbeJson(options: {
     japanese: japaneseGroupJson(options.japaneseReport, options.embeddingSpace),
     identifiersSparse: identifierGroupJson(options.identifierSparseReport, options.embeddingSpace),
     identifiersDense: identifierGroupJson(options.identifierDenseReport, options.embeddingSpace),
+    japaneseNamesSparse: identifierGroupJson(
+      options.japaneseNameSparseReport,
+      options.embeddingSpace,
+    ),
+    japaneseNamesDense: identifierGroupJson(
+      options.japaneseNameDenseReport,
+      options.embeddingSpace,
+    ),
   };
 }
 
