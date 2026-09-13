@@ -220,9 +220,41 @@ describe("parseMigrateCliOptions: 未知の引数・値の欠けた引数", () =
 
 describe("parseMigrateCliOptions: --help", () => {
   it("--help があれば help: true を返し、schema 等は解決しない", () => {
-    const result = parseMigrateCliOptions(["--help"], { MNEMORA_SCHEMA: "should-be-ignored" });
+    // 🔴 **Issue #184 A**: 以前この歯は `options.help` しか見ておらず、
+    // `MNEMORA_SCHEMA` をわざわざ仕込みながら**それが無視されたかを問う表明が
+    // どこにも無かった**。⟹ 早期 return を
+    // `{ help: true, schema: schemaArg ?? env.MNEMORA_SCHEMA }` へ書き換えても
+    // **緑のままだった**（2026-09-13 実測。`Tests 28 passed (28)`）。
+    //
+    // ⚠ **環境変数の値を `should-be-ignored` から `should_be_ignored` へ変えてある。**
+    // ハイフン入りは `assertSafeIdentifier`（`^[a-z_][a-z0-9_]*$`）が弾く**不正な**
+    // スキーマ名なので、「早期 return を丸ごと消す」欠陥のほうは `expectOk` が
+    // **間接的に**捕まえてしまい、この歯が赤くなる理由が2つに割れていた
+    // （2026-09-13 実測。⚠ Issue #184 は「有効な値なので間接的な捕捉も効かない」と
+    // 書いているが、それは誤りである）。⟹ **解決に成功してしまう値**へ揃えて、
+    // この歯が赤くなる理由を「help 経路が解決した」ただ1つにする。
+    // 不正な値と `--help` の同居は、この describe の3本目が測っている。
+    const result = parseMigrateCliOptions(["--help"], {
+      MNEMORA_SCHEMA: "should_be_ignored",
+      MNEMORA_EXTENSION_SCHEMA: "should_be_ignored_ext",
+      MNEMORA_EXTENSION_MODE: "verify",
+    });
     expectOk(result);
-    expect(result.options.help).toBe(true);
+    // ⭐ 「help だけを返す」ことを**丸ごと**固定する。`schema` / `extensionSchema` /
+    // `extensionMode` を個別に `toBeUndefined()` で並べるより強い——将来
+    // `ParsedMigrateCliOptions` に欄が増えたとき、**その新しい欄が help 経路で
+    // 解決されても、この1本が赤くなる**。
+    // ⛔ `toStrictEqual` にはしない: `{ help: true, schema: undefined }` は
+    // ふるまいとして同じであり、そこで赤くするのは「ふるまい不変で赤くなる歯」になる
+    // （PR #154 が一度除去した向きの欠陥）。
+    expect(
+      result.options,
+      "🔴 赤の意味: `--help` の経路が環境変数を解決している。help は" +
+        "「どんな組み合わせでも他の解釈をせず即座に返す（ヘルプ表示に徹する）」約束であり" +
+        "（`../bin/cli-options.ts` の該当行のコメント）、ここで解決すると" +
+        "『--help を付けただけなのに設定の不備でエラーになる』という、" +
+        "使い方を見たいだけの利用者の手元で余計な失敗が起きうる。",
+    ).toEqual({ help: true });
   });
 
   it("-h も同じ効果を持つ", () => {
