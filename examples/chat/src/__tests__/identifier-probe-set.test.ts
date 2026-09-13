@@ -19,8 +19,8 @@ import {
  * `DEFAULT_HAYSTACK_SIZE` を import して確認するだけである。
  */
 describe("identifier-probe-set", () => {
-  it("Issue #106 が名指しした5領域を、まず12件で覆っている", () => {
-    expect(IDENTIFIER_PROBES).toHaveLength(12);
+  it("Issue #106 が名指しした5領域を、30件で覆っている", () => {
+    expect(IDENTIFIER_PROBES).toHaveLength(30);
     const categories = new Set(IDENTIFIER_PROBES.map((p) => p.category));
     expect(categories).toEqual(new Set(["person", "channel", "system", "project-code", "ticket"]));
   });
@@ -97,7 +97,7 @@ describe("identifier-probe-set", () => {
       expect(DEFAULT_DENSE_HAYSTACK_SIZE).toBe(60);
     });
 
-    it("dense haystack は12 probe の識別子と1件も衝突しない(機械的検査)", () => {
+    it("dense haystack は30 probe の識別子と1件も衝突しない(機械的検査)", () => {
       const denseTexts = Array.from({ length: DEFAULT_DENSE_HAYSTACK_SIZE }, (_, i) =>
         buildDenseIdentifierHaystackUtterance(i),
       );

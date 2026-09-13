@@ -32,11 +32,11 @@ function expectedDeterministicDigest(text: string): string {
  * `DeterministicEmbeddingProvider` は意味的な類似度を持たないため、ここでの
  * goldRank/hit@1/hit@10 の値そのものには意味が無い(AGENTS.md
  * 「`deterministic` で測った想起の質は、性能について何も言っていない」)。
- * 見るのは**壊れずに12 probe 分の構造化された結果が返り、ingest した総数と
+ * 見るのは**壊れずに `IDENTIFIER_PROBES` 件分の構造化された結果が返り、ingest した総数と
  * `totalInScope` が一致すること**である。
  */
 describe("examples/chat: identifier-probe arm(擬似 provider・本物の Postgres)", () => {
-  it("12 probe すべてで、クラッシュせずに構造化された結果を返す", async () => {
+  it("IDENTIFIER_PROBES すべてで、クラッシュせずに構造化された結果を返す", async () => {
     await resetTestDatabase();
     await getTestClient();
     const handle = await createExampleRuntime(requireDatabaseUrl(), {

@@ -42,8 +42,8 @@
  *
  * ## ⛔ それでも門にはしない
  *
- * 相違で非0を返さない(`identifier-probe-summary.mjs` の exit code)。probe は
- * 12件(識別子)・7件(日本語)であり、
+ * 相違で非0を返さない(`identifier-probe-summary.mjs` の exit code)。識別子 probe・
+ * 日本語 probe のどちらも母数が小さく、
  * [ADR 0033](../docs/decisions/0033-what-decided-the-rank-in-the-retrieval-bench.md) §3 の
  * 規律に照らして閾値の門に足る母数ではない。**⚠ 「なぜ*今は*門にしないか」**:
  * probe を増やした後に、その母数で偽陽性が出ないかを測ってから別途決める
@@ -395,11 +395,18 @@ export function buildSummaryMarkdown({ measured, baseline }) {
   if (baseline) {
     lines.push(buildDiffSection(measured, baseline), "");
   }
+  // 🔴 件数をここに書き写さない。**測った値そのものから出す。**
+  // 書き写すと、probe を増やしたときに注記だけが古い件数を主張し続ける
+  // ——ADR 0068「ベンチが測っていないことを測ったかのように印字する」の再発である。
+  // （`identifier-probe-set.js` の `DEFAULT_DENSE_HAYSTACK_SIZE` が
+  // 「ここにも 60 を書き写さない」と同じ理由で導出しているのと同じ規律。）
+  const japaneseCount = measured.japanese.probeCount;
+  const identifierCount = measured.identifiersSparse.probeCount;
   lines.push(
-    "⚠ ADR 0033 §3: 標本7件・12件からは失敗率も成功率も統計的に主張しない。" +
+    `⚠ ADR 0033 §3: 標本${japaneseCount}件・${identifierCount}件からは失敗率も成功率も統計的に主張しない。` +
       "ここで言えるのは「今回、この母数のうち何件引けたか」までである。",
     "",
-    "⚠ `identifiersSparse`/`identifiersDense` は同じ12 probe・同じ埋め込み空間で、" +
+    `⚠ \`identifiersSparse\`/\`identifiersDense\` は同じ${identifierCount} probe・同じ埋め込み空間で、` +
       "haystack(識別子の密度)だけが違う——2つを混ぜた単一の MRR ではない。",
   );
   return lines.join("\n");

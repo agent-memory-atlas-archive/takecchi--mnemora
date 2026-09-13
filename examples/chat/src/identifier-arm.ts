@@ -33,8 +33,8 @@ import type { ProbeScoreDetail, TermSpread } from "./retrieval-quality.js";
  *
  * **ここでは MRR(全体)しか持たない**——`retrieval-quality.ts` の `lexicalControl`
  * (擬似 embedding でも引けるはずの対照群)に相当する区分をこの probe set は持たない
- * (`IdentifierProbe` に `lexicalControl` 相当の欄が無い。12件すべてが「識別子を
- * 含む問い」であり、対照群を分ける設計にしていない——12件という母数で対照群まで割ると
+ * (`IdentifierProbe` に `lexicalControl` 相当の欄が無い。**全件が「識別子を
+ * 含む問い」**であり、対照群を分ける設計にしていない——この母数で対照群まで割ると
  * 1群あたりの件数がさらに小さくなり、何も主張できなくなるため)。
  */
 

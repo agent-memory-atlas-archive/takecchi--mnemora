@@ -55,7 +55,7 @@ export type IdentifierProbeRunJson =
       japanese: IdentifierProbeGroupJson;
       /** ASCII 識別子 probe(`./identifier-probe-set.js`)、識別子を含まない既定 haystack。 */
       identifiersSparse: IdentifierProbeGroupJson;
-      /** 同じ12 probe を、同じ書式ファミリーの識別子が密な haystack で走らせた結果
+      /** 同じ識別子 probe を、同じ書式ファミリーの識別子が密な haystack で走らせた結果
        *  (#106 の「同じ形式の別の識別子が近傍に来て埋もれる」を表す条件)。 */
       identifiersDense: IdentifierProbeGroupJson;
     }

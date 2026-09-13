@@ -66,6 +66,34 @@ export const IDENTIFIER_PROBES: IdentifierProbe[] = [
     query: "PROJ-9021 の予算はいくらで承認されましたか?",
     distractor: "PROJ-9042 の予算は500万円で承認されました。",
   },
+  {
+    id: "project-code-c",
+    category: "project-code",
+    fact: "PROJ-3101 の要件レビューは金曜日に予定されています。",
+    query: "PROJ-3101 の要件レビューはいつ予定されていますか?",
+    distractor: "PROJ-3102 の要件レビューは月曜日に予定されています。",
+  },
+  {
+    id: "project-code-d",
+    category: "project-code",
+    fact: "PROJ-3201 の担当ベンダーは株式会社アルファです。",
+    query: "PROJ-3201 の担当ベンダーはどこですか?",
+    distractor: "PROJ-3202 の担当ベンダーは株式会社ベータです。",
+  },
+  {
+    id: "project-code-e",
+    category: "project-code",
+    fact: "PROJ-3301 のキックオフは来月の第1営業日です。",
+    query: "PROJ-3301 のキックオフはいつですか?",
+    distractor: "PROJ-3302 のキックオフは今月の最終営業日です。",
+  },
+  {
+    id: "project-code-f",
+    category: "project-code",
+    fact: "PROJ-3401 のリリース判定会議は品質保証部が主催します。",
+    query: "PROJ-3401 のリリース判定会議はどこが主催しますか?",
+    distractor: "PROJ-3402 のリリース判定会議は開発部が主催します。",
+  },
   // --- チケット番号（ticket number） ---
   {
     id: "ticket-a",
@@ -81,6 +109,34 @@ export const IDENTIFIER_PROBES: IdentifierProbe[] = [
     query: "INC-77021 の対応者は誰ですか?",
     distractor: "INC-77022 はステージング環境の障害チケットで、対応者は伊藤さんです。",
   },
+  {
+    id: "ticket-c",
+    category: "ticket",
+    fact: "TICKET-51001 は決済画面でエラーが出るという不具合の報告です。",
+    query: "TICKET-51001 はどんな不具合の報告でしたか?",
+    distractor: "TICKET-51002 は検索結果が表示されないという不具合の報告です。",
+  },
+  {
+    id: "ticket-d",
+    category: "ticket",
+    fact: "TICKET-51101 は優先度「高」でサポートチームに割り当てられています。",
+    query: "TICKET-51101 の優先度は何ですか?",
+    distractor: "TICKET-51102 は優先度「低」でサポートチームに割り当てられています。",
+  },
+  {
+    id: "ticket-e",
+    category: "ticket",
+    fact: "INC-81001 は本番データベースの障害チケットで、対応者は加藤さんです。",
+    query: "INC-81001 の対応者は誰ですか?",
+    distractor: "INC-81002 は検証環境の障害チケットで、対応者は木村さんです。",
+  },
+  {
+    id: "ticket-f",
+    category: "ticket",
+    fact: "INC-81101 は深夜帯に発生した障害チケットで、現在は復旧済みです。",
+    query: "INC-81101 は現在どういう状態ですか?",
+    distractor: "INC-81102 は日中に発生した障害チケットで、現在も調査中です。",
+  },
   // --- 社内システム名（internal system name） ---
   {
     id: "system-a",
@@ -95,6 +151,34 @@ export const IDENTIFIER_PROBES: IdentifierProbe[] = [
     fact: "社内システム SYS-HR07(人事評価)は今月末にメンテナンス予定です。",
     query: "SYS-HR07 はいつメンテナンス予定ですか?",
     distractor: "社内システム SYS-CR09(顧客管理)は来月末にメンテナンス予定です。",
+  },
+  {
+    id: "system-c",
+    category: "system",
+    fact: "社内システム SYS-PM11(プロジェクト管理)の管理者は田中さんです。",
+    query: "SYS-PM11 の管理者は誰ですか?",
+    distractor: "社内システム SYS-PM12(プロジェクト管理・旧版)の管理者は松本さんです。",
+  },
+  {
+    id: "system-d",
+    category: "system",
+    fact: "社内システム SYS-LG21(ログ収集)は毎晩0時にバッチ処理が走ります。",
+    query: "SYS-LG21 のバッチ処理はいつ走りますか?",
+    distractor: "社内システム SYS-LG22(ログ集計・旧版)は毎朝6時にバッチ処理が走ります。",
+  },
+  {
+    id: "system-e",
+    category: "system",
+    fact: "社内システム SYS-BI31(経営ダッシュボード)の管理者は情報システム部です。",
+    query: "SYS-BI31 の管理者はどこですか?",
+    distractor: "社内システム SYS-BI32(経営ダッシュボード・旧版)の管理者は経営企画部です。",
+  },
+  {
+    id: "system-f",
+    category: "system",
+    fact: "社内システム SYS-DW41(データ基盤)は来週金曜にメンテナンス予定です。",
+    query: "SYS-DW41 はいつメンテナンス予定ですか?",
+    distractor: "社内システム SYS-DW42(データ基盤・検証環境)は来週月曜にメンテナンス予定です。",
   },
   // --- チャンネル名（channel name） ---
   {
@@ -118,6 +202,27 @@ export const IDENTIFIER_PROBES: IdentifierProbe[] = [
     query: "#incident-2024-08 は何のための専用チャンネルですか?",
     distractor: "#incident-2024-09 は9月に起きた障害の振り返り専用チャンネルです。",
   },
+  {
+    id: "channel-d",
+    category: "channel",
+    fact: "#proj-iota チャンネルは基盤刷新プロジェクトの連絡用です。",
+    query: "#proj-iota チャンネルは何のためのものですか?",
+    distractor: "#proj-kappa チャンネルは基盤刷新プロジェクトの後継検討用です。",
+  },
+  {
+    id: "channel-e",
+    category: "channel",
+    fact: "#team-plugh は福岡オフィスの雑談チャンネルです。",
+    query: "#team-plugh はどこのオフィスの雑談チャンネルですか?",
+    distractor: "#team-xyzzy は名古屋オフィスの雑談チャンネルです。",
+  },
+  {
+    id: "channel-f",
+    category: "channel",
+    fact: "#incident-2025-01 は1月に起きた障害の振り返り専用チャンネルです。",
+    query: "#incident-2025-01 は何のための専用チャンネルですか?",
+    distractor: "#incident-2025-02 は2月に起きた障害の振り返り専用チャンネルです。",
+  },
   // --- 人名（person / employee identifier） ---
   {
     id: "person-a",
@@ -140,6 +245,27 @@ export const IDENTIFIER_PROBES: IdentifierProbe[] = [
     query: "Slack ハンドル @yamada.taro は誰のアカウントですか?",
     distractor: "Slack ハンドル @yamada.jiro は総務部の山田次郎さんのアカウントです。",
   },
+  {
+    id: "person-d",
+    category: "person",
+    fact: "従業員番号 EMP-3301 の担当者は法務部の斎藤さんです。",
+    query: "従業員番号 EMP-3301 の担当者は誰ですか?",
+    distractor: "従業員番号 EMP-3302 の担当者は広報部の橋本さんです。",
+  },
+  {
+    id: "person-e",
+    category: "person",
+    fact: "従業員番号 EMP-4401 の担当者は情報システム部の石井さんです。",
+    query: "従業員番号 EMP-4401 の担当者は誰ですか?",
+    distractor: "従業員番号 EMP-4402 の担当者は品質保証部の清水さんです。",
+  },
+  {
+    id: "person-f",
+    category: "person",
+    fact: "Slack ハンドル @kobayashi.ichiro は開発部の小林一郎さんのアカウントです。",
+    query: "Slack ハンドル @kobayashi.ichiro は誰のアカウントですか?",
+    distractor: "Slack ハンドル @kobayashi.jiro は営業部の小林次郎さんのアカウントです。",
+  },
 ];
 
 // ---------------------------------------------------------------------------
@@ -156,16 +282,34 @@ export const IDENTIFIER_PROBES: IdentifierProbe[] = [
 export const IDENTIFIER_TOPIC_KEYWORDS: Readonly<Record<string, readonly string[]>> = {
   "project-code-a": ["PROJ-1234", "PROJ-5678"],
   "project-code-b": ["PROJ-9021", "PROJ-9042"],
+  "project-code-c": ["PROJ-3101", "PROJ-3102"],
+  "project-code-d": ["PROJ-3201", "PROJ-3202"],
+  "project-code-e": ["PROJ-3301", "PROJ-3302"],
+  "project-code-f": ["PROJ-3401", "PROJ-3402"],
   "ticket-a": ["TICKET-48213", "TICKET-48214"],
   "ticket-b": ["INC-77021", "INC-77022"],
+  "ticket-c": ["TICKET-51001", "TICKET-51002"],
+  "ticket-d": ["TICKET-51101", "TICKET-51102"],
+  "ticket-e": ["INC-81001", "INC-81002"],
+  "ticket-f": ["INC-81101", "INC-81102"],
   "system-a": ["SYS-AT01", "SYS-EX02"],
   "system-b": ["SYS-HR07", "SYS-CR09"],
+  "system-c": ["SYS-PM11", "SYS-PM12"],
+  "system-d": ["SYS-LG21", "SYS-LG22"],
+  "system-e": ["SYS-BI31", "SYS-BI32"],
+  "system-f": ["SYS-DW41", "SYS-DW42"],
   "channel-a": ["#proj-alpha", "#proj-beta"],
   "channel-b": ["#team-fizz", "#team-buzz"],
   "channel-c": ["#incident-2024-08", "#incident-2024-09"],
+  "channel-d": ["#proj-iota", "#proj-kappa"],
+  "channel-e": ["#team-plugh", "#team-xyzzy"],
+  "channel-f": ["#incident-2025-01", "#incident-2025-02"],
   "person-a": ["EMP-1042", "EMP-1043"],
   "person-b": ["EMP-2088", "EMP-2089"],
   "person-c": ["@yamada.taro", "@yamada.jiro"],
+  "person-d": ["EMP-3301", "EMP-3302"],
+  "person-e": ["EMP-4401", "EMP-4402"],
+  "person-f": ["@kobayashi.ichiro", "@kobayashi.jiro"],
 };
 
 const ALL_IDENTIFIER_KEYWORDS: string[] = Object.values(IDENTIFIER_TOPIC_KEYWORDS).flat();
@@ -202,7 +346,7 @@ export function findIdentifierTopicKeywordViolations(
 // ---------------------------------------------------------------------------
 // 密な haystack(識別子が密な干し草) — マネージャー指示(#106 の再点検)
 //
-// **背景**: 上の12 probe を `sparse`(= `./probe-set.js` の既定 haystack、話題語ベースで
+// **背景**: 当初の12 probe を `sparse`(= `./probe-set.js` の既定 haystack、話題語ベースで
 // 識別子を1件も含まない)で走らせたところ、全12 probe が hit@1 だった(2026-09-10 実測、
 // `identifier-probe-baseline.json` の `identifiers` 群)。
 //

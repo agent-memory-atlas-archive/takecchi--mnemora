@@ -749,13 +749,13 @@ async function runTimeTerm(): Promise<void> {
  *   1. 既存の日本語意味 probe 7件(`./probe-set.js`、変更していない)を、この arm の
  *      embedding(local)で走らせた結果——arm B(embedding=recorded、実質 openai 由来)
  *      との直接比較になる。
- *   2. ASCII 識別子 probe 12件(`./identifier-probe-set.js`)・**識別子が薄い haystack**
+ *   2. ASCII 識別子 probe 30件(`./identifier-probe-set.js`)・**識別子が薄い haystack**
  *      (`sparse`。識別子を1件も含まない既定 haystack)。
- *   3. 同じ12 probe を、**識別子が密な haystack**(`dense`。probe と同じ書式ファミリーの
+ *   3. 同じ30 probe を、**識別子が密な haystack**(`dense`。probe と同じ書式ファミリーの
  *      識別子を計60件含む)で走らせた結果——マネージャー指示(#106 の逐語「同じ形式の
  *      別の識別子が近傍に来て埋もれる」の再点検)。
  *
- * ⛔ **群2(sparse)は消さない。**全12 probe が hit@1 だった実測(`identifier-probe-
+ * ⛔ **群2(sparse)は消さない。**当初12 probe 全件が hit@1 だった実測(`identifier-probe-
  * baseline.json`)自体が発見であり、群3(dense)は「難しくして失敗させる」ためではなく
  * 「#106 が報告した状況(同じ書式の識別子が"多数"居る)を表す」ために足す
  * (`./identifier-probe-set.js` の `DENSE_IDENTIFIER_FAMILIES` の docstring 参照)。
@@ -828,7 +828,7 @@ async function runIdentifierProbes(): Promise<void> {
     console.log(formatArmDetail(japaneseReport));
 
     console.log(
-      "\n=== 群2: ASCII 識別子 probe 12件(./identifier-probe-set.js、haystack=sparse) ===",
+      "\n=== 群2: ASCII 識別子 probe 30件(./identifier-probe-set.js、haystack=sparse) ===",
     );
     const identifierSparseReport = await runIdentifierProbeArm({
       armLabel: `identifier-probes/identifiers-sparse(llm=${handle.llmMode}, embedding=${handle.embeddingMode}/${embeddingSpace.model}/${embeddingSpace.dimensions}次元, haystack=sparse)`,
@@ -842,7 +842,7 @@ async function runIdentifierProbes(): Promise<void> {
     console.log(formatIdentifierArmReport(identifierSparseReport));
 
     console.log(
-      "\n=== 群3: ASCII 識別子 probe 12件(./identifier-probe-set.js、haystack=dense) ===",
+      "\n=== 群3: ASCII 識別子 probe 30件(./identifier-probe-set.js、haystack=dense) ===",
     );
     const identifierDenseReport = await runIdentifierProbeArm({
       armLabel: `identifier-probes/identifiers-dense(llm=${handle.llmMode}, embedding=${handle.embeddingMode}/${embeddingSpace.model}/${embeddingSpace.dimensions}次元, haystack=dense)`,
@@ -875,7 +875,8 @@ async function runIdentifierProbes(): Promise<void> {
         `hit@10=${identifierDenseReport.hit10Count}/${identifierDenseReport.probeCount}`,
     );
     console.log(
-      "\n(注) ADR 0033 §3: 標本7件・12件からは失敗率も成功率も統計的に主張しない。" +
+      `\n(注) ADR 0033 §3: 標本${japaneseReport.probes.length}件・${identifierSparseReport.probeCount}件からは` +
+        "失敗率も成功率も統計的に主張しない。" +
         "ここで言えるのは「今回、この母数のうち何件引けたか」までである。",
     );
 
@@ -993,7 +994,7 @@ function printHelp(): void {
       "                                                                      #   既定は擬似 provider(similarity が構成上定数になるため provider に依らない)",
       "  DATABASE_URL=... pnpm --filter @mnemora/example-chat run identifier-probes",
       "                                                                      # ASCII識別子・固有名詞を含む probe(Issue #109)を@mnemora/local-embeddingで測る",
-      "                                                                      #   鍵・カセット不要。日本語意味probe7件・識別子probe12件(sparse/dense haystack)を別々に集計する",
+      "                                                                      #   鍵・カセット不要。日本語意味probe7件・識別子probe30件(sparse/dense haystack)を別々に集計する",
       "  DATABASE_URL=... pnpm --filter @mnemora/example-chat run consolidation-cost",
       "                                                                      # Runtime.consolidate() の統合が「載る量」をどう動かすかをラウンド制で実測する(Issue #136)",
       "                                                                      #   鍵・カセット不要(deterministic LLM + local embedding)。MNEMORA_CONSOLIDATION_JSON で機械可読出力",

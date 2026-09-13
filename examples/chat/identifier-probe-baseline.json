@@ -2,14 +2,15 @@
   "_readme": "identifier-probes ベンチ（examples/chat の `identifier-probes` サブコマンド、@mnemora/local-embedding によるプロセス内推論。鍵もカセットも要らない）の基準値。Issue #109（#106 由来: 固有名詞・識別子を含む query が既存 retrieval ベンチに1件も無かった空白域を埋める）。`retrieval-baseline.json` とは別ファイルであり、そちらの内容・作法には一切触れていない。この基準値は手作業で置いたもので、CIジョブが自動更新することは無い（retrieval-baseline.json と同じ方針）。生成し直す手段は下の provenance の手順を再実行することである。",
   "schemaVersion": 2,
   "provenance": {
-    "commit": "7e4a8ca28678c2b25e93568e55d3810aed93aade",
-    "measuredAt": "2026-09-10T06:01:03.899Z",
+    "commit": "f95ae2201ff8ccae1ffaada0efd8430ae1396b1f",
+    "measuredAt": "2026-09-13T13:30:00.000Z",
     "how": "env -u OPENAI_API_KEY DATABASE_URL=postgresql://postgres@127.0.0.1:5544/mnemora_ci MNEMORA_IDENTIFIER_PROBE_JSON=<path> pnpm --filter @mnemora/example-chat run identifier-probes",
-    "database": "PostgreSQL 17.11 + pgvector 0.8.6（ローカル、非本番）",
+    "database": "PostgreSQL 17.11 + pgvector 0.8.0（ローカル、非本番）⚠ 当初の基準値は pgvector 0.8.6 で測られている——版が違う",
     "modelWeights": "sirasagi62/ruri-v3-30m-ONNX（dtype=q8）。この run のキャッシュから読んだ——ネットワーク取得そのものは別途 warmup() の歯（local-embedding-warmup.test.ts）で検査している",
     "repeatRuns": 2,
-    "note": "2回実行し、japanese/identifiersSparse/identifiersDense すべてで mrrOverall/hit1Count/hit10Count/probeCount/embeddingSpace/haystackKind が measuredAt を除いて完全一致した（jq でdiffを取って確認済み）。⚠ ただし『2回一致した』は『決定的である』の証明ではない——ADR 0088 §2 と同じ理由でdecay/freshnessは実行ごとに揺れており、similarityが約10^6倍の変域で押し切っているために MRR/hit@1/hit@10 が動かないだけである。⚠ この3群は標本7件・12件であり、ADR 0033 §3の規律により、ここから失敗率・成功率を統計的に主張しない——『この2回の実行で、この母数のうち何件引けたか』の記録である。 ⚠ この基準値は rebase 後に測り直したものである——最初の測定は 211796f69bd664552944b2d8a88426017b6ca6b7 で行われたが、その後 PR #123（ADR 0093）と PR #125（RecallUsage.budgetExceeded）が main に入ったため、rebase 後の 7e4a8ca28678c2b25e93568e55d3810aed93aade で2回測り直し、3群すべての mrrOverall/hit1Count/hit10Count/probeCount/embeddingSpace/haystackKind が完全一致することを確認した。併せて既存 retrieval ベンチ（arm A/B/C）も同じ commit で走らせ、examples/chat/retrieval-baseline.json の arms と完全一致することを確認した（この PR が既存 arm を1ミリも動かしていないことの実測）。 ⚠ さらにもう一度 rebase した（origin/main が 2790176 へ進み、PR #122（ADR 0090 埋め込み入力のトークン上限）と PR #124（ADR 0092 語彙チャンネルの OR 被覆）が入った——どちらも埋め込み／候補生成に触る変更である）。この基準値を置いた作業者とは別の作業者が、2790176 を土台にした枝で identifier-probes を2回走らせ、3群すべての label/llmMode/embeddingMode/embeddingSpace/haystackKind/mrrOverall/hit1Count/hit10Count/probeCount が measuredAt を除いて完全一致することを確認した（jq で行数を数えてから diff を取った。47行・50行で0でないことを確認済み）。⟹ 上の commit/measuredAt は値を最初に確立した時点の記録として残してあり、書き換えていない。⚠ このとき label の食い違いが1件見つかった: bench が出す japanese 群の armLabel が haystack= を落としており、この基準値ファイルの label と一致していなかった（上の note が列挙する一致項目の一覧に label が入っていなかったため気づかれていなかった）。基準値の値ではなく bench 側（cli.ts）を直した——JSON の haystackKind も Job Summary の表も sparse と名乗っているのに label だけが条件を落とすのは、「条件を落とした数字」を label の側で作ることである。",
-    "denseHaystackDesign": "マネージャー指示により、identifiersSparse の実測（全12 probe が hit@1）を見た後、#106の逐語『同じ形式の別の識別子が近傍に来て埋もれる』を表す第3の条件（identifiersDense。probe と同じ書式ファミリーの識別子を計60件含む haystack）を1度だけ設計し、1度だけ測った。値を見てから haystack や probe を作り直すことはしていない（identifier-probe-set.ts の DENSE_IDENTIFIER_FAMILIES のコメント参照）。"
+    "note": "🔴 識別子2群(identifiersSparse/identifiersDense)の値を置き直した。probe を 12件 → 30件 に増やしたためである(Issue #109 の項目1『数十件程度のゴールデンセット』。ADR 0094 が『開けたのは道であって、到達ではない』と書いた負債2を進めたもの)。⚠ japanese 群(7件)の値は1バイトも変えていない——probe を足す前の基準値(mrrOverall=0.8095238095238095, hit1Count=5, hit10Count=7)を、今回の測定がそのまま再現した。⟹ 識別子 probe を18件足しても既存の日本語 probe の測定は動いていない、ということの実測である。 ⚠ 測った条件: 上の commit を土台に、本 PR の probe 追加を載せた作業ツリー(測定時点では未コミット)で2回実行し、measuredAt を除いて JSON が完全一致した。⚠ pgvector は 0.8.0 であり、当初の基準値を測った 0.8.6 とは版が違う——それでも japanese 群が厳密に一致したことは記録しておく(この群に関しては版差が値を動かしていない)。⚠ 『2回一致した』は『決定的である』の証明ではない(ADR 0088 §2 と同じ理由)。 🔴 そして結果を過大に読まないこと: 30件すべてが hit@1 であり、MRR は 1 のままである。⟹ 母数は『数十件』へ届いたが、この集合は天井に張り付いており、ADR 0094 §5 が書いた『このベンチは #106 が報告した失敗を1件も再現していない』は 30件でも変わっていない。⛔ これを『想起の質が良い』と読んではいけない——読めるのは『この埋め込み・この probe 集合・この haystack では、報告された失敗が再現しなかった』までである。 ⚠ 偽陽性率に上限を置けるかは測っていない(2 run では足りない)。⟹ ADR 0094 が門を置く条件として名指しした『増えた母数で偽陽性率に上限を置けると測れたこと』は、まだ満たしていない。",
+    "denseHaystackDesign": "マネージャー指示により、identifiersSparse の実測（全12 probe が hit@1）を見た後、#106の逐語『同じ形式の別の識別子が近傍に来て埋もれる』を表す第3の条件（identifiersDense。probe と同じ書式ファミリーの識別子を計60件含む haystack）を1度だけ設計し、1度だけ測った。値を見てから haystack や probe を作り直すことはしていない（identifier-probe-set.ts の DENSE_IDENTIFIER_FAMILIES のコメント参照）。",
+    "probeSetGrowth": "12件 → 30件(+18)。内訳は project-code 2→6 / ticket 2→6 / system 2→6 / channel 3→6 / person 3→6。新カテゴリは作っていない。識別子は既存24件・密haystack60件の計84文字列と衝突しない値を割り当て、findIdentifierTopicKeywordViolations が構築時に機械検査している。⚠ 設計(件数・カテゴリ配分・識別子の値)は測定前に固定し、値を見てから probe を書き直していない(ADR 0094 §6 と同じ規律)。"
   },
   "groups": [
     {
@@ -32,7 +33,7 @@
     {
       "group": "identifiersSparse",
       "label": "identifier-probes/identifiers-sparse(llm=deterministic, embedding=local/ruri-v3-30m/sym/256次元, haystack=sparse)",
-      "description": "ASCII識別子probe12件(examples/chat/src/identifier-probe-set.ts、Issue #106が名指しした人名/チャンネル名/社内システム名/案件コード/チケット番号を各2〜3件)。haystackは識別子を1件も含まない既定の60件(probe-set.tsのbuildHaystackUtterance)。",
+      "description": "ASCII識別子probe30件(examples/chat/src/identifier-probe-set.ts、Issue #106が名指しした人名/チャンネル名/社内システム名/案件コード/チケット番号を各6件)。haystackは識別子を1件も含まない既定の60件(probe-set.tsのbuildHaystackUtterance)。⚠ 当初は12件(各2〜3件)であり、Issue #109 の項目1『数十件程度』へ向けて18件足した——足す前も全12件がhit@1であり、足した後も全30件がhit@1である。⟹ 母数は増えたが、この集合は依然として天井に張り付いており、退行を検知する余地はあっても『引けないもの』を1件も含んでいない。",
       "llmMode": "deterministic",
       "embeddingMode": "local",
       "embeddingSpace": {
@@ -42,14 +43,14 @@
       },
       "haystackKind": "sparse",
       "mrrOverall": 1,
-      "hit1Count": 12,
-      "hit10Count": 12,
-      "probeCount": 12
+      "hit1Count": 30,
+      "hit10Count": 30,
+      "probeCount": 30
     },
     {
       "group": "identifiersDense",
       "label": "identifier-probes/identifiers-dense(llm=deterministic, embedding=local/ruri-v3-30m/sym/256次元, haystack=dense)",
-      "description": "同じ12 probeを、probeと同じ書式ファミリー(PROJ-/TICKET-/INC-/SYS-QA/EMP-/#proj-/#team-/#incident-2024-/@<surname>.<given>)の識別子を計60件含むhaystackで走らせた結果。#106の逐語『同じ形式の別の識別子が近傍に来て、欲しいものが埋もれます』を表す条件——sparseの結果(全12 probe hit@1)を見た後に1度だけ設計し、1度だけ測った(識別子は既存24件と衝突しない値を選び、構築時の機械的検査で衝突が無いことを確認済み)。結果はsparseと同じくhit@1=12/12・distractorBeatsGold=0件——密なhaystackでもgoldは常に1位のままだった。distractorの順位そのものは密度の影響を受けている(例: channel-cのdistractorRankはsparseで2位、denseで8位)。",
+      "description": "同じ30 probeを、probeと同じ書式ファミリー(PROJ-/TICKET-/INC-/SYS-QA/EMP-/#proj-/#team-/#incident-2024-/@<surname>.<given>)の識別子を計60件含むhaystackで走らせた結果。#106の逐語『同じ形式の別の識別子が近傍に来て、欲しいものが埋もれます』を表す条件。結果はsparseと同じくhit@1=30/30——密なhaystackでもgoldは常に1位のままだった。⚠ haystackの識別子60件は増やしていない(probeが12→30に増えたので、probe1件あたりの『同じ書式の他人』の密度はむしろ下がっている)。",
       "llmMode": "deterministic",
       "embeddingMode": "local",
       "embeddingSpace": {
@@ -59,9 +60,9 @@
       },
       "haystackKind": "dense",
       "mrrOverall": 1,
-      "hit1Count": 12,
-      "hit10Count": 12,
-      "probeCount": 12
+      "hit1Count": 30,
+      "hit10Count": 30,
+      "probeCount": 30
     }
   ]
 }
