@@ -186,6 +186,18 @@ export function describeVectorStoreConformance(options: VectorStoreConformanceOp
       // ⟹ ここでは「返した distance が `>= 0` の比較を通らないこと」を見る。
       // 実装が `NaN` を返すか別の値を返すかには踏み込まない。
       //
+      // 🔴 **ただし「候補そのものを search の結果から落とす」ことは自由の範囲外である**
+      // （2026-09-13 の実測で確定。[ADR 0040](../../../docs/decisions/0040-zero-vector-never-returned.md)
+      // の「その後」の追記を見ること）。**候補が段2の採点に届かないと、
+      // [ADR 0044] の `omitted: score_not_comparable` を出せなくなる**
+      // ——`omitted` が「取りこぼしは無い」と誤答する。それは ADR 0044 が
+      // 名指しで直した欠陥そのものである。
+      //
+      // ⚠ **以前ここは `if (zero !== undefined) { … }` だった。**⟹ ゼロ候補を
+      // 除外する adapter に対して**何も表明しないまま緑**になり、
+      // 「そもそも upsert が黙って捨てた」場合も同じ顔で緑になっていた
+      // （どちらも実測で生き残る変異だった）。⟹ **返ってくること自体を要求する。**
+      //
       // ⚠ 例外を投げないことも同時に見る。pgvector 0.8.2 の `<=>` は
       // **エラーにならず NaN を返す**（本 ADR で実測。以前は「エラーになる」と
       // 3箇所に書かれていたが誤りだった）。
@@ -213,12 +225,18 @@ export function describeVectorStoreConformance(options: VectorStoreConformanceOp
       expect(ok1?.distance).toBeCloseTo(0, 5);
       expect(ok2?.distance).toBeCloseTo(1, 5);
 
-      // ゼロベクトルの候補は、返ってきたとしても比較が通らない。
+      // ゼロベクトルの候補は **search の結果に返り**、かつ比較が通らない。
       const zero = hits.find((h) => h.memoryId === zeroId);
-      if (zero !== undefined) {
-        expect(zero.distance >= 0).toBe(false);
-        expect(zero.distance <= 0).toBe(false);
-      }
+      expect(
+        zero,
+        "🔴 赤の意味: ゼロベクトルの候補が search の結果に出ていない。" +
+          "候補が段2の採点に届かないと omitted: score_not_comparable を出せず、" +
+          "recall() が「取りこぼしは無い」と誤答する（ADR 0044 が名指しで直した欠陥）。" +
+          "⟹ upsert が黙って捨てたか、search が落としている。" +
+          "⛔ この表明を緩めて緑にしないこと——緩めると、その誤答が黙って通る。",
+      ).toBeDefined();
+      expect(zero!.distance >= 0).toBe(false);
+      expect(zero!.distance <= 0).toBe(false);
     });
 
     it("クロステナントの search には他テナントの vector が現れない", async () => {

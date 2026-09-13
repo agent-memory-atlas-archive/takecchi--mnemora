@@ -555,9 +555,12 @@ describe("recall() — budget_dropped の countKind は単位の網羅性から�
 describe("recall() — omitted.kind = 'score_not_comparable'（ADR 0044）", () => {
   // 段2の閾値比較がどちらにも決まらなかった候補が、`omitted` に出ること。
   //
-  // **⚠ NaN を作る経路の選び方**: ゼロベクトル（`similarity = NaN`）は本命の経路だが、
-  // `FakeVectorStore` はゼロベクトルに 1 を返すのでここでは作れない
-  // （そちらは `packages/postgres` 側の歯で本物の pgvector に対して測る）。
+  // **⚠ NaN を作る経路の選び方**: ゼロベクトル（`similarity = NaN`）は本命の経路である。
+  // ⚠ **2026-09-13 訂正**: ここには以前「`FakeVectorStore` はゼロベクトルに 1 を返すので
+  // ここでは作れない」と書いてあったが、**それは古い。**`runtime-fakes.ts` の
+  // `cosineDistance` は ADR 0040 に追随して **`NaN` を返す**（下の
+  // 「⭐ ゼロベクトルの記憶が混ざると score_not_comparable が出る」の歯が、
+  // まさにその経路で NaN を作っている）。
   // ここでは `halfLifeHours = 0` かつ経過時間ちょうど 0 を使う——
   // `0.5 ** (0 / 0)` が `NaN` になる（実測: +1ms なら 0、−1ms なら +Infinity）。
   // この歯の時計は `NOW` に固定してあり、`recordedAt` も `NOW` なので経過時間は厳密に 0。
