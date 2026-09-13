@@ -93,6 +93,62 @@ Phase 1 の範囲と、そこに入れなかったものは [docs/roadmap.md](./
 
 ---
 
+## 想起の質をどう測っているか
+
+**`recall()` が「必要な記憶だけを思い出せているか」を、CI で毎 PR 測っている。**
+API キーは要らない——**実 API が返した埋め込みの記録を再生している**（下の「⚠ 『実 embedding』の意味」）。
+
+| ジョブ（[.github/workflows/ci.yml](./.github/workflows/ci.yml)） | 何を測るか | 埋め込み |
+|---|---|---|
+| 想起の質（[ADR 0088](./docs/decisions/0088-retrieval-quality-measured-in-ci.md)）`ci.yml:453` | 意味的関連性 probe **7件**の `hit@1` / `hit@10` / MRR | 記録の再生 |
+| 識別子・固有名詞 probe（[ADR 0094](./docs/decisions/0094-identifier-probes-local-embedding.md)）`ci.yml:566` | 識別子・固有名詞 probe **12件** | `@mnemora/local-embedding`（プロセス内推論） |
+| 統合の費用（[ADR 0101](./docs/decisions/0101-how-to-measure-whether-consolidate-moved-the-north-star.md)）`ci.yml:692` | `consolidate()` が「載る量」に効いたか | 同上 |
+
+引き金は `ci.yml:3-6` の `push: branches: [main]` と `pull_request` である——
+**`schedule` ではなく、毎 PR 走る。**値は **Job Summary**（`ci.yml:553`）と
+成果物 `retrieval-quality.json`（`ci.yml:560`）に残り、
+`examples/chat/retrieval-baseline.json` の基準値と突き合わされる。
+**基準値は手で更新する**（CI が書き換えることはない）。
+
+### ⚠ 「実 embedding」の意味
+
+**この2つは別物なので、書き分ける。**
+
+- ⛔ **実 API を毎回叩いてはいない。**CI は `OPENAI_API_KEY` を持たない。
+- ✅ **実 API が返した埋め込みを再生している。**`examples/chat/cassettes/retrieval.json`
+  （`text-embedding-3-small` / 256次元 / 152件）を `MNEMORA_PROVIDER_SOURCE=recorded`
+  （`ci.yml:513`）で再生する。
+
+**⟹ 鍵の無い CI でも、擬似物ではない埋め込みで測れる。**
+（擬似 provider で測った想起の質は性能について何も言っていない。3層の区別は [AGENTS.md](./AGENTS.md) を見ること。）
+
+### 🔴 この仕組みが測っていないこと
+
+**「継続的に測っている」は「想起の質を保証している」ではない。**採用を検討する側が
+過大に読まないように、測れていない範囲をここに並べる。
+
+- **閾値の門は無い。**基準値と相違しても `exit 0` のままである
+  （`scripts/retrieval-quality-summary.mjs:19` に意図として明記）。理由は
+  [ADR 0088](./docs/decisions/0088-retrieval-quality-measured-in-ci.md) §2——
+  **probe が7件では閾値の門が偽陽性を出す。**
+- **埋め込みモデル側が変わったことによる退行は、再生では検知できない。**
+  カセットを録り直すまで同じベクトルが返り続ける。
+- **このベンチは語彙チャンネルを一度も通していない**
+  （[ADR 0108](./docs/decisions/0108-retrieval-bench-does-not-exercise-lexical-channel.md)）。
+  ⟹ [ADR 0092](./docs/decisions/0092-lexical-or-coverage.md) で入れた語彙側の変更は、まだ測られていない。
+- **順位を実際に決めているのは `similarity` ただ1項である**
+  （[ADR 0109](./docs/decisions/0109-which-score-terms-actually-rank.md)）。
+  スコアは5項あるが、**このベンチでは残り4項が順位を動かしていない。**
+- **probe 7件は意図して凍結されている。**時間項を定数に保つための統制条件であり
+  （[ADR 0058](./docs/decisions/0058-measure-the-time-term-in-a-separate-arm.md) §1.4）、
+  gold/distractor の14件は変更しない。
+  **⟹ ゴールデンセットを増やすときは、この集合を書き換えず別の集合を作る**（ADR 0094 がその形）。
+
+外から評価する立場からの現状の評価は、[Issue #109](https://github.com/takecchi/mnemora/issues/109)
+に測定付きで書いてある。
+
+---
+
 ## インストール
 
 ```bash
