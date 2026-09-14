@@ -1032,6 +1032,77 @@ budget に関係なく全件載っている**ことを意味する。この状�
 
 ---
 
+## `archive-sweep-cost`: 掃引（`Runtime.sweepArchive`）が「載る量」/`hit@k` に効くかの実測（Issue #209）
+
+[ADR 0114](../../docs/decisions/0114-archive-sweep-for-decayed-memories.md) が
+`archiveDecayed`/`sweepArchive` を実装したが、`examples/chat` に配線が無く、北極星の物差し
+（「使う側が会話ログを全部プロンプトへ積むのをやめられたか」）に効いたかを誰も測っていなかった
+（Issue #209、Issue #136 と同型の穴）。**この bench は「掃引の前後でベンチの数字が動くか」
+——載る量・`omitted`・想起の質——を実測する器である。**
+
+```bash
+DATABASE_URL=... pnpm --filter @mnemora/example-chat run archive-sweep-cost
+```
+
+### なぜ既定の half-life では掃引が発火しないか
+
+既定の `tenant_settings.default_half_life_hours`（720時間 = 30日）では、
+`decay_floor_at` は作成から約130日先になる。ベンチは数十秒で終わるため、**何もしなければ
+掃引の対象が0件のまま、`archiveDecayed` に対応しているかどうかさえ測れない。**
+
+### half-life を短くした専用 arm + filler だけを backdate する
+
+この bench 専用のテナントに対して:
+
+1. `tenant_settings.default_half_life_hours` を `MNEMORA_ARCHIVE_SWEEP_HALF_LIFE_HOURS`
+   （既定 **1時間**）へ設定する（`packages/core`/`packages/postgres` の公開 interface は
+   変更していない——`pool.query` への素の SQL で、この bench 専用テナントの1行だけを書く）。
+2. haystack（filler）だけを、`MutableClock`（`time-term` arm が確立した仕掛けと同じ）で
+   `decayFloorOffsetMs(halfLifeHours) + marginHours` 分（既定 marginHours=0.5）過去へ
+   backdate して ingest する。gold/distractor は実時刻のまま ingest する。
+
+⟹ filler の `decay_floor_at` だけが実行時点の実時刻より前になり、gold/distractor の
+`decay_floor_at` は実時刻よりずっと先になる。**掃引を呼ぶと filler だけが `archived` になり、
+gold/distractor は `active` のまま残る。**
+
+### 何を測るか（掃引の前後、`before`/`after` の2 phase）
+
+Issue #209 の受け入れ条件がそのまま3指標になる:
+
+1. `recall().usage.chars`（減るはず）。
+2. `omitted` の `{kind:'filtered', condition:'archived'}` の件数
+   （0 → 正 へ動くはず）。⚠ **これはテナント/サブジェクトスコープ全体の集計であり、
+   probe の話題との意味的関連性とは無関係に一律で動く。**全 probe が同じ値を示すのは
+   正常であり、バグではない。
+3. `goldRank`（落ちていないこと——量が減っても答えが落ちたら意味が無い）。
+
+`consolidation-cost` と同じく `recalledActiveShare`（退化検知）・`activeCount`/
+`archivedCount`/`supersededCount` も併記する。
+
+### `./consolidation-json.ts` と型を共有しない理由
+
+sweep は「N件をLLMで1件へ畳む」consolidate とは違い、**LLM を1回も呼ばない・新しい
+Memory を1件も作らない・ラウンドを反復しない**（1回 sweep すれば対象は尽きる。ADR 0114）。
+⟹ JSON は round 配列ではなく `before`/`after` の2 phase しか持たない専用の型
+（`src/archive-sweep-json.ts`）を使う。ただし測定の部品
+（probe 集合・budget ladder・digest トークン数え方）は `consolidation-cost` 側と共有する。
+
+### ⛔ 門ではない
+
+`consolidation-cost` と同じ判断（ADR 0088 §2）——標本は probe 7件、`decay_floor_at` は
+実行毎に揺れうる。CI（`archive-sweep-cost` ジョブ）は
+`scripts/archive-sweep-cost-summary.mjs` で基準値と突き合わせるが、**相違では
+落ちない（`exit 0`）。**非0になるのは入力そのものが壊れているとき、または
+`@mnemora/local-embedding` の重み取得に失敗したとき（`status: "weights_unavailable"`）
+だけである。
+
+🔴 **基準値ファイル（`examples/chat/archive-sweep-baseline.json`）はまだコミットされていない**
+——この作業を行った環境に `DATABASE_URL` が無く、実測せずに数値を書くのは捏造になるため。
+`archive-sweep-cost-summary.mjs` は `--baseline` を省略しても動く。初回 CI の artifact を
+後続の PR で基準値にする想定である。
+
+---
+
 ## この会話生成（`src/scenario.ts`）について
 
 `buildConversation(fillerPairs)` は乱数を使わない決定的な関数——同じ `fillerPairs` を

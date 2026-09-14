@@ -24,6 +24,13 @@ import {
   buildWeightsUnavailableConsolidationCostRunJson,
   exitCodeForConsolidationCostRun,
 } from "./consolidation-json.js";
+import { parseArchiveSweepCostOptions } from "./archive-sweep-options.js";
+import { runArchiveSweepCost } from "./archive-sweep-cost.js";
+import { formatArchiveSweepCostReport } from "./archive-sweep-format.js";
+import {
+  buildWeightsUnavailableArchiveSweepCostRunJson,
+  exitCodeForArchiveSweepCostRun,
+} from "./archive-sweep-json.js";
 import { formatRecall } from "./format.js";
 import { tryGitRevParseHead } from "./git-info.js";
 import { formatIdentifierArmReport, runIdentifierProbeArm } from "./identifier-arm.js";
@@ -1035,6 +1042,91 @@ async function runConsolidationCostCommand(): Promise<void> {
   }
 }
 
+/**
+ * `archive-sweep-cost` サブコマンド(Issue #209)。
+ *
+ * **なぜ `deterministic` LLM + `local` embedding か**: `consolidation-cost` と同じ理由
+ * (`archive-sweep-cost.ts` の docstring 参照)——この bench 専用の会話は `retrieval` の
+ * カセットに無い入力を含む(clock を backdate した filler)ため、`recorded` は使えない。
+ *
+ * **なぜ `MutableClock` を注入するか**: filler だけを backdate して掃引を実行時間内に
+ * 発火させるため(`archive-sweep-cost.ts` の docstring、`time-term` arm と同じ仕掛け)。
+ */
+async function runArchiveSweepCostCommand(): Promise<void> {
+  const databaseUrl = requireDatabaseUrl();
+  const options = parseArchiveSweepCostOptions(process.env);
+  const tenantId = `archive-sweep-cost-${newRunToken()}`;
+  const measuredAt = new Date();
+  const commit = tryGitRevParseHead(process.cwd());
+  const clock = createMutableClock();
+
+  const handle = await createExampleRuntime(
+    databaseUrl,
+    { ...process.env, MNEMORA_LLM: "deterministic", MNEMORA_EMBEDDING: "local" },
+    {},
+    clock,
+  );
+  printProviderMode(handle.llmMode, handle.embeddingMode);
+  try {
+    console.log(
+      "\n[archive-sweep-cost] warmup() でモデルの読み込みを先に済ませる" +
+        "(取得に失敗したら、ここでメトリクスを出さずに打ち切る)…",
+    );
+    const warmup = await warmupLocalEmbedding(handle.embeddingProvider);
+    if (!warmup.ok) {
+      console.error(`\n🔴 ${warmup.detail}`);
+      console.error(
+        "  メトリクスは1件も測っていない(前回の値・既定値・0 へは倒さない)。" +
+          "ネットワーク・Hugging Face repo の状態を確認し、再実行すること。",
+      );
+      process.exitCode = 1;
+      const jsonPathOnFailure = process.env.MNEMORA_ARCHIVE_SWEEP_JSON;
+      if (jsonPathOnFailure) {
+        const failureJson = buildWeightsUnavailableArchiveSweepCostRunJson({
+          measuredAt,
+          commit,
+          detail: warmup.detail,
+        });
+        writeFileSync(jsonPathOnFailure, `${JSON.stringify(failureJson, null, 2)}\n`, "utf-8");
+        console.log(
+          `\n[archive-sweep-cost] 機械可読な結果(取得失敗)を書き出した: ${jsonPathOnFailure}`,
+        );
+      }
+      return;
+    }
+    console.log(`  ${warmup.detail}`);
+
+    const json = await runArchiveSweepCost({
+      runtime: handle.runtime,
+      memoryStore: handle.memoryStore,
+      embeddingProvider: handle.embeddingProvider,
+      pool: handle.pool,
+      clock,
+      llmMode: handle.llmMode,
+      embeddingMode: handle.embeddingMode,
+      tenantId,
+      halfLifeHours: options.halfLifeHours,
+      marginHours: options.marginHours,
+      sweepLimit: options.sweepLimit,
+      budgetLadder: options.budgetLadder,
+      recallLimit: options.recallLimit,
+      measuredAt,
+      commit,
+    });
+
+    console.log(`\n${formatArchiveSweepCostReport(json)}`);
+
+    const jsonPath = process.env.MNEMORA_ARCHIVE_SWEEP_JSON;
+    if (jsonPath) {
+      writeFileSync(jsonPath, `${JSON.stringify(json, null, 2)}\n`, "utf-8");
+      console.log(`\n[archive-sweep-cost] 機械可読な結果を書き出した: ${jsonPath}`);
+    }
+    process.exitCode = exitCodeForArchiveSweepCostRun(json);
+  } finally {
+    await handle.close();
+  }
+}
+
 function printHelp(): void {
   console.log(
     [
@@ -1054,6 +1146,9 @@ function printHelp(): void {
       "  DATABASE_URL=... pnpm --filter @mnemora/example-chat run consolidation-cost",
       "                                                                      # Runtime.consolidate() の統合が「載る量」をどう動かすかをラウンド制で実測する(Issue #136)",
       "                                                                      #   鍵・カセット不要(deterministic LLM + local embedding)。MNEMORA_CONSOLIDATION_JSON で機械可読出力",
+      "  DATABASE_URL=... pnpm --filter @mnemora/example-chat run archive-sweep-cost",
+      "                                                                      # 掃引(Runtime.sweepArchive)が「載る量」/hit@k をどう動かすかを実測する(Issue #209)",
+      "                                                                      #   鍵・カセット不要(deterministic LLM + local embedding)。MNEMORA_ARCHIVE_SWEEP_JSON で機械可読出力",
       "  DATABASE_URL=... OPENAI_API_KEY=... pnpm --filter @mnemora/example-chat run record",
       "                                                                      # retrieval の応答を記録する(ADR 0051)",
       "  DATABASE_URL=... OPENAI_API_KEY=... pnpm --filter @mnemora/example-chat run record:compare",
@@ -1088,6 +1183,8 @@ async function main(): Promise<void> {
     await runIdentifierProbes();
   } else if (command === "consolidation-cost") {
     await runConsolidationCostCommand();
+  } else if (command === "archive-sweep-cost") {
+    await runArchiveSweepCostCommand();
   } else if (command === "record") {
     await runRecord(parseCassetteTarget(process.argv[3]));
   } else if (command === "verify") {
