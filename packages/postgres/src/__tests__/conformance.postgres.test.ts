@@ -69,6 +69,8 @@ describeMemoryStoreConformance({
   },
   // Issue #134 / ADR 0100: PostgresMemoryStore は supersedeWithNewMemories を実装している。
   supportsSupersedeWithNewMemories: true,
+  // ADR 0114: PostgresMemoryStore は archiveDecayed を実装している。
+  supportsArchiveDecayed: true,
 });
 
 describeEventStoreConformance({

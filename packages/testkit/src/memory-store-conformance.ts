@@ -118,6 +118,24 @@ export interface MemoryStoreConformanceOptions {
    * ——`it.skip` にはしない（`docs/autonomy.md` ⛔、マネージャー指示）。
    */
   supportsSupersedeWithNewMemories: boolean;
+  /**
+   * ADR 0114: 対象の `MemoryStore` 実装が `archiveDecayed`（任意メソッド）を
+   * 実装しているかどうか。**必須。**
+   *
+   * `supportsSupersedeWithNewMemories` と同じ判断——**省略可にしないこと。**省略できると
+   * 「掃引の歯を実際に検査した」adapter と「検査していない」adapter が同じ緑色の
+   * 出力になる。
+   *
+   * `true` なら契約の歯（`status='active'` かつ `decayFloorAt <= now` のみを対象にする、
+   * `contested`/`superseded`/`forgotten`/既に `archived` な行は触らない、境界は `<=`
+   * で含む、`decayFloorAt` 昇順で `limit` 件まで、`limit` ちょうど返したときだけ
+   * `reachedLimit: true`、`memory_events` に `kind='archived'` が1件だけ積まれ
+   * `digestSnapshot` が更新前の digest と一致する、テナント分離、対象0件でも例外を
+   * 投げない）を実行する。`false` なら
+   * `expect(store.archiveDecayed).toBeUndefined()` を積極的に assert する
+   * ——`it.skip` にはしない。
+   */
+  supportsArchiveDecayed: boolean;
 }
 
 /**
@@ -147,6 +165,7 @@ export function describeMemoryStoreConformance(options: MemoryStoreConformanceOp
     prepareRecallId,
     claimEmbedJobs,
     supportsSupersedeWithNewMemories,
+    supportsArchiveDecayed,
   } = options;
 
   describe(`MemoryStore conformance (${name})`, () => {
@@ -1753,6 +1772,239 @@ export function describeMemoryStoreConformance(options: MemoryStoreConformanceOp
       it("supersedeWithNewMemories は任意メソッドであり、この adapter は実装していない", async () => {
         const store = await createStore();
         expect(store.supersedeWithNewMemories).toBeUndefined();
+      });
+    }
+
+    // -------------------------------------------------------------------
+    // archiveDecayed（ADR 0114: docs/memory-model.md §11 行8 の掃引、任意メソッド）
+    // -------------------------------------------------------------------
+
+    if (supportsArchiveDecayed) {
+      it("archiveDecayed は status='active' かつ decayFloorAt <= now（境界を含む）の Memory だけを archived にし、archived イベントを積む", async () => {
+        const store = await createStore();
+        const ctx: Ctx = { tenantId: "tenant-1" };
+        const now = new Date("2026-06-01T00:00:00.000Z");
+
+        const decayed = await store.createMemory(
+          ctx,
+          buildNewMemoryFixture({
+            tenantId: "tenant-1",
+            contentHash: "archive-decayed-target",
+            decayFloorAt: new Date(now.getTime() - 1_000),
+          }),
+        );
+        // 境界そのもの（decayFloorAt === now）も対象に含む——`<=`、境界を含む。
+        const boundary = await store.createMemory(
+          ctx,
+          buildNewMemoryFixture({
+            tenantId: "tenant-1",
+            contentHash: "archive-decayed-boundary",
+            decayFloorAt: now,
+          }),
+        );
+        const notYetDecayed = await store.createMemory(
+          ctx,
+          buildNewMemoryFixture({
+            tenantId: "tenant-1",
+            contentHash: "archive-decayed-not-yet",
+            decayFloorAt: new Date(now.getTime() + 1_000),
+          }),
+        );
+
+        const result = await store.archiveDecayed!(ctx, { now, limit: 10 });
+
+        const decayedAfter = await store.get(ctx, decayed.id);
+        const boundaryAfter = await store.get(ctx, boundary.id);
+        const notYetAfter = await store.get(ctx, notYetDecayed.id);
+        const decayedEvents = await listEventsForMemory(ctx, decayed.id);
+        const notYetEvents = await listEventsForMemory(ctx, notYetDecayed.id);
+
+        expect({
+          archivedIds: new Set(result.archived.map((a) => a.memoryId)),
+          reachedLimit: result.reachedLimit,
+          decayedStatus: decayedAfter?.status,
+          boundaryStatus: boundaryAfter?.status,
+          notYetStatus: notYetAfter?.status,
+          decayedEventKinds: decayedEvents.map((e) => e.kind),
+          // digestSnapshot は「更新前」の digest と一致すること（docs/memory-model.md §9）。
+          decayedEventDigestSnapshot: decayedEvents[0]?.digestSnapshot,
+          notYetEvents,
+        }).toEqual({
+          archivedIds: new Set([decayed.id, boundary.id]),
+          reachedLimit: false,
+          decayedStatus: "archived",
+          boundaryStatus: "archived",
+          notYetStatus: "active",
+          decayedEventKinds: ["archived"],
+          decayedEventDigestSnapshot: decayed.digest,
+          notYetEvents: [],
+        });
+      });
+
+      it("archiveDecayed は active 以外（contested/superseded/forgotten/既に archived）を対象にしない", async () => {
+        const store = await createStore();
+        const ctx: Ctx = { tenantId: "tenant-1" };
+        const now = new Date("2026-06-01T00:00:00.000Z");
+        const past = new Date(now.getTime() - 1_000);
+        const statuses = ["contested", "superseded", "forgotten", "archived"] as const;
+
+        const created = [];
+        for (const [i, status] of statuses.entries()) {
+          created.push(
+            await store.createMemory(
+              ctx,
+              buildNewMemoryFixture({
+                tenantId: "tenant-1",
+                contentHash: `archive-decayed-status-${i}`,
+                status,
+                decayFloorAt: past,
+              }),
+            ),
+          );
+        }
+
+        const result = await store.archiveDecayed!(ctx, { now, limit: 10 });
+
+        const afterStatuses = [];
+        for (const memory of created) {
+          afterStatuses.push((await store.get(ctx, memory.id))?.status);
+        }
+
+        expect({ archived: result.archived, afterStatuses }).toEqual({
+          archived: [],
+          afterStatuses: [...statuses],
+        });
+      });
+
+      it("archiveDecayed は decayFloorAt 昇順（最も古く遠ざかったものから）で limit 件までに絞る", async () => {
+        const store = await createStore();
+        const ctx: Ctx = { tenantId: "tenant-1" };
+        const now = new Date("2026-06-01T00:00:00.000Z");
+        // オフセットを作成順とわざと入れ替える——挿入順ではなく decayFloorAt の値で
+        // ソートされていることを確かめるため。
+        const offsetsSeconds = [3, 1, 2];
+        const memories = [];
+        for (const [i, offsetSeconds] of offsetsSeconds.entries()) {
+          memories.push(
+            await store.createMemory(
+              ctx,
+              buildNewMemoryFixture({
+                tenantId: "tenant-1",
+                contentHash: `archive-decayed-order-${i}`,
+                decayFloorAt: new Date(now.getTime() - offsetSeconds * 1_000),
+              }),
+            ),
+          );
+        }
+        // 昇順で期待される順序: 3秒前(memories[0]) → 2秒前(memories[2]) → 1秒前(memories[1])。
+
+        const result = await store.archiveDecayed!(ctx, { now, limit: 2 });
+
+        expect({
+          archivedIds: result.archived.map((a) => a.memoryId),
+          reachedLimit: result.reachedLimit,
+        }).toEqual({
+          archivedIds: [memories[0]!.id, memories[2]!.id],
+          reachedLimit: true,
+        });
+      });
+
+      it("archiveDecayed は対象がちょうど limit 件なら reachedLimit が true になる（『まだあるかもしれない』の意味であり、実際にまだあるとは限らない）", async () => {
+        const store = await createStore();
+        const ctx: Ctx = { tenantId: "tenant-1" };
+        const now = new Date("2026-06-01T00:00:00.000Z");
+        for (let i = 0; i < 2; i += 1) {
+          await store.createMemory(
+            ctx,
+            buildNewMemoryFixture({
+              tenantId: "tenant-1",
+              contentHash: `archive-decayed-exact-${i}`,
+              decayFloorAt: new Date(now.getTime() - 1_000),
+            }),
+          );
+        }
+
+        const result = await store.archiveDecayed!(ctx, { now, limit: 2 });
+
+        expect({ count: result.archived.length, reachedLimit: result.reachedLimit }).toEqual({
+          count: 2,
+          reachedLimit: true,
+        });
+      });
+
+      it("archiveDecayed は対象が0件でも例外を投げない", async () => {
+        const store = await createStore();
+        const ctx: Ctx = { tenantId: "tenant-1" };
+
+        const result = await store.archiveDecayed!(ctx, {
+          now: new Date("2026-06-01T00:00:00.000Z"),
+          limit: 10,
+        });
+
+        expect(result).toEqual({ archived: [], reachedLimit: false });
+      });
+
+      it("archiveDecayed は他テナントの Memory を対象にしない", async () => {
+        const store = await createStore();
+        const ctxA: Ctx = { tenantId: "tenant-a" };
+        const ctxB: Ctx = { tenantId: "tenant-b" };
+        const now = new Date("2026-06-01T00:00:00.000Z");
+        const past = new Date(now.getTime() - 1_000);
+
+        const memoryA = await store.createMemory(
+          ctxA,
+          buildNewMemoryFixture({
+            tenantId: "tenant-a",
+            contentHash: "archive-decayed-tenant-a",
+            decayFloorAt: past,
+          }),
+        );
+        const memoryB = await store.createMemory(
+          ctxB,
+          buildNewMemoryFixture({
+            tenantId: "tenant-b",
+            contentHash: "archive-decayed-tenant-b",
+            decayFloorAt: past,
+          }),
+        );
+
+        const result = await store.archiveDecayed!(ctxA, { now, limit: 10 });
+
+        const afterA = await store.get(ctxA, memoryA.id);
+        const afterB = await store.get(ctxB, memoryB.id);
+
+        expect({
+          archivedIds: result.archived.map((a) => a.memoryId),
+          statusA: afterA?.status,
+          statusB: afterB?.status,
+        }).toEqual({ archivedIds: [memoryA.id], statusA: "archived", statusB: "active" });
+      });
+
+      it("archiveDecayed を同じ範囲へ二度呼んでも、一度 archived になった行は二度拾われない", async () => {
+        const store = await createStore();
+        const ctx: Ctx = { tenantId: "tenant-1" };
+        const now = new Date("2026-06-01T00:00:00.000Z");
+        await store.createMemory(
+          ctx,
+          buildNewMemoryFixture({
+            tenantId: "tenant-1",
+            contentHash: "archive-decayed-repeat",
+            decayFloorAt: new Date(now.getTime() - 1_000),
+          }),
+        );
+
+        const first = await store.archiveDecayed!(ctx, { now, limit: 10 });
+        const second = await store.archiveDecayed!(ctx, { now, limit: 10 });
+
+        expect({ firstCount: first.archived.length, second }).toEqual({
+          firstCount: 1,
+          second: { archived: [], reachedLimit: false },
+        });
+      });
+    } else {
+      it("archiveDecayed は任意メソッドであり、この adapter は実装していない", async () => {
+        const store = await createStore();
+        expect(store.archiveDecayed).toBeUndefined();
       });
     }
 

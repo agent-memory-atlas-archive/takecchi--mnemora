@@ -23,6 +23,8 @@ import {
 } from "../interfaces/memory-store.js";
 import type {
   AggregateScopeOptions,
+  ArchiveDecayedOptions,
+  ArchiveDecayedResult,
   MemoryStore,
   RequeueEmbedJobsOptions,
   RequeueEmbedJobsResult,
@@ -677,6 +679,46 @@ export class FakeMemoryStore implements MemoryStore {
       memoryIds.push(memory.id);
     }
     return { requeued: memoryIds.length, memoryIds };
+  }
+
+  /**
+   * ADR 0114: `docs/memory-model.md` §11 行8の掃引。`requeueEmbedJobs` と同じ作法
+   * ——`status = 'active'` かつ `decayFloorAt <= opts.now`（境界を含む）の Memory を
+   * `decayFloorAt` 昇順で `opts.limit` 件まで選び、更新とイベント追記を `await` を
+   * 挟まない同期区間で行う（postgres 実装の単一トランザクションを模す）。
+   */
+  async archiveDecayed(ctx: Ctx, opts: ArchiveDecayedOptions): Promise<ArchiveDecayedResult> {
+    const nowMs = opts.now.getTime();
+    const targets = [...this.backing.memories.values()]
+      .filter(
+        (m) =>
+          m.tenantId === ctx.tenantId && m.status === "active" && m.decayFloorAt.getTime() <= nowMs,
+      )
+      .sort(
+        (a, b) =>
+          a.decayFloorAt.getTime() - b.decayFloorAt.getTime() ||
+          (a.id < b.id ? -1 : a.id > b.id ? 1 : 0),
+      )
+      .slice(0, Math.max(0, opts.limit));
+
+    const archived: Array<{ memoryId: MemoryId; decayFloorAt: Date }> = [];
+    for (const memory of targets) {
+      const digestSnapshot = memory.digest;
+      memory.status = "archived";
+      memory.updatedAt = new Date();
+      const storedEvent = buildStoredEvent(ctx, {
+        tenantId: ctx.tenantId,
+        memoryId: memory.id,
+        kind: "archived",
+        actor: { type: "system" },
+        digestSnapshot,
+        sizeBeforeBytes: null,
+        meta: {},
+      });
+      this.backing.events.push(storedEvent);
+      archived.push({ memoryId: memory.id, decayFloorAt: memory.decayFloorAt });
+    }
+    return { archived, reachedLimit: archived.length === opts.limit };
   }
 }
 

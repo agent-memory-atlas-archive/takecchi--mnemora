@@ -4,6 +4,8 @@ import { defaultDecayStrategy } from "@mnemora/core";
 import { EMBEDDING_STATUS_ROLLBACK, MemoryStatusConflictError } from "@mnemora/core";
 import type {
   AggregateScopeOptions,
+  ArchiveDecayedOptions,
+  ArchiveDecayedResult,
   Ctx,
   EmbeddingStatus,
   Memory,
@@ -28,6 +30,7 @@ import type {
 import type { Db } from "./client.js";
 import {
   isUuidLike,
+  parsePgTimestamp,
   rowToMemory,
   rowToMemoryEvent,
   rowToObservation,
@@ -1036,6 +1039,88 @@ export class PostgresMemoryStore implements MemoryStore {
     const memoryIds = result.rows.map((row) => (row as unknown as { memory_id: string }).memory_id);
     return { requeued: memoryIds.length, memoryIds };
   }
+
+  /**
+   * ADR 0114: `docs/memory-model.md` §11 行8 の掃引。doc コメントの契約そのものは
+   * `MemoryStore.archiveDecayed`（`@mnemora/core`）側にある——ここはクエリの実装のみ。
+   *
+   * 🔴 `memories` の UPDATE と `memory_events` への INSERT は、`requeueEmbedJobs`
+   * （ADR 0079、直上のメソッド）と同じ理由で**単一の `WITH ... UPDATE ... INSERT ...
+   * SELECT` 文**にまとめてある——1文なら、明示的な `BEGIN`/`COMMIT` を書かなくても
+   * 両方が同じトランザクションに入る（`片方だけ起きる」を構造的に作れない）。
+   *
+   * `digest_snapshot` には archived にする直前の `digest` を入れる
+   * （`docs/memory-model.md` §9「記録時点の digest」）——`updateStatusWithEvent` を
+   * 経由する `forget` が `digestSnapshot: current.digest` を渡すのと同じ規約を、
+   * 1文の SQL の中で `RETURNING`/`SELECT` を通じて再現する。
+   *
+   * 最終 `SELECT` に `ORDER BY` を付けているのは、`archived`（返り値）の並びを
+   * ターゲット選択の並び（`decay_floor_at` 昇順）と一致させるため——`UPDATE ...
+   * FROM target` の `RETURNING` はターゲットの行順を保証しないので、返り値としての
+   * 順序契約はここで別途つけ直す必要がある。
+   */
+  async archiveDecayed(ctx: Ctx, opts: ArchiveDecayedOptions): Promise<ArchiveDecayedResult> {
+    const target = buildArchiveDecayedTargetSelect(ctx, opts);
+
+    const result = await this.db.execute(sql`
+      WITH target AS (
+        ${target}
+      ),
+      archived AS (
+        UPDATE memories m
+        SET status = 'archived', updated_at = now()
+        FROM target t
+        WHERE m.id = t.id
+        RETURNING m.id AS id, m.decay_floor_at AS decay_floor_at, m.digest AS digest
+      ),
+      inserted_events AS (
+        INSERT INTO memory_events (id, tenant_id, memory_id, kind, at, actor, digest_snapshot, size_before_bytes, meta)
+        SELECT
+          gen_random_uuid(), ${ctx.tenantId}, a.id, 'archived', now(),
+          '{"type":"system"}'::jsonb, a.digest, NULL, '{}'::jsonb
+        FROM archived a
+        RETURNING memory_id
+      )
+      SELECT id, decay_floor_at FROM archived
+      ORDER BY decay_floor_at ASC, id ASC
+    `);
+
+    const archived = result.rows.map((row) => {
+      const r = row as unknown as { id: string; decay_floor_at: string };
+      return { memoryId: r.id as MemoryId, decayFloorAt: parsePgTimestamp(r.decay_floor_at) };
+    });
+    return { archived, reachedLimit: archived.length === opts.limit };
+  }
+}
+
+/**
+ * ADR 0114: `archiveDecayed` が「どの行を archived にするか」を選ぶ `SELECT`。
+ *
+ * **本体と `EXPLAIN` の歯（`packages/postgres/src/__tests__/archive-decayed-index.test.ts`）
+ * が、同じものを使うために切り出してある**——`buildRequeueEmbedTargetSelect`
+ * （ADR 0079、直上）と同じ理由。テスト側に述語を書き写すと、本体の述語を直したときに
+ * 歯だけが古い述語を測り続ける。
+ *
+ * 既存索引 `idx_memories_recall_gate`（`migrations/0001_init.sql`、
+ * `(tenant_id, status, decay_floor_at)`、`WHERE status IN ('active','contested')`）を
+ * そのまま使う——**新しい索引は追加しない**。ここでの述語 `status = 'active'` は
+ * 部分索引の述語 `status IN ('active','contested')` を含意するため、プランナはこの
+ * 索引を選べる。
+ *
+ * ⚠ **`decay_floor_at <= opts.now`（境界を含む）。**
+ * `VectorFilter.decayFloorAtAfter`（`packages/core/src/interfaces/vector-store.ts`）は
+ * 狭義の `>`（境界を含まない）——この非対称は意図である
+ * （`MemoryStore.archiveDecayed` の doc コメント参照）。
+ */
+export function buildArchiveDecayedTargetSelect(ctx: Ctx, opts: ArchiveDecayedOptions): SQL {
+  return sql`
+    SELECT id FROM memories
+    WHERE tenant_id = ${ctx.tenantId}
+      AND status = 'active'
+      AND decay_floor_at <= ${opts.now}
+    ORDER BY decay_floor_at ASC, id ASC
+    LIMIT ${opts.limit}
+    FOR UPDATE SKIP LOCKED`;
 }
 
 /**

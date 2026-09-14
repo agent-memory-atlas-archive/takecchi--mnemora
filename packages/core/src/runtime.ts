@@ -18,6 +18,7 @@ import type { EventStore } from "./interfaces/event-store.js";
 import type { LLMProvider } from "./interfaces/llm-provider.js";
 import { MemoryStatusConflictError } from "./interfaces/memory-store.js";
 import type {
+  ArchiveDecayedOptions,
   MemoryStore,
   RequeueEmbedJobsOptions,
   RequeueEmbedJobsResult,
@@ -625,6 +626,33 @@ export interface TickResult {
   unsupported: UnsupportedOutboxJob[];
 }
 
+/**
+ * {@link Runtime.sweepArchive} の返り値（ADR 0114）。
+ *
+ * `MemoryStore.archiveDecayed` は任意メソッドである。**store 側の
+ * {@link ArchiveDecayedResult} をそのまま返り値にしない**——store 側の型には
+ * 「口が無かった」を語る場所が無い（口が無ければそもそも呼べないので、store が
+ * 自分について「対応していない」と言う機会が無い）。この違いを埋めるのが `supported`
+ * である。
+ *
+ * ⛔ **`supported` を省略可能にしない**（`WriteAtomicity`（ADR 0100）と同じ理由——
+ * `undefined` は「口が無かった」と「この欄が増える前の版の戻り値」の両方を意味して
+ * しまい、「無い」の種類を潰す）。
+ */
+export interface SweepArchiveResult {
+  /**
+   * `MemoryStore.archiveDecayed` が実装されていたか。**`false` のとき `archived` は
+   * 常に空配列・`reachedLimit` は常に `false`**——「対応していないので0件」であって
+   * 「対応していて0件だった」ではない。呼び出し側はこの2つを取り違えないよう、
+   * 必ず `supported` を先に見ること。
+   */
+  supported: boolean;
+  /** 実際に archived にした Memory。`decay_floor_at` 昇順。`supported: false` なら常に空。 */
+  archived: Array<{ memoryId: MemoryId; decayFloorAt: Date }>;
+  /** store 側の `ArchiveDecayedResult.reachedLimit` をそのまま運ぶ。`supported: false` なら常に `false`。 */
+  reachedLimit: boolean;
+}
+
 export interface Runtime {
   observe(ctx: Ctx, input: ObserveInput): Promise<ObserveResult>;
   /**
@@ -686,6 +714,31 @@ export interface Runtime {
    * 同じ形の型を2つ置くと、片方だけ直したときに黙ってずれる。
    */
   reembed(ctx: Ctx, opts: RequeueEmbedJobsOptions): Promise<RequeueEmbedJobsResult>;
+  /**
+   * [ADR 0114](../../../docs/decisions/0114-archive-sweep-for-decayed-memories.md):
+   * `docs/memory-model.md` §11 行8「`decay_floor_at < now()` を検出する低頻度の掃引…
+   * → `status='archived'` + `archived` イベント」を実行する。
+   *
+   * `MemoryStore.archiveDecayed`（任意メソッド）へそのまま素通しする——`reembed`
+   * （ADR 0079）と同じ形。この口自身は判定ロジックを持たない。引数の型
+   * {@link ArchiveDecayedOptions} を store 側とそのまま共有しているのも同じ理由
+   * （同じ形の型を2つ置くと片方だけ直したときに黙ってずれる）。
+   *
+   * store がこの口を実装していなければ `{ supported: false, archived: [], reachedLimit:
+   * false }` を返す——黙って0件を返すのではなく「対応していない」と名指しする
+   * （ADR 0082「黙って何も起きない形にしない」の哲学をここでも守る）。
+   *
+   * ⚠ **`reextract`/`consolidate`（ADR 0100）と違い、フォールバック経路を持たない。**
+   * `supersedeWithNewMemories` は「口が無ければ今日どおりの2段の書き込みで代替できる」
+   * 既存の経路があったが、この掃引には代替経路がそもそも存在しない——`decay_floor_at`
+   * を読んで `archived` にする経路はこの口以外に無い。⟹ 「対応していない」を返す
+   * だけで、それ以上の代替を試みない。
+   *
+   * 🔴 **この掃引は自動では一度も走らない。**`tick()`/`observe()` からは呼ばれない
+   * ——呼び出し側が明示的にこれを呼んだときだけ走る保守操作である（`reembed` と
+   * 同じ立場。`opts.now`/`opts.limit` のどちらにも既定値を置かない規律も共有する）。
+   */
+  sweepArchive(ctx: Ctx, opts: ArchiveDecayedOptions): Promise<SweepArchiveResult>;
   /**
    * Issue #102: Memory を**論理的に**忘れさせる。
    *
@@ -1413,6 +1466,24 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
   }
 
   /**
+   * `Runtime.sweepArchive` の実装（ADR 0114）。doc コメントは interface 側にある
+   * ——ここは「口が在るかどうかで分岐する」というアルゴリズムそのものだけ。
+   *
+   * `deps.memoryStore.archiveDecayed` を一度ローカル変数へ受けてから `undefined` を
+   * 判定するのは、ADR 0100 の `supersedeWithNewMemories` 呼び出しと同じ作法——
+   * `.call(deps.memoryStore, ...)` で `this` を明示的に束ね直す必要があるため
+   * （分割代入したメソッドは `this` を失うので、呼び出し時に元のオブジェクトを渡す）。
+   */
+  async function sweepArchive(ctx: Ctx, opts: ArchiveDecayedOptions): Promise<SweepArchiveResult> {
+    const archiveDecayed = deps.memoryStore.archiveDecayed;
+    if (archiveDecayed === undefined) {
+      return { supported: false, archived: [], reachedLimit: false };
+    }
+    const result = await archiveDecayed.call(deps.memoryStore, ctx, opts);
+    return { supported: true, archived: result.archived, reachedLimit: result.reachedLimit };
+  }
+
+  /**
    * `Runtime.forget` の実装（Issue #102）。doc コメントは interface 側
    * （`forget` の JSDoc）にある——ここはアルゴリズムそのものだけ。
    */
@@ -2035,5 +2106,5 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
     };
   }
 
-  return { observe, tick, recall, reextract, reembed, forget, consolidate, reflect };
+  return { observe, tick, recall, reextract, reembed, sweepArchive, forget, consolidate, reflect };
 }

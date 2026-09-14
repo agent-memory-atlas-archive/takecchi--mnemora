@@ -9,6 +9,8 @@ import {
 import type { IdempotentCreateResult, NotIndexedReason } from "@mnemora/core";
 import type {
   AggregateScopeOptions,
+  ArchiveDecayedOptions,
+  ArchiveDecayedResult,
   Ctx,
   EmbeddingStatus,
   Memory,
@@ -738,6 +740,51 @@ export class InMemoryMemoryStore implements MemoryStore {
       memoryIds.push(memory.id);
     }
     return { requeued: memoryIds.length, memoryIds };
+  }
+
+  /**
+   * ADR 0114: `docs/memory-model.md` §11 行8の掃引。`status = 'active'` かつ
+   * `decayFloorAt <= opts.now`（境界を含む）の Memory を `decayFloorAt` 昇順で
+   * `opts.limit` 件まで選び、`status='archived'` への更新と `kind='archived'` の
+   * イベント追記を1つの同期区間（`await` を挟まない）で行う——
+   * `requeueEmbedJobs` / `supersedeWithNewMemories` と同じ作法で、
+   * postgres 実装の単一トランザクションを模す。
+   *
+   * `digestSnapshot` には更新前の `digest` を入れる（`updateStatusWithEvent` を経由する
+   * `forget` と同じ規約、docs/memory-model.md §9）。
+   */
+  async archiveDecayed(ctx: Ctx, opts: ArchiveDecayedOptions): Promise<ArchiveDecayedResult> {
+    const nowMs = opts.now.getTime();
+    const targets = [...this.memories.values()]
+      .filter(
+        (m) =>
+          m.tenantId === ctx.tenantId && m.status === "active" && m.decayFloorAt.getTime() <= nowMs,
+      )
+      .sort(
+        (a, b) =>
+          a.decayFloorAt.getTime() - b.decayFloorAt.getTime() ||
+          (a.id < b.id ? -1 : a.id > b.id ? 1 : 0),
+      )
+      .slice(0, Math.max(0, opts.limit));
+
+    const archived: Array<{ memoryId: MemoryId; decayFloorAt: Date }> = [];
+    for (const memory of targets) {
+      const digestSnapshot = memory.digest;
+      memory.status = "archived";
+      memory.updatedAt = new Date();
+      const storedEvent = buildStoredMemoryEvent(ctx, {
+        tenantId: ctx.tenantId,
+        memoryId: memory.id,
+        kind: "archived",
+        actor: { type: "system" },
+        digestSnapshot,
+        sizeBeforeBytes: null,
+        meta: {},
+      });
+      this.events.push(storedEvent);
+      archived.push({ memoryId: memory.id, decayFloorAt: memory.decayFloorAt });
+    }
+    return { archived, reachedLimit: archived.length === opts.limit };
   }
 
   private extractionKey(

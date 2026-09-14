@@ -181,6 +181,12 @@ export interface AggregateScopeOptions {
  * status の更新とイベントの追記を1回の呼び出し・1トランザクションにまとめる。
  * **`updateStatus` は変更していない**——status だけを更新したい呼び出し元
  * （`archived`/`forgotten` への遷移等、イベントを別の理由で別途書く場合）はそのまま使える。
+ *
+ * [ADR 0114](../../../../docs/decisions/0114-archive-sweep-for-decayed-memories.md) で
+ * `archiveDecayed`（任意メソッド）を追加した: docs/memory-model.md §11 行8「掃引 →
+ * `status='archived'` + `archived` イベント」を満たす唯一の書き込み口。`Memory.decayFloorAt`
+ * は書き込み時に計算されて列に持たれていた（ADR 0004・ADR 0011）が、それを読んで実際に
+ * `archived` へ倒す経路がこれまで無かった——この掃引がその欠落を埋める。
  */
 export interface MemoryStore {
   createObservation(ctx: Ctx, input: NewObservation): Promise<Observation>;
@@ -493,6 +499,107 @@ export interface MemoryStore {
     superseded: MemoryEvent[];
     conflicted: Array<{ id: MemoryId; observedStatus: MemoryStatus }>;
   }>;
+  /**
+   * [ADR 0114](../../../../docs/decisions/0114-archive-sweep-for-decayed-memories.md):
+   * `docs/memory-model.md` §11 行8「`decay_floor_at < now()` を検出する低頻度の掃引…
+   * → `status='archived'` + `archived` イベント」を満たすための口。
+   *
+   * `Memory.decayFloorAt` は書き込み時（作成時・強化時）に計算されて列に持たれている
+   * （ADR 0004・ADR 0011）が、**それを読んで実際に `archived` へ倒す経路がこれまで
+   * どこにも無かった**——`docs/recall.md` §2 段0・§4 が `FilteredOmission.condition
+   * = 'archived'` を定義していても、`status='archived'` にする経路が無い限りこの分岐は
+   * 一度も発火しない。このメソッドがその唯一の書き込み口になる。
+   *
+   * 🔴 **任意メソッドである。**必須にすると `MemoryStore` を実装する第三者の adapter を
+   * 壊す破壊的変更になる（`@mnemora/core` は npm に公開済み、`docs/autonomy.md`:114、
+   * ADR 0100 決定1と同じ理由）。この口を実装しない adapter では、`Runtime.sweepArchive`
+   * が `{ supported: false, archived: [], reachedLimit: false }` を返すことで
+   * 「対応していない」と正しく名乗る——黙って0件を返さない（ADR 0082「黙って何も
+   * 起きない形にしない」の哲学をここでも守る）。
+   *
+   * 契約:
+   * - 対象は **`status = 'active'` のみ**（`superseded`/`contested` はこの口では
+   *   触らない。lifecycle 表行8が挙げる3つの起点のうち2つを意図的に外している。
+   *   ADR 0114「採らなかった案」参照）。
+   * - `tenant_id = ctx.tenantId` かつ `decay_floor_at <= opts.now`
+   *   （**`<=`、境界を含む**）。⚠ **`VectorFilter.decayFloorAtAfter`
+   *   （`./vector-store.js`）は狭義の `>`（境界を含まない）であり、この非対称は意図
+   *   である**——`decayFloorAtAfter` は「これより後のものだけを ANN の候補にする」
+   *   という recall 側の下限境界、こちらは「これ以前に閾値を割ったものを掃く」という
+   *   掃引側の上限境界であり、2つの異なる関心が同じ演算子を共有する理由が無い。
+   * - **`decay_floor_at` 昇順**（最も古く遠ざかったものから）で `opts.limit` 件まで。
+   * - 選ばれた各行について `status='archived'` への更新と `memory_events` への
+   *   `kind='archived'` の追記を行う。**この2つは同一トランザクション**
+   *   （ADR 0031 が `updateStatusWithEvent` で確立した「更新とイベントは同値」の
+   *   不変条件を、この掃引にも適用する）。
+   * - 対象が0件なら `{ archived: [], reachedLimit: false }` を返す（例外を投げない）。
+   * - **一度 `archived` になった行は `status = 'active'` の条件に合わなくなるため、
+   *   同じ範囲を繰り返し掃引しても同じ行が二度 archived になることはない**
+   *   （呼び出し自体が特別にべき等性を持つのではなく、対象条件が書き込みの結果として
+   *   自然に外れることによる）。
+   *
+   * ⚠ **既存索引 `idx_memories_recall_gate`（`tenant_id, status, decay_floor_at`、
+   * `WHERE status IN ('active','contested')`。`migrations/0001_init.sql`）をそのまま
+   * 使う。新しい索引は追加しない**——`status = 'active'` という等値条件はこの部分索引の
+   * 述語を含意するため、プランナはこの索引を選べる
+   * （`packages/postgres/src/__tests__/archive-decayed-index.test.ts` が適用可能性を
+   * 測る）。
+   *
+   * 🔴 **ADR 0011 の決定と衝突しない。**ADR 0011 は「recall 段1の候補生成クエリに
+   * `decay_floor_at` を読み取りフィルタとして使わない」という Phase 1 の決定であり、
+   * この掃引は recall の段1とは別の、保守用の書き込み経路である。ADR 0011 は
+   * むしろ「索引の3列目として `decay_floor_at` を最初から持つのは、これを読み取りに
+   * 使い始めるとき（この掃引を含む）に索引を作り直さずに済むため」と明言しており、
+   * この掃引はその想定どおりの使われ方である
+   * （`packages/postgres/src/__tests__/recall-gate-index.test.ts` 末尾の注記参照）。
+   *
+   * 🔴 **この掃引は自動では一度も走らない。**`Runtime.tick`/`Runtime.observe` に
+   * 相乗りさせない——呼び出し側が明示的に `Runtime.sweepArchive` を呼んだときだけ走る
+   * （`Runtime.sweepArchive` の doc コメント参照）。
+   */
+  archiveDecayed?(ctx: Ctx, opts: ArchiveDecayedOptions): Promise<ArchiveDecayedResult>;
+}
+
+/**
+ * {@link MemoryStore.archiveDecayed} の引数（ADR 0114）。
+ *
+ * **`now` は呼び出し側が渡す**（ADR 0037 の「時刻は呼び出し側が渡す」規律をここでも
+ * 踏襲する——テストで時刻を固定できるようにするため。`packages/core` 内部の
+ * `Clock`（`systemClock`/`{ now: () => Date }`）を経由させず、この口の引数として
+ * 明示的に要求する）。
+ *
+ * **`limit` には既定値を置かない**（`ClaimOutboxJobsOptions.leaseMs`（ADR 0032）・
+ * `RequeueEmbedJobsOptions.limit`（ADR 0079）と同じ理由——1回の掃引でいくつ処理するかは
+ * 運用方針であり、`packages/core` が発明してよい値ではない。この口は範囲走査
+ * （`decay_floor_at` の昇順）の打ち切り位置を決めるので、既定値を置くとその影響範囲を
+ * core が黙って決めることになる）。
+ */
+export interface ArchiveDecayedOptions {
+  /** この時刻以前に `decay_floor_at` を迎えた Memory を対象にする（`<=`、境界を含む）。 */
+  now: Date;
+  /** 1回の呼び出しで archived にする上限。**既定値なし**（上の doc コメント参照）。 */
+  limit: number;
+}
+
+/** {@link MemoryStore.archiveDecayed} の返り値（ADR 0114）。 */
+export interface ArchiveDecayedResult {
+  /** 実際に archived にした Memory。`decay_floor_at` 昇順（最も古く遠ざかったもの順）。 */
+  archived: Array<{ memoryId: MemoryId; decayFloorAt: Date }>;
+  /**
+   * 🔴 **`true` は「`limit` 件ちょうど返した＝まだ在るかもしれない」を意味する。**
+   * `archived.length === opts.limit` のときに `true`——`decay_floor_at <= now` を満たす
+   * `active` な Memory が、まだこの呼び出しの範囲の外に残っている可能性がある
+   * （`countKind` の `'unknown'`/`'lower_bound'` と同じ理由づけ。`docs/recall.md` §4
+   * 「推定値を実測値の顔で出さない」）。
+   *
+   * ⚠ **「残り何件か」は返さない。**数えるには対象全体を数える別のクエリが要り、
+   * この掃引を「範囲走査のみで安価に済ませる」という設計（`docs/memory-model.md` §11
+   * 「アーカイブ掃引…は…全件走査ではなく `decay_floor_at` の範囲走査」）そのものと
+   * 衝突する。「もう無い」（`false`）と「分からない」（`true`）を区別するところまでが
+   * この口の契約であり、`ann_truncated`/`ann_unreached`（`docs/recall.md` §4）が
+   * 守っている規律と同じ形である。
+   */
+  reachedLimit: boolean;
 }
 
 /**

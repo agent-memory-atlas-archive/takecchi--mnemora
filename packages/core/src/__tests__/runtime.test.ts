@@ -660,6 +660,126 @@ describe("runtime.reembed（ADR 0079: provider が直った後に、索引へ戻
 });
 
 /**
+ * ADR 0114: `docs/memory-model.md` §11 行8「`decay_floor_at < now()` を検出する
+ * 低頻度の掃引…→ `status='archived'` + `archived` イベント」を実行する
+ * `Runtime.sweepArchive` の検査。
+ *
+ * `MemoryStore.archiveDecayed` は任意メソッドである——`FakeMemoryStore` は
+ * `InMemoryMemoryStore`（`@mnemora/testkit`）と同じく実装しているので、既定では
+ * 「口が在る」側（`supported: true`）の経路を通る。「口が無い」側
+ * （`supported: false`）は `supersedeWithNewMemories` の歯（ADR 0100）と同じ作法——
+ * `undefined` を代入して prototype を隠す——で個別に検査する。
+ */
+async function createDecayedMemory(
+  stores: ReturnType<typeof buildRuntime>["stores"],
+  contentHash: string,
+  decayFloorAt: Date,
+  status: "active" | "contested" | "superseded" | "forgotten" | "archived" = "active",
+) {
+  return stores.memoryStore.createMemory(ctx, {
+    tenantId: ctx.tenantId,
+    subjectId: null,
+    sourceObservationId: null,
+    extractorVersion: null,
+    content: "本文",
+    contentHash,
+    digest: `要旨-${contentHash}`,
+    digestSource: "llm",
+    provenance: { kind: "imported", batchId: "batch-1" },
+    status,
+    tags: [],
+    occurredAt: null,
+    recordedAt: new Date("2026-01-01T00:00:00.000Z"),
+    lastReinforcedAt: null,
+    strength: 1,
+    halfLifeHours: 720,
+    decayFloorAt,
+    embeddingStatus: "pending",
+  });
+}
+
+describe("runtime.sweepArchive（ADR 0114: 減衰しきった Memory の掃引）", () => {
+  const NOW = new Date("2026-06-01T00:00:00.000Z");
+
+  it("口が在る adapter では supported: true を名乗り、active かつ decayFloorAt <= now の Memory だけを archived にする", async () => {
+    const { runtime, stores } = buildRuntime(llmReturning([]));
+    const decayed = await createDecayedMemory(
+      stores,
+      "sweep-archive-decayed",
+      new Date(NOW.getTime() - 1_000),
+    );
+    const notYet = await createDecayedMemory(
+      stores,
+      "sweep-archive-not-yet",
+      new Date(NOW.getTime() + 1_000),
+    );
+    const contested = await createDecayedMemory(
+      stores,
+      "sweep-archive-contested",
+      new Date(NOW.getTime() - 1_000),
+      "contested",
+    );
+
+    const result = await runtime.sweepArchive(ctx, { now: NOW, limit: 10 });
+
+    const decayedAfter = await stores.memoryStore.get(ctx, decayed.id);
+    const notYetAfter = await stores.memoryStore.get(ctx, notYet.id);
+    const contestedAfter = await stores.memoryStore.get(ctx, contested.id);
+
+    expect({
+      supported: result.supported,
+      archivedIds: result.archived.map((a) => a.memoryId),
+      reachedLimit: result.reachedLimit,
+      decayedStatus: decayedAfter?.status,
+      notYetStatus: notYetAfter?.status,
+      contestedStatus: contestedAfter?.status,
+    }).toEqual({
+      supported: true,
+      archivedIds: [decayed.id],
+      reachedLimit: false,
+      decayedStatus: "archived",
+      notYetStatus: "active",
+      contestedStatus: "contested",
+    });
+  });
+
+  it("口が無い adapter では supported: false を名乗り、archived は常に空・reachedLimit は常に false（黙って0件を返さない、ADR 0082 と同じ哲学）", async () => {
+    const { runtime, stores } = buildRuntime(llmReturning([]));
+    await createDecayedMemory(stores, "sweep-archive-unsupported", new Date(NOW.getTime() - 1_000));
+
+    // 口を持たない adapter を模す（`supersedeWithNewMemories` の歯と同じ作法。
+    // `delete` では消えない——クラスのメソッドは prototype に在る）。
+    (stores.memoryStore as { archiveDecayed?: unknown }).archiveDecayed = undefined;
+
+    const result = await runtime.sweepArchive(ctx, { now: NOW, limit: 10 });
+
+    expect(result).toEqual({ supported: false, archived: [], reachedLimit: false });
+  });
+
+  it("この掃引は tick() からは自動で走らない", async () => {
+    const { runtime, stores } = buildRuntime(llmReturning([]));
+    const decayed = await createDecayedMemory(
+      stores,
+      "sweep-archive-not-automatic",
+      new Date(NOW.getTime() - 1_000),
+    );
+
+    await runtime.tick(ctx, { kinds: ["embed"], leaseMs: TEST_LEASE_MS });
+
+    const after = await stores.memoryStore.get(ctx, decayed.id);
+    expect(after?.status).toBe("active");
+  });
+
+  it("対象が0件でも例外を投げない", async () => {
+    const { runtime } = buildRuntime(llmReturning([]));
+
+    const result = await runtime.sweepArchive(ctx, { now: NOW, limit: 10 });
+
+    expect(result).toEqual({ supported: true, archived: [], reachedLimit: false });
+  });
+});
+
+/**
  * ADR 0082 / issue #105（外部の採用検討者からの報告）。
  *
  * 報告の芯は2つあった。
