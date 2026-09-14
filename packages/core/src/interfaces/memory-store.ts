@@ -500,6 +500,55 @@ export interface MemoryStore {
     conflicted: Array<{ id: MemoryId; observedStatus: MemoryStatus }>;
   }>;
   /**
+   * Issue #210: `docs/roadmap.md` §5.4「監査ログの既定保持期間」でオーナーが必須と決めた
+   * 「テナント単位で短縮できる口」（`TenantSettingsStore.getEventRetention`/
+   * `setEventRetention`、ADR 0050）に対応する削除側。ADR 0050 決定8が明示的に範囲外へ
+   * 残していた「期限切れの `memory_events` 行を実際に消す処理」を、この口が埋める。
+   *
+   * `docs/memory-model.md` §11 Memory lifecycle 行「(memory_events の掃除)」が要求する
+   * 保守ジョブ本体。**`EventStore` interface（`append`/`list`/`get`）はこの口を経由しない
+   * ——append-only の型そのものに `update`/`delete` を持たせない、という
+   * `docs/memory-model.md` §9 の規律を、削除操作の置き場所でも守るためである。**
+   * `EventStore.append` を呼ぶことも禁じてはいないが（実際には呼ばない。下記参照）、
+   * 型としては `EventStore` に一切触れない。
+   *
+   * 🔴 **任意メソッドである。**必須にすると `MemoryStore` を実装する第三者の adapter を
+   * 壊す破壊的変更になる（`@mnemora/core` は npm に公開済み、`docs/autonomy.md`
+   * 「してはいけないこと」表の「公開 API の破壊的変更」）。[ADR 0100](../../../../docs/decisions/0100-supersede-with-new-memories.md)
+   * の `supersedeWithNewMemories?` と同じ形の判断。この口を実装しない adapter は、
+   * 保持期間を「設定できるが、実際には縮まない」ままにする——[ADR 0115](../../../../docs/decisions/0115-event-retention-purge.md)
+   * 「守れないもの」に明記した。
+   *
+   * 契約:
+   * - 対象は `tenant_id = ctx.tenantId AND at < opts.olderThan AND kind <> 'events_purged'`
+   *   の行に限る。**`kind = 'events_purged'` 自身は対象から除外する**——含めると、
+   *   ある回の掃除が積んだ `events_purged` イベントが次回の掃除対象になり得るという
+   *   無限後退（ADR 0115 決定「無限後退」参照）を生む。除外の代償として
+   *   `events_purged` 行はこの口の対象にならず単調に増え続けるが、増分は「呼び出し
+   *   1回につき高々1行」であり、削除対象の生の件数とは無関係に小さい。
+   * - **`opts.limit` は必須・既定値を持たない**（`ClaimOutboxJobsOptions.leaseMs`、
+   *   ADR 0032 と同じ理由——取り消せない削除の上限を `packages/core` が勝手に決めない）。
+   * - 並び順は `at` 昇順（最も古い行から消す）。対象が `opts.limit` を超える場合は
+   *   `reachedLimit: true` を返す——**呼び出し側が「1回で消しきれなかった」ことを
+   *   知るための唯一の信号であり、`purged === opts.limit` からの推測に頼らせない**
+   *   （`opts.limit` ちょうどの件数が対象の全件だった場合と区別できないため）。
+   * - **`opts.dryRun` を必ず持つ。**`true` のときは対象を数えるだけで、
+   *   `memory_events` を1行も DELETE せず、`events_purged` イベントも1行も INSERT
+   *   しない。返り値の `purged`/`reachedLimit`/`oldestPurgedAt`/`newestPurgedAt` は
+   *   「実行していたら何が起きたか」のプレビューであり、DB の状態は変わらない。
+   * - **削除と `events_purged` イベントの追記は同一トランザクション**（ADR 0031・
+   *   ADR 0100 と同じ「必ず」の強制。`forget()` が `EventStore` 追記と同一トランザクション
+   *   であるのと同じ理由）。`purged === 0`（対象が無かった）ときは、削除も追記も
+   *   一切発生しない——「何も変わらなかった」ことを表す `events_purged` 行を積む
+   *   意味が無いため（0件の掃除を毎回記録すると、頻繁なスケジュール実行で無意味な
+   *   行が積み上がる）。
+   * - 積む `events_purged` イベントの `meta` は `{ purgedCount, oldestPurgedAt,
+   *   newestPurgedAt, olderThan }` の4欄のみ——`docs/memory-model.md` §9 が言う
+   *   「件数と期間のみ。削除された個々のイベントの詳細は残らない」を、`memory_id`
+   *   個別の記録を一切持たないことで守る。
+   */
+  purgeExpiredEvents?(ctx: Ctx, opts: PurgeExpiredEventsOptions): Promise<PurgeExpiredEventsResult>;
+  /**
    * [ADR 0114](../../../../docs/decisions/0114-archive-sweep-for-decayed-memories.md):
    * `docs/memory-model.md` §11 行8「`decay_floor_at < now()` を検出する低頻度の掃引…
    * → `status='archived'` + `archived` イベント」を満たすための口。
@@ -600,6 +649,46 @@ export interface ArchiveDecayedResult {
    * 守っている規律と同じ形である。
    */
   reachedLimit: boolean;
+}
+
+/**
+ * {@link MemoryStore.purgeExpiredEvents} の引数（Issue #210、ADR 0115）。
+ */
+export interface PurgeExpiredEventsOptions {
+  /** この日時より古い（`at < olderThan`）行だけが対象。境界値の `at === olderThan` は対象外。 */
+  olderThan: Date;
+  /**
+   * 1回の呼び出しで削除する上限。**必須・既定値なし**
+   * （`ClaimOutboxJobsOptions.leaseMs` と同じ理由。上の interface doc 参照）。
+   */
+  limit: number;
+  /**
+   * `true` なら削除もイベント追記も行わず、何が起きるかだけを返す。
+   * 省略時は `false`（`runtime.ts` の `ConsolidateOptions.dryRun`/`ReflectOptions.dryRun`
+   * と同じ既定）。
+   */
+  dryRun?: boolean;
+}
+
+/** {@link MemoryStore.purgeExpiredEvents} の返り値（Issue #210、ADR 0115）。 */
+export interface PurgeExpiredEventsResult {
+  /**
+   * 実際に削除された行数。`opts.dryRun === true` のときは、削除していたら消えていた
+   * であろう件数（プレビュー）——1行も削除していない。
+   */
+  purged: number;
+  /**
+   * 対象が `opts.limit` より多かった（＝この呼び出しだけでは消しきれなかった）ことを示す。
+   * `purged === opts.limit` からの推測に頼らせないための専用の信号
+   * （interface doc の契約節参照）。
+   */
+  reachedLimit: boolean;
+  /** 削除された（またはプレビューで数えられた）行のうち最も古い `at`。`purged === 0` なら `null`。 */
+  oldestPurgedAt: Date | null;
+  /** 削除された（またはプレビューで数えられた）行のうち最も新しい `at`。`purged === 0` なら `null`。 */
+  newestPurgedAt: Date | null;
+  /** `opts.dryRun` の写し。呼び出し側が結果だけを見て「本当に消えたか」を取り違えないため。 */
+  dryRun: boolean;
 }
 
 /**

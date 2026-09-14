@@ -119,6 +119,24 @@ export interface MemoryStoreConformanceOptions {
    */
   supportsSupersedeWithNewMemories: boolean;
   /**
+   * Issue #210 / ADR 0115: 対象の `MemoryStore` 実装が `purgeExpiredEvents`
+   * （任意メソッド）を実装しているかどうか。**必須。**
+   *
+   * ADR 0031 決定9 / ADR 0100 と同じ判断——省略可にしない。`true` なら削除の歯
+   * （境界・テナント越境しない・`limit`/`reachedLimit`・`dryRun` で1行も変わらない・
+   * `events_purged` が件数と期間を持つ・`events_purged` 自身は対象から除外される）を
+   * 実行する。`false` なら `expect(store.purgeExpiredEvents).toBeUndefined()` を
+   * 積極的に assert する。
+   */
+  supportsPurgeExpiredEvents: boolean;
+  /**
+   * Issue #210 / ADR 0115: `purgeExpiredEvents` が積んだ `events_purged` イベント
+   * （`memoryId: null`）を読み出すためのフック。`supportsPurgeExpiredEvents: true` の
+   * ときだけ呼ばれる。`listEventsForMemory` と同じ理由で必須にする——`MemoryStore`
+   * interface 自体には「あるテナントの `events_purged` を読む」操作が無いため。
+   */
+  listPurgedEvents: (ctx: Ctx) => Promise<MemoryEvent[]> | MemoryEvent[];
+  /**
    * ADR 0114: 対象の `MemoryStore` 実装が `archiveDecayed`（任意メソッド）を
    * 実装しているかどうか。**必須。**
    *
@@ -165,6 +183,8 @@ export function describeMemoryStoreConformance(options: MemoryStoreConformanceOp
     prepareRecallId,
     claimEmbedJobs,
     supportsSupersedeWithNewMemories,
+    supportsPurgeExpiredEvents,
+    listPurgedEvents,
     supportsArchiveDecayed,
   } = options;
 
@@ -1772,6 +1792,215 @@ export function describeMemoryStoreConformance(options: MemoryStoreConformanceOp
       it("supersedeWithNewMemories は任意メソッドであり、この adapter は実装していない", async () => {
         const store = await createStore();
         expect(store.supersedeWithNewMemories).toBeUndefined();
+      });
+    }
+
+    // -------------------------------------------------------------------
+    // purgeExpiredEvents（Issue #210、ADR 0115）。🔴 任意メソッド——
+    // `supportsPurgeExpiredEvents` が false の adapter では、メソッドそのものが
+    // 存在しないことだけを検査する。
+    // -------------------------------------------------------------------
+
+    /**
+     * `updateStatusWithEvent` を、特定の `at`/`kind`/`memoryId` を持つ `memory_events` 行を
+     * 1件積むためだけの道具として使う（`buildSupersedeEvent` と同じ発想。`MemoryStore`
+     * interface には「任意の kind/at を持つイベントを1件足す」専用の口が無いため）。
+     * 対象の `targetMemoryId` の `status` も同時に書き換わるが、この適合テストでは
+     * `memory_events` の中身だけを見るので無害——複数回呼んでも `expectedStatus` を
+     * 渡さないので CAS には引っかからない。
+     */
+    async function seedEvent(
+      store: MemoryStore,
+      ctx: Ctx,
+      targetMemoryId: MemoryId,
+      opts: { at: Date; kind?: NewMemoryEvent["kind"]; memoryId?: MemoryId | null },
+    ): Promise<void> {
+      await store.updateStatusWithEvent!(
+        ctx,
+        targetMemoryId,
+        "archived",
+        {},
+        {
+          tenantId: ctx.tenantId,
+          memoryId: opts.memoryId !== undefined ? opts.memoryId : targetMemoryId,
+          kind: opts.kind ?? "updated",
+          at: opts.at,
+          actor: { type: "system" },
+          meta: { reason: "conformance-purge-fixture" },
+        },
+      );
+    }
+
+    if (supportsPurgeExpiredEvents) {
+      it("purgeExpiredEvents は olderThan より古い行だけを消す（境界 at === olderThan は対象外）", async () => {
+        const store = await createStore();
+        const ctx: Ctx = { tenantId: "tenant-1" };
+        const memory = await store.createMemory(
+          ctx,
+          buildNewMemoryFixture({ tenantId: "tenant-1", contentHash: "purge-boundary" }),
+        );
+        const cutoff = new Date("2024-06-01T00:00:00.000Z");
+        await seedEvent(store, ctx, memory.id, { at: new Date(cutoff.getTime() - 2000) }); // 古い→対象
+        await seedEvent(store, ctx, memory.id, { at: new Date(cutoff.getTime() - 1000) }); // 古い→対象
+        await seedEvent(store, ctx, memory.id, { at: cutoff }); // 境界ちょうど→対象外
+        await seedEvent(store, ctx, memory.id, { at: new Date(cutoff.getTime() + 1000) }); // 新しい→対象外
+
+        const result = await store.purgeExpiredEvents!(ctx, { olderThan: cutoff, limit: 10 });
+
+        expect(result.purged).toBe(2);
+        expect(result.reachedLimit).toBe(false);
+        expect(result.dryRun).toBe(false);
+        expect(result.oldestPurgedAt).toEqual(new Date(cutoff.getTime() - 2000));
+        expect(result.newestPurgedAt).toEqual(new Date(cutoff.getTime() - 1000));
+
+        const remaining = await listEventsForMemory(ctx, memory.id);
+        expect(remaining.map((e) => e.at.getTime()).sort()).toEqual(
+          [cutoff.getTime(), cutoff.getTime() + 1000].sort(),
+        );
+      });
+
+      it("purgeExpiredEvents はテナント越境しない", async () => {
+        const store = await createStore();
+        const ctx1: Ctx = { tenantId: "tenant-purge-1" };
+        const ctx2: Ctx = { tenantId: "tenant-purge-2" };
+        const memory1 = await store.createMemory(
+          ctx1,
+          buildNewMemoryFixture({ tenantId: "tenant-purge-1", contentHash: "purge-cross-1" }),
+        );
+        const memory2 = await store.createMemory(
+          ctx2,
+          buildNewMemoryFixture({ tenantId: "tenant-purge-2", contentHash: "purge-cross-2" }),
+        );
+        const oldAt = new Date("2024-01-01T00:00:00.000Z");
+        await seedEvent(store, ctx1, memory1.id, { at: oldAt });
+        await seedEvent(store, ctx2, memory2.id, { at: oldAt });
+
+        const cutoff = new Date("2024-06-01T00:00:00.000Z");
+        const result = await store.purgeExpiredEvents!(ctx1, { olderThan: cutoff, limit: 10 });
+
+        expect(result.purged).toBe(1);
+        expect(await listEventsForMemory(ctx1, memory1.id)).toEqual([]);
+        // tenant-purge-2 の行は無事（越境して消えていない）。
+        expect(await listEventsForMemory(ctx2, memory2.id)).toHaveLength(1);
+      });
+
+      it("purgeExpiredEvents は limit を超えた対象を reachedLimit: true で知らせ、超えない呼び出しでは false になる", async () => {
+        const store = await createStore();
+        const ctx: Ctx = { tenantId: "tenant-1" };
+        const memory = await store.createMemory(
+          ctx,
+          buildNewMemoryFixture({ tenantId: "tenant-1", contentHash: "purge-limit" }),
+        );
+        const base = new Date("2024-01-01T00:00:00.000Z").getTime();
+        // 5件、すべて cutoff より古い。
+        for (let i = 0; i < 5; i++) {
+          await seedEvent(store, ctx, memory.id, { at: new Date(base + i * 1000) });
+        }
+        const cutoff = new Date(base + 10_000);
+
+        const first = await store.purgeExpiredEvents!(ctx, { olderThan: cutoff, limit: 3 });
+        expect(first.purged).toBe(3);
+        expect(first.reachedLimit).toBe(true);
+        // 最も古い3件（i=0,1,2）が消え、i=3,4 が残る。
+        expect(first.oldestPurgedAt).toEqual(new Date(base));
+        expect(first.newestPurgedAt).toEqual(new Date(base + 2000));
+
+        const second = await store.purgeExpiredEvents!(ctx, { olderThan: cutoff, limit: 10 });
+        expect(second.purged).toBe(2);
+        expect(second.reachedLimit).toBe(false);
+
+        expect(await listEventsForMemory(ctx, memory.id)).toEqual([]);
+      });
+
+      it("purgeExpiredEvents は dryRun のとき1行も消さず、events_purged も1行も積まない", async () => {
+        const store = await createStore();
+        const ctx: Ctx = { tenantId: "tenant-1" };
+        const memory = await store.createMemory(
+          ctx,
+          buildNewMemoryFixture({ tenantId: "tenant-1", contentHash: "purge-dry-run" }),
+        );
+        const oldAt = new Date("2024-01-01T00:00:00.000Z");
+        await seedEvent(store, ctx, memory.id, { at: oldAt });
+        const cutoff = new Date("2024-06-01T00:00:00.000Z");
+
+        const purgedEventsBefore = await listPurgedEvents(ctx);
+
+        const result = await store.purgeExpiredEvents!(ctx, {
+          olderThan: cutoff,
+          limit: 10,
+          dryRun: true,
+        });
+
+        expect(result.dryRun).toBe(true);
+        expect(result.purged).toBe(1); // 「消していたら1件消えていた」というプレビュー
+        expect(result.oldestPurgedAt).toEqual(oldAt);
+        expect(result.newestPurgedAt).toEqual(oldAt);
+
+        // 1行も消えていない。
+        expect(await listEventsForMemory(ctx, memory.id)).toHaveLength(1);
+        // events_purged も1行も積まれていない。
+        expect(await listPurgedEvents(ctx)).toEqual(purgedEventsBefore);
+      });
+
+      it("purgeExpiredEvents が積む events_purged は memoryId が null で、件数と期間を meta に持つ", async () => {
+        const store = await createStore();
+        const ctx: Ctx = { tenantId: "tenant-1" };
+        const memory = await store.createMemory(
+          ctx,
+          buildNewMemoryFixture({ tenantId: "tenant-1", contentHash: "purge-summary" }),
+        );
+        const oldest = new Date("2024-01-01T00:00:00.000Z");
+        const newest = new Date("2024-01-02T00:00:00.000Z");
+        await seedEvent(store, ctx, memory.id, { at: oldest });
+        await seedEvent(store, ctx, memory.id, { at: newest });
+        const cutoff = new Date("2024-06-01T00:00:00.000Z");
+
+        await store.purgeExpiredEvents!(ctx, { olderThan: cutoff, limit: 10 });
+
+        const purgedEvents = await listPurgedEvents(ctx);
+        expect(purgedEvents).toHaveLength(1);
+        const summary = purgedEvents[0]!;
+        expect(summary.kind).toBe("events_purged");
+        expect(summary.memoryId).toBeNull();
+        expect(summary.meta.purgedCount).toBe(2);
+        expect(new Date(summary.meta.oldestPurgedAt as string).getTime()).toBe(oldest.getTime());
+        expect(new Date(summary.meta.newestPurgedAt as string).getTime()).toBe(newest.getTime());
+      });
+
+      it("purgeExpiredEvents は kind='events_purged' 自身を対象から除外する（無限後退を避ける）", async () => {
+        const store = await createStore();
+        const ctx: Ctx = { tenantId: "tenant-1" };
+        const memory = await store.createMemory(
+          ctx,
+          buildNewMemoryFixture({ tenantId: "tenant-1", contentHash: "purge-no-regress" }),
+        );
+        const veryOld = new Date("2020-01-01T00:00:00.000Z");
+        // 古い events_purged 行を直接仕込む（本来は掃除ジョブ自身が積むが、ここでは
+        // 「以前の掃除で積まれた行が、今回の cutoff の範囲内にある」状況を再現する）。
+        await seedEvent(store, ctx, memory.id, {
+          at: veryOld,
+          kind: "events_purged",
+          memoryId: null,
+        });
+        // 掃除対象になりうる普通のイベントも1件。
+        await seedEvent(store, ctx, memory.id, { at: veryOld });
+
+        const cutoff = new Date("2024-06-01T00:00:00.000Z");
+        const result = await store.purgeExpiredEvents!(ctx, { olderThan: cutoff, limit: 10 });
+
+        // 対象は普通のイベント1件だけ——events_purged は除外される。
+        expect(result.purged).toBe(1);
+
+        const purgedEvents = await listPurgedEvents(ctx);
+        // 仕込んだ古い events_purged（1件）+ 今回の掃除が積んだ新しい events_purged（1件）= 2件。
+        // 仕込んだ方が消えていたら1件のままになる。
+        expect(purgedEvents).toHaveLength(2);
+        expect(purgedEvents.some((e) => e.at.getTime() === veryOld.getTime())).toBe(true);
+      });
+    } else {
+      it("purgeExpiredEvents は任意メソッドであり、この adapter は実装していない", async () => {
+        const store = await createStore();
+        expect(store.purgeExpiredEvents).toBeUndefined();
       });
     }
 

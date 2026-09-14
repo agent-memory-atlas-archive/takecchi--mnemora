@@ -26,6 +26,8 @@ import type {
   ObservationId,
   OutboxJobKind,
   OutboxJobRecord,
+  PurgeExpiredEventsOptions,
+  PurgeExpiredEventsResult,
   RecallId,
   RecallScope,
   RequeueEmbedJobsOptions,
@@ -473,6 +475,64 @@ export class InMemoryMemoryStore implements MemoryStore {
     }
 
     return { created, superseded, conflicted };
+  }
+
+  /**
+   * Issue #210 / ADR 0115: `events` 配列（`InMemoryEventStore` と共有、ADR 0031）から
+   * 期限切れの行を消す。`EventStore`（`InMemoryEventStore`）のメソッドは一切呼ばない
+   * ——append-only の型に触れず、`events` 配列を直接操作する
+   * （`PostgresMemoryStore.purgeExpiredEvents` が `PostgresEventStore` を経由せず
+   * `memory_events` へ直接 SQL を発行するのと同じ形）。
+   *
+   * `kind = 'events_purged'` の行は対象から除外する（無限後退を避ける、interface doc
+   * 参照）。`at` 昇順に並べ替えてから `opts.limit` 件（+1件、`reachedLimit` 判定用）を
+   * 見る。`dryRun` のときは `this.events` を一切変更しない。
+   */
+  async purgeExpiredEvents(
+    ctx: Ctx,
+    opts: PurgeExpiredEventsOptions,
+  ): Promise<PurgeExpiredEventsResult> {
+    const dryRun = opts.dryRun ?? false;
+    const candidates = this.events
+      .filter(
+        (event) =>
+          event.tenantId === ctx.tenantId &&
+          event.kind !== "events_purged" &&
+          event.at.getTime() < opts.olderThan.getTime(),
+      )
+      .sort((a, b) => a.at.getTime() - b.at.getTime());
+
+    const reachedLimit = candidates.length > opts.limit;
+    const victims = candidates.slice(0, opts.limit);
+    const purged = victims.length;
+    const oldestPurgedAt = purged > 0 ? victims[0]!.at : null;
+    const newestPurgedAt = purged > 0 ? victims[purged - 1]!.at : null;
+
+    if (dryRun || purged === 0) {
+      return { purged, reachedLimit, oldestPurgedAt, newestPurgedAt, dryRun };
+    }
+
+    // 削除。`victims` は `this.events` から探し出した同じ参照なので id で除く。
+    const victimIds = new Set(victims.map((event) => event.id));
+    for (let i = this.events.length - 1; i >= 0; i--) {
+      if (victimIds.has(this.events[i]!.id)) {
+        this.events.splice(i, 1);
+      }
+    }
+
+    // 削除と同一の同期区間で `events_purged` を積む（`await` を挟まないため、
+    // 他の呼び出しがこの間に割り込む余地が無い——本物のトランザクションではないが、
+    // in-memory 実装として原子性を模す唯一の手段。クラス冒頭の doc コメント参照）。
+    const storedEvent = buildStoredMemoryEvent(ctx, {
+      tenantId: ctx.tenantId,
+      memoryId: null,
+      kind: "events_purged",
+      actor: { type: "system" },
+      meta: { purgedCount: purged, oldestPurgedAt, newestPurgedAt, olderThan: opts.olderThan },
+    });
+    this.events.push(storedEvent);
+
+    return { purged, reachedLimit, oldestPurgedAt, newestPurgedAt, dryRun };
   }
 
   /**

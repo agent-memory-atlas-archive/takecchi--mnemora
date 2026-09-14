@@ -26,6 +26,8 @@ import type {
   ArchiveDecayedOptions,
   ArchiveDecayedResult,
   MemoryStore,
+  PurgeExpiredEventsOptions,
+  PurgeExpiredEventsResult,
   RequeueEmbedJobsOptions,
   RequeueEmbedJobsResult,
 } from "../interfaces/memory-store.js";
@@ -458,6 +460,54 @@ export class FakeMemoryStore implements MemoryStore {
     }
 
     return { created, superseded, conflicted };
+  }
+
+  /**
+   * Issue #210 / ADR 0115: `InMemoryMemoryStore.purgeExpiredEvents`（`packages/testkit`）と
+   * 同じ意味論。`backing.events` を直接操作し、`FakeEventStore` のメソッドは一切呼ばない
+   * ——append-only の型に触れない、という契約を Fake 側でも保つ。
+   */
+  async purgeExpiredEvents(
+    ctx: Ctx,
+    opts: PurgeExpiredEventsOptions,
+  ): Promise<PurgeExpiredEventsResult> {
+    const dryRun = opts.dryRun ?? false;
+    const candidates = this.backing.events
+      .filter(
+        (event) =>
+          event.tenantId === ctx.tenantId &&
+          event.kind !== "events_purged" &&
+          event.at.getTime() < opts.olderThan.getTime(),
+      )
+      .sort((a, b) => a.at.getTime() - b.at.getTime());
+
+    const reachedLimit = candidates.length > opts.limit;
+    const victims = candidates.slice(0, opts.limit);
+    const purged = victims.length;
+    const oldestPurgedAt = purged > 0 ? victims[0]!.at : null;
+    const newestPurgedAt = purged > 0 ? victims[purged - 1]!.at : null;
+
+    if (dryRun || purged === 0) {
+      return { purged, reachedLimit, oldestPurgedAt, newestPurgedAt, dryRun };
+    }
+
+    const victimIds = new Set(victims.map((event) => event.id));
+    for (let i = this.backing.events.length - 1; i >= 0; i--) {
+      if (victimIds.has(this.backing.events[i]!.id)) {
+        this.backing.events.splice(i, 1);
+      }
+    }
+
+    const storedEvent = buildStoredEvent(ctx, {
+      tenantId: ctx.tenantId,
+      memoryId: null,
+      kind: "events_purged",
+      actor: { type: "system" },
+      meta: { purgedCount: purged, oldestPurgedAt, newestPurgedAt, olderThan: opts.olderThan },
+    });
+    this.backing.events.push(storedEvent);
+
+    return { purged, reachedLimit, oldestPurgedAt, newestPurgedAt, dryRun };
   }
 
   /**

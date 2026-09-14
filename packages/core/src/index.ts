@@ -40,3 +40,5 @@ export * from "./extraction.js";
 export * from "./runtime.js";
 export * from "./recall-runtime.js";
 export * from "./recall-output-validation.js";
+// Issue #210 / ADR 0115: 明示呼び出し専用（`runtime.tick`/`observe` には配線しない）。
+export * from "./event-retention-purge.js";

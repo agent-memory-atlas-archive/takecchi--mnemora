@@ -21,6 +21,8 @@ import type {
   ObservationId,
   OutboxJobKind,
   OutboxJobRecord,
+  PurgeExpiredEventsOptions,
+  PurgeExpiredEventsResult,
   RecallId,
   RecallScope,
   RequeueEmbedJobsOptions,
@@ -667,6 +669,86 @@ export class PostgresMemoryStore implements MemoryStore {
     });
   }
 
+  /**
+   * Issue #210 / ADR 0115: `memory_events` から期限切れ行を消す保守ジョブ本体。
+   *
+   * 🔴 **`PostgresEventStore` を一切呼ばない。**`memory_events` へ直接 SQL を発行する
+   * ——`updateStatusWithEvent`/`supersedeWithNewMemories` が append を `PostgresEventStore`
+   * 経由にせず直接 INSERT しているのと同じ形（`EventStore` interface はこの経路を
+   * 経由しない、という `docs/memory-model.md` §9・§11 の要求を型だけでなく実装でも守る）。
+   *
+   * 対象の選定は {@link buildPurgeExpiredEventsTargetSelect} に切り出してある——
+   * `packages/postgres/src/__tests__/memory-events-retention-index.test.ts` の `EXPLAIN`
+   * がこの関数の返り値をそのまま測る（`buildRequeueEmbedTargetSelect` と同じ理由）。
+   *
+   * `dryRun` のときは対象を数えるだけで `db.transaction` を開かない——削除も INSERT も
+   * 実行しないので、トランザクションで包む対象が無い。
+   */
+  async purgeExpiredEvents(
+    ctx: Ctx,
+    opts: PurgeExpiredEventsOptions,
+  ): Promise<PurgeExpiredEventsResult> {
+    const dryRun = opts.dryRun ?? false;
+    const target = buildPurgeExpiredEventsTargetSelect(ctx, opts);
+
+    if (dryRun) {
+      const candidates = await this.db.execute(target);
+      const rows = candidates.rows as unknown as { at: string }[];
+      const reachedLimit = rows.length > opts.limit;
+      const victims = rows.slice(0, opts.limit);
+      return {
+        purged: victims.length,
+        reachedLimit,
+        oldestPurgedAt: victims.length > 0 ? parsePgTimestamp(victims[0]!.at) : null,
+        newestPurgedAt:
+          victims.length > 0 ? parsePgTimestamp(victims[victims.length - 1]!.at) : null,
+        dryRun,
+      };
+    }
+
+    return this.db.transaction(async (tx) => {
+      const candidates = await tx.execute(target);
+      const rows = candidates.rows as unknown as { id: string; at: string }[];
+      const reachedLimit = rows.length > opts.limit;
+      const victims = rows.slice(0, opts.limit);
+
+      if (victims.length === 0) {
+        return { purged: 0, reachedLimit, oldestPurgedAt: null, newestPurgedAt: null, dryRun };
+      }
+
+      const victimIds = victims.map((row) => row.id);
+      await tx.execute(sql`
+        DELETE FROM memory_events
+        WHERE tenant_id = ${ctx.tenantId} AND id = ANY(${sql.param(victimIds)}::uuid[])
+      `);
+
+      const oldestPurgedAt = parsePgTimestamp(victims[0]!.at);
+      const newestPurgedAt = parsePgTimestamp(victims[victims.length - 1]!.at);
+
+      await tx.execute(sql`
+        INSERT INTO memory_events (id, tenant_id, memory_id, kind, at, actor, digest_snapshot, size_before_bytes, meta)
+        VALUES (
+          gen_random_uuid(),
+          ${ctx.tenantId},
+          NULL,
+          'events_purged',
+          now(),
+          ${JSON.stringify({ type: "system" })}::jsonb,
+          NULL,
+          NULL,
+          ${JSON.stringify({
+            purgedCount: victims.length,
+            oldestPurgedAt,
+            newestPurgedAt,
+            olderThan: opts.olderThan,
+          })}::jsonb
+        )
+      `);
+
+      return { purged: victims.length, reachedLimit, oldestPurgedAt, newestPurgedAt, dryRun };
+    });
+  }
+
   async setEmbeddingStatus(ctx: Ctx, id: MemoryId, status: EmbeddingStatus): Promise<Memory> {
     // id 列は uuid 型。この口の契約は「無い == 例外」なので、形式が壊れた入力も
     // クエリを投げる前に同じ「memory not found」の Error へ寄せる（mapping.ts の
@@ -1166,4 +1248,33 @@ export function buildRequeueEmbedTargetSelect(ctx: Ctx, opts: RequeueEmbedJobsOp
     ORDER BY updated_at ASC, id ASC
     LIMIT ${opts.limit}
     FOR UPDATE SKIP LOCKED`;
+}
+
+/**
+ * Issue #210 / ADR 0115: `PostgresMemoryStore.purgeExpiredEvents` が「どの行を消すか」を
+ * 選ぶ `SELECT`。**本体と `EXPLAIN` の歯が、同じものを使うために切り出してある**
+ * （`buildRequeueEmbedTargetSelect` と同じ理由——テスト側に述語を書き写すと、本体の
+ * 述語を直したときにその歯だけが古い述語を測り続ける）。
+ *
+ * `LIMIT opts.limit + 1` で1件多く取る——`reachedLimit`（「1回で消しきれなかった」）を
+ * `purged === opts.limit` からの推測に頼らず、専用の信号として立てるため
+ * （`packages/core/src/interfaces/memory-store.ts` の契約節参照）。
+ *
+ * `kind <> 'events_purged'` は `memory_events` に `(tenant_id, at)` の索引
+ * （`migrations/0010_memory_events_retention_index.sql`）を張ったうえで Filter として
+ * 残す——`kind` を索引に含めない（無限後退を避けるための除外は「対象の絞り込み」で
+ * あり、行数の大半を削る述語ではないため、部分索引にする動機が薄い。実測は
+ * `memory-events-retention-index.test.ts` 参照）。
+ */
+export function buildPurgeExpiredEventsTargetSelect(
+  ctx: Ctx,
+  opts: PurgeExpiredEventsOptions,
+): SQL {
+  return sql`
+    SELECT id, at FROM memory_events
+    WHERE tenant_id = ${ctx.tenantId}
+      AND at < ${opts.olderThan}
+      AND kind <> 'events_purged'
+    ORDER BY at ASC
+    LIMIT ${opts.limit + 1}`;
 }

@@ -1,0 +1,39 @@
+-- 0010_memory_events_retention_index.sql
+--
+-- Issue #210 / ADR 0115: `PostgresMemoryStore.purgeExpiredEvents`
+-- （`packages/postgres/src/memory-store.ts` の `buildPurgeExpiredEventsTargetSelect`）が
+-- 対象を選ぶ述語のための索引。
+--
+-- 対象を選ぶ側の SQL は次の形をしている:
+--
+--   SELECT id, at FROM memory_events
+--   WHERE tenant_id = $1
+--     AND at < $2
+--     AND kind <> 'events_purged'
+--   ORDER BY at ASC
+--   LIMIT $3
+--
+-- 既存の2つの索引（0001_init.sql）はどちらも `at` を先頭から使えない:
+--   idx_memory_events_by_memory (tenant_id, memory_id, at)
+--   idx_memory_events_by_kind   (tenant_id, kind, at)
+-- `memory_id`/`kind` を等値で絞らずに `at` の範囲・順序だけを使う本クエリでは、
+-- どちらの索引も `at` の全体順序を提供できない（2列目が拘束されていないと、
+-- 3列目の並びは索引内で連続しない）。
+--
+-- **`kind <> 'events_purged'` は索引に持たせない（部分索引にしない）。**
+-- `idx_memories_requeue_embed`（migration 0007）の教訓と対称の理由: あちらは
+-- 「大半が対象外（'ready'）」という強い選択性があったから部分索引が母数を削れたが、
+-- ここでの除外対象（`kind = 'events_purged'`）は逆に**少数派**である
+-- （events_purged は掃除ジョブの実行1回につき高々1行しか増えない。docs/memory-model.md
+-- §9・`packages/core/src/interfaces/memory-store.ts` の `purgeExpiredEvents` doc 参照）。
+-- 少数派を除外する述語を部分索引の条件にしても母数はほとんど削れず、
+-- 全件を含む単純な索引のほうが素直に選ばれる。`kind <> 'events_purged'` は
+-- Filter としてプランナに任せる（実測は `memory-events-retention-index.test.ts`）。
+--
+-- ⚠ この `CREATE INDEX` は素のまま（`CONCURRENTLY` を付けない）。
+-- `packages/postgres/src/migrate.ts` が各移行ファイルを1トランザクションで包んでおり、
+-- `CREATE INDEX CONCURRENTLY` はトランザクション内で実行できないためである
+-- （0002/0003/0004/0007 と同じ理由・同じ形）。
+
+CREATE INDEX idx_memory_events_by_retention
+  ON memory_events (tenant_id, at);

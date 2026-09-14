@@ -524,6 +524,16 @@ mnemora ではこの前提が成立しない。
 「まとめて削除する」機能を持たせないという、alteroid から採った「型に無ければ生えない」の
 考え方を、削除操作自体にも及ぼす。
 
+**実装済み（2026-09-15、Issue #210 / [ADR 0115](./decisions/0115-event-retention-purge.md)）**:
+`setEventRetention`（ADR 0050）で保持期間を設定できても、実際に古い行を消すコードが
+長らく存在しなかった（Issue #210。「設定できる」と「効く」は別だった）。いま埋まっている口は
+`MemoryStore.purgeExpiredEvents?`（任意メソッド。`@mnemora/core` は npm 公開済みのため、
+必須にすると第三者 adapter を壊す）——`limit` 必須・`dryRun` 対応・`kind = 'events_purged'`
+自身は対象から除外（無限後退を避ける）。`packages/core` の `purgeExpiredEventsForTenant` が
+`TenantSettingsStore.getEventRetention` の3状態を読み、有限日数のときだけこれを呼ぶ。
+**`tick()`/`observe()` には配線していない**——呼び出すのは運用側のスクリプト・cron の責務であり、
+このリポジトリは「呼ぶための部品」だけを提供する。
+
 ```sql
 CREATE TABLE tenant_settings (
   tenant_id                text        PRIMARY KEY,
@@ -939,7 +949,7 @@ observed → extracted → active ───────────────�
 | 8 | active/superseded/contested → archived | `decay_floor_at < now()` を検出する低頻度の掃引、または明示的なアーカイブ操作 | 非同期（定期ジョブ。全件走査ではなく `decay_floor_at` の範囲走査） | `status='archived'` | `archived` |
 | 9 | 任意 → forgotten | `forget(ctx, target)` 呼び出し | 同期（`EventStore` への追記と同一トランザクション） | `status='forgotten'` | `forgotten` |
 | 10 | forgotten → purged（Phase 2） | `purge(ctx, target)` 呼び出し（法的要求） | 同期 | `content`/`digest` をトゥームストーンで上書き、`purged_at` 設定 | `purged` |
-| 11 | (memory_events の掃除) | 保持期間切れの定期ジョブ | 非同期（保守ジョブ。`EventStore` interface は経由しない） | `memory_events` から古い行を DELETE | `events_purged`（件数・期間のみ。削除対象の詳細は残さない） |
+| 11 | (memory_events の掃除) | `MemoryStore.purgeExpiredEvents?` の明示呼び出し（任意メソッド。Issue #210 / [ADR 0115](./decisions/0115-event-retention-purge.md)）。定期実行そのものは呼び出し側（運用のスクリプト・cron）の責務——`tick()`/`observe()` には配線しない | 非同期（保守ジョブ。`EventStore` interface は経由しない） | `memory_events` から古い行を DELETE | `events_purged`（件数・期間のみ。削除対象の詳細は残さない） |
 | 12 | (なし) → active（統合先の新規作成。Observation を経ない） | `Runtime.consolidate()` 呼び出し（Issue #103、ADR 0089）。統合元 2件以上が確定した後、LLM 呼び出しが成功した場合のみ | 同期（`consolidate()` の呼び出し1回の中で完結し、`tick()` はこの操作を駆動しない）。統合元の supersede（行5）と同一トランザクションで書けるかは adapter 依存——口（`MemoryStore.supersedeWithNewMemories`）が在れば1トランザクション、無ければ2段（ADR 0100） | `memories` へ INSERT（`status='active'`、`provenance.kind='consolidated'`・`sources=<統合元の memoryId>`、`decay_floor_at` を初期計算、`strength=1`）。`source_observation_id`/`extractor_version` は常に `NULL` | `created`（`meta.reason='consolidated'`、`meta.sources=<統合元の memoryId>`） |
 | 13 | (なし) → active（内省による新規作成。Observation を経ない） | `Runtime.reflect()` 呼び出し（Issue #104、ADR 0091）。土台 1件以上に対し LLM が `outcome:'reflected'` を返した場合のみ | 同期（`reflect()` の呼び出し1回の中で完結し、`tick()` はこの操作を駆動しない） | `memories` へ INSERT（`status='active'`、`provenance.kind='reflected'`・`sources=<土台の memoryId>`、`decay_floor_at` を初期計算、`strength=1`）。`source_observation_id`/`extractor_version` は常に `NULL`。**既存の行へは一切書き込まない**——行5〜7のどれも発生しない | `created`（`meta.reason='reflected'`、`meta.sources=<土台の memoryId>`） |
 
