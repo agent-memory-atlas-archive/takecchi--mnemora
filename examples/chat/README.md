@@ -911,6 +911,37 @@ node scripts/identifier-probe-summary.mjs \
 
 ---
 
+## `time-term`: 時間項(freshness/decay)を意味的類似度から分離して測る(Issue #217)
+
+**何を測るか**は [ADR 0058](../../docs/decisions/0058-measure-the-time-term-in-a-separate-arm.md)
+を見ること（`src/time-term-probe-set.ts`・`src/time-term-arm.ts`）。要約: 「内容は同一・
+`occurredAt`/`recordedAt` だけ違う」8 probe のペアを使い、`freshness`/`decay` が総合スコアの
+順位をどう動かすかを probe ごとの `outcome`（`newer-ranked-higher` 等）として測る。
+**MRR/hit@k は持たない**——想起の質ではなく、時間項が順位を決めるかどうかを測る arm である。
+
+**provider は `deterministic` に固定される**（ペアの本文が同一なので `similarity` は
+構成上定数になる。`@mnemora/local-embedding` は使わないため、HuggingFace への外向き通信も
+「重みを取得できなかった」という失敗モードも構造上存在しない）。
+
+```
+DATABASE_URL=... MNEMORA_TIME_TERM_JSON=<path> pnpm --filter @mnemora/example-chat run time-term
+```
+
+`MNEMORA_TIME_TERM_JSON` を設定すると、8 probe すべての `outcome`/内訳を機械可読な JSON
+（`examples/chat/src/time-term-json.ts` の `TimeTermRunJson`）として書き出す。**未設定なら
+挙動を変えない**（`retrieval`/`identifier-probes`/`consolidation-cost` と同じ規約）。
+
+CI の `time-term` ジョブ（`ci.yml`）がこれを実行し、`scripts/time-term-summary.mjs` が
+Job Summary へ内訳を残す。**⛔ 門ではない**——`retrieval-quality`/`identifier-probes` と
+同じ理由（ADR 0088 §2.1。標本8件は閾値判定に足る母数ではない）。落ちるのは bench 自体が
+壊れたとき（`totalInScope`/`outcome` を持たない・JSON が壊れている）だけである。
+
+⚠ **基準値ファイルはまだ無い**（`examples/chat/time-term-baseline.json` は本 PR では
+作らない）。値を捏造しないため——最初の CI 実行で得られる artifact を、後続 PR で基準値に
+する（`scripts/time-term-summary.mjs` は `--baseline` を省略しても動く）。
+
+---
+
 ## `consolidation-cost`: `Runtime.consolidate()` が「載る量」に効くかの実測（Issue #136）
 
 `Runtime.consolidate()`（ADR 0089）は入ったが、`examples/chat` に配線が無く、北極星の物差し

@@ -736,22 +736,22 @@ describe("値を作る側の歯が MNEMORA_LEXICAL_REGIME_JSON を参照して�
   });
 });
 
-describe("ci.yml の6本の pgvector ジョブが regime を宣言していること(Issue #148 ②/Issue #155)", () => {
-  // 🔴 この describe が固定しているのは「1本で測った regime が6本に効く」根拠そのもの
-  // ——`postgres` ジョブ1本だけが実際に regime を測るが、他5本は同じ
+describe("ci.yml の7本の pgvector ジョブが regime を宣言していること(Issue #148 ②/Issue #155)", () => {
+  // 🔴 この describe が固定しているのは「1本で測った regime が7本に効く」根拠そのもの
+  // ——`postgres` ジョブ1本だけが実際に regime を測るが、他6本は同じ
   // `POSTGRES_INITDB_ARGS` を宣言することで「同じ regime のはず」を保証する設計である
   // (ADR 0106「測ったこと」)。
   //
   // ⚠ **Issue #155 で (b)(c) の主張を作り直した(弱めていない)。**`postgres` ジョブが
-  // matrix になったことで、6本のうち1本(`postgres` ジョブ)の `POSTGRES_INITDB_ARGS` は
+  // matrix になったことで、7本のうち1本(`postgres` ジョブ)の `POSTGRES_INITDB_ARGS` は
   // もはやリテラル文字列ではなく `${{ matrix.initdbArgs }}` という式になった——だから
   // (b)「6本の値がすべて同一」という主張はそのままでは成立しなくなった(1本だけ式、
-  // 5本はリテラル)。
+  // 6本はリテラル。Issue #217 で `time-term` ジョブが増え、リテラル側は5本→6本になった)。
   //
   // 作り直した主張:
-  // - (b): **matrix 化していない他5本の値は、matrix の UTF8 脚の initdbArgs と一致する**
+  // - (b): **matrix 化していない他6本の値は、matrix の UTF8 脚の initdbArgs と一致する**
   //   ——UTF8 脚の値は Issue #148 由来の実測のまま1バイトも変えていないので、
-  //   「1本(いまは1脚)で測った regime が他5本に効く」という根拠は保たれる。
+  //   「1本(いまは1脚)で測った regime が他6本に効く」という根拠は保たれる。
   // - (c): **matrix の各脚について、--encoding= の値とその脚の serverEncoding が一致し
   //   (自己無矛盾)、かつ service env と summary 段がどちらも同じ matrix 変数へ
   //   直接配線されている**(値を書き写すのではなく、同じ変数を参照している——
@@ -865,9 +865,9 @@ describe("ci.yml の6本の pgvector ジョブが regime を宣言している�
   const serviceBlocks = extractPgvectorServiceEnvBlocks();
   const matrixLegs = extractMatrixLegs();
 
-  it("(a) image: pgvector/pgvector:pg17 の services ブロックが6本あり、6本すべてが POSTGRES_INITDB_ARGS を持つ", () => {
+  it("(a) image: pgvector/pgvector:pg17 の services ブロックが7本あり、7本すべてが POSTGRES_INITDB_ARGS を持つ", () => {
     expect(serviceBlocks, "pgvector/pgvector:pg17 の services ブロックの数が変わった").toHaveLength(
-      6,
+      7,
     );
     for (const block of serviceBlocks) {
       const env = parseEnvLines(block.envLines);
@@ -886,7 +886,7 @@ describe("ci.yml の6本の pgvector ジョブが regime を宣言している�
     expect(jobBlock).toMatch(/fail-fast:\s*false/);
   });
 
-  it("(b) ⭐ matrix 化していない他5本の POSTGRES_INITDB_ARGS は、matrix の UTF8 脚の initdbArgs と一致する(Issue #155で作り直し。『1本(いま1脚)で測った regime が他5本に効く』根拠そのもの)", () => {
+  it("(b) ⭐ matrix 化していない他6本の POSTGRES_INITDB_ARGS は、matrix の UTF8 脚の initdbArgs と一致する(Issue #155で作り直し。『1本(いま1脚)で測った regime が他6本に効く』根拠そのもの)", () => {
     const values = serviceBlocks.map((block) => parseEnvLines(block.envLines).POSTGRES_INITDB_ARGS);
     const matrixWired = values.filter((value) => value === "${{ matrix.initdbArgs }}");
     const fixedValues = values.filter((value) => value !== "${{ matrix.initdbArgs }}");
@@ -898,8 +898,8 @@ describe("ci.yml の6本の pgvector ジョブが regime を宣言している�
     ).toHaveLength(1);
     expect(
       fixedValues,
-      "matrix 化していないはずの5本の数が変わった(Issue #155 はpostgresジョブ1本だけをmatrix化する)。",
-    ).toHaveLength(5);
+      "matrix 化していないはずの6本の数が変わった(Issue #155 はpostgresジョブ1本だけをmatrix化する)。",
+    ).toHaveLength(6);
 
     const utf8Leg = matrixLegs.find((leg) => leg.serverEncoding === "UTF8");
     expect(utf8Leg, "postgres ジョブの matrix に UTF8 脚が無い").toBeDefined();
@@ -907,7 +907,7 @@ describe("ci.yml の6本の pgvector ジョブが regime を宣言している�
     const distinctFixed = new Set(fixedValues);
     expect(
       distinctFixed.size,
-      `matrix 化していない5本の POSTGRES_INITDB_ARGS が同一でない: ${JSON.stringify(fixedValues)}。` +
+      `matrix 化していない6本の POSTGRES_INITDB_ARGS が同一でない: ${JSON.stringify(fixedValues)}。` +
         "packages/postgres ジョブでしか regime を実測していない前提が崩れる(ADR 0106)。",
     ).toBe(1);
     // `parseEnvLines` は `KEY: "value"` の右辺をクォート込みで返す(YAML の文字列表現を
@@ -916,7 +916,7 @@ describe("ci.yml の6本の pgvector ジョブが regime を宣言している�
     const fixedValueUnquoted = [...distinctFixed][0]?.replace(/^"(.*)"$/, "$1");
     expect(
       fixedValueUnquoted,
-      "他5本の値が、postgres ジョブの matrix の UTF8 脚と食い違う。UTF8 脚は過去の実測との" +
+      "他6本の値が、postgres ジョブの matrix の UTF8 脚と食い違う。UTF8 脚は過去の実測との" +
         "比較可能性のため1バイトも変えない約束である。",
     ).toBe(utf8Leg?.initdbArgs);
   });

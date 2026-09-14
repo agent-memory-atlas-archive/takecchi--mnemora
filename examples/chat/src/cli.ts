@@ -53,6 +53,7 @@ import { formatBackfillDemo, runBackfillDemo } from "./backfill.js";
 import { formatScopeDemo, runScopeDemo } from "./scope.js";
 import { createMutableClock } from "./mutable-clock.js";
 import { formatTimeTermReport, runTimeTermArm } from "./time-term-arm.js";
+import { buildTimeTermJson } from "./time-term-json.js";
 import { formatNoApiCallsNotice } from "./usage-meter.js";
 
 /** `chat` サブコマンドで使う会話の長さ(filler 往復数)。サンプルアプリの裁量値。 */
@@ -702,6 +703,8 @@ async function runVerify(target: CassetteTarget): Promise<void> {
  */
 async function runTimeTerm(): Promise<void> {
   const databaseUrl = requireDatabaseUrl();
+  const measuredAt = new Date();
+  const commit = tryGitRevParseHead(process.cwd());
   const clock = createMutableClock();
   const handle = await createExampleRuntime(
     databaseUrl,
@@ -729,6 +732,16 @@ async function runTimeTerm(): Promise<void> {
       clock,
     });
     console.log(formatTimeTermReport(report));
+
+    // Issue #217: `MNEMORA_TIME_TERM_JSON` が設定されているときだけ機械可読な結果を書く
+    // （`retrieval`/`identifier-probes`/`consolidation-cost` と同じ、未設定なら挙動を
+    // 変えない規約。ADR 0088 §2）。
+    const jsonPath = process.env.MNEMORA_TIME_TERM_JSON;
+    if (jsonPath) {
+      const json = buildTimeTermJson({ report, measuredAt, commit });
+      writeFileSync(jsonPath, `${JSON.stringify(json, null, 2)}\n`, "utf-8");
+      console.log(`\n[time-term] 機械可読な結果を書き出した: ${jsonPath}`);
+    }
   } finally {
     await handle.close();
   }
