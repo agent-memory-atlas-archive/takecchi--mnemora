@@ -76,7 +76,7 @@ importers:
         specifier: workspace:^
         version: link:../core
       zod:
-        specifier: 4.5.4
+        specifier: ^4.5.4
         version: 4.5.4
     devDependencies:
       '@mnemora/openai':
@@ -92,7 +92,7 @@ importers:
   packages/core:
     dependencies:
       zod:
-        specifier: 4.5.4
+        specifier: ^4.5.4
         version: 4.5.4
     devDependencies:
       typescript:
@@ -133,7 +133,7 @@ importers:
         specifier: 7.10.0
         version: 7.10.0(zod@4.5.4)
       zod:
-        specifier: 4.5.4
+        specifier: ^4.5.4
         version: 4.5.4
     devDependencies:
       '@mnemora/testkit':

@@ -52,6 +52,8 @@ import {
   findOrphanedSourceMaps,
   findLicenseViolations,
   findPrivateViolations,
+  findExactPinnedDependencyViolations,
+  EXACT_PINNED_DEPENDENCY_EXEMPTIONS,
 } from "./publish-pack-checks.mjs";
 
 const repoRoot = fileURLToPath(new URL("..", import.meta.url));
@@ -122,6 +124,7 @@ console.log(
     "    6. 宙に浮いた source map（*.map の sources が tarball 内に無い）が無いこと",
     '    7. license が "MIT" であり、LICENSE ファイルが tarball に入っていること（ADR 0061）',
     "    8. private が立っていないこと（ADR 0066 で publish を始める判断が下った）",
+    "    9. dependencies（実行時依存）が完全固定でなく範囲指定であること（除外分を除く。Issue #166 / ADR 0112）",
     BANNER,
     "",
   ].join("\n"),
@@ -214,6 +217,15 @@ try {
     const privateViolations = findPrivateViolations(manifest);
     for (const p of privateViolations) {
       violations.push(`[${target.name}] ${p}`);
+    }
+
+    // 9. 完全固定の実行時依存（Issue #166 / ADR 0112）
+    const exactPinnedViolations = findExactPinnedDependencyViolations(
+      manifest,
+      EXACT_PINNED_DEPENDENCY_EXEMPTIONS[target.name] ?? [],
+    );
+    for (const e of exactPinnedViolations) {
+      violations.push(`[${target.name}] ${e}`);
     }
   }
 

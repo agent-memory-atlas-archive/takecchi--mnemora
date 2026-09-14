@@ -40,7 +40,7 @@
   "dependencies": {
     "@mnemora/core": "workspace:^",
     "openai": "7.10.0",
-    "zod": "4.5.4"
+    "zod": "^4.5.4"
   },
   "devDependencies": {
     "@mnemora/testkit": "workspace:^",

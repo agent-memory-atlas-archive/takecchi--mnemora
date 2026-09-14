@@ -14,6 +14,8 @@ import {
   findOrphanedSourceMaps,
   findLicenseViolations,
   findPrivateViolations,
+  findExactPinnedDependencyViolations,
+  EXACT_PINNED_DEPENDENCY_EXEMPTIONS,
 } from "../publish-pack-checks.mjs";
 
 /**
@@ -125,6 +127,19 @@ describe("publish 対象6パッケージの package.json（静的）", () => {
       it("exports が ./package.json を通す（自分の manifest を読む道具のため）", () => {
         expect(manifest.exports?.["./package.json"]).toBe("./package.json");
       });
+
+      /**
+       * Issue #166 / ADR 0112: 公開パッケージの `dependencies`（実行時依存）は
+       * 完全固定ではなく範囲指定であること。`EXACT_PINNED_DEPENDENCY_EXEMPTIONS` に
+       * 載っている依存（既存の負債・この PR の対象外）だけは除外する。
+       */
+      it("dependencies が完全固定でない（除外分を除く）", () => {
+        const violations = findExactPinnedDependencyViolations(
+          manifest,
+          EXACT_PINNED_DEPENDENCY_EXEMPTIONS[target.name] ?? [],
+        );
+        expect(violations).toEqual([]);
+      });
     });
   }
 
@@ -172,6 +187,66 @@ describe("publish-pack-checks.mjs の判定関数（合成フィクスチャに�
       });
       expect(violations).toHaveLength(1);
       expect(violations[0]).toContain("optionalDependencies.@mnemora/core");
+    });
+  });
+
+  describe("findExactPinnedDependencyViolations", () => {
+    it("完全固定（x.y.z）の dependencies を検出する", () => {
+      const violations = findExactPinnedDependencyViolations({
+        dependencies: { zod: "4.5.4" },
+      });
+      expect(violations).toHaveLength(1);
+      expect(violations[0]).toContain("dependencies.zod");
+      expect(violations[0]).toContain("4.5.4");
+    });
+
+    it("^ で始まる範囲指定は検出しない", () => {
+      const violations = findExactPinnedDependencyViolations({
+        dependencies: { zod: "^4.5.4" },
+      });
+      expect(violations).toEqual([]);
+    });
+
+    it("~ / >= / * / workspace: / x 範囲も検出しない", () => {
+      const violations = findExactPinnedDependencyViolations({
+        dependencies: {
+          a: "~4.5.4",
+          b: ">=4.5.4",
+          c: "*",
+          d: "workspace:^",
+          e: "4.5.x",
+        },
+      });
+      expect(violations).toEqual([]);
+    });
+
+    it("prerelease / build metadata 付きの完全固定も検出する", () => {
+      const violations = findExactPinnedDependencyViolations({
+        dependencies: { a: "1.2.3-beta.1", b: "1.2.3+build.5" },
+      });
+      expect(violations).toHaveLength(2);
+    });
+
+    it("devDependencies / peerDependencies / optionalDependencies は対象外", () => {
+      const violations = findExactPinnedDependencyViolations({
+        devDependencies: { zod: "4.5.4" },
+        peerDependencies: { zod: "4.5.4" },
+        optionalDependencies: { zod: "4.5.4" },
+      });
+      expect(violations).toEqual([]);
+    });
+
+    it("exemptDependencyNames に載っている依存は完全固定でも検出しない", () => {
+      const violations = findExactPinnedDependencyViolations(
+        { dependencies: { "drizzle-orm": "0.45.2", zod: "4.5.4" } },
+        ["drizzle-orm"],
+      );
+      expect(violations).toHaveLength(1);
+      expect(violations[0]).toContain("dependencies.zod");
+    });
+
+    it("dependencies が無ければ0件", () => {
+      expect(findExactPinnedDependencyViolations({})).toEqual([]);
     });
   });
 

@@ -28,6 +28,67 @@ export function findWorkspaceProtocolViolations(manifest) {
   return violations;
 }
 
+/** 完全固定（レンジ演算子を持たない厳密な `x.y.z` 形）のバージョン文字列にだけ一致する。 */
+const EXACT_SEMVER_RE = /^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$/;
+
+/**
+ * `dependencies`（**実行時**依存だけ。`devDependencies` は対象外）のうち、完全固定に
+ * なっているものを集める（Issue #166）。
+ *
+ * **なぜ `dependencies` だけを見るか（`devDependencies` を対象外にする理由）**: ルート
+ * `.npmrc` の `save-exact=true` は、このリポジトリ自身のビルド再現性のために全ての依存を
+ * 追加時点で完全固定する——**これは今回の問題と目的が違う。** `devDependencies` は
+ * 公開される tarball に入らず、下流の `node_modules` にも並ばないので、そこが完全固定でも
+ * 下流の dedupe は壊れない。壊れるのは、**公開したパッケージの `dependencies` が完全固定の
+ * とき**——下流が同じパッケージを新しいバージョンで持っていても npm/pnpm が1本に
+ * dedupe できず、2本並んだ型が構造的に非互換になりうる（zod は `_zod.version.minor` を
+ * リテラル型に埋め込むため、実際に起きた。Issue #166 の報告者による実測は ADR を見ること）。
+ * **`save-exact=true` は `devDependencies` にはそのまま効かせ続ける方針であり、この歯は
+ * それを変えない。**
+ *
+ * **`exemptDependencyNames` について**: 呼び出し側が明示的に渡した依存名は対象外として
+ * 扱う——放置ではなく、`EXACT_PINNED_DEPENDENCY_EXEMPTIONS`（下）に負債として名指しで残す。
+ * 対象から外すのをやめたくなったら、そこから名前を消すだけでよい
+ * （消した瞬間にこの歯が検査し始める）。
+ */
+export function findExactPinnedDependencyViolations(manifest, exemptDependencyNames = []) {
+  const violations = [];
+  const deps = manifest.dependencies;
+  if (!deps) return violations;
+  const exempt = new Set(exemptDependencyNames);
+  for (const [depName, range] of Object.entries(deps)) {
+    if (exempt.has(depName)) continue;
+    if (typeof range === "string" && EXACT_SEMVER_RE.test(range)) {
+      violations.push(
+        `dependencies.${depName} = "${range}"（完全固定。範囲指定（例: "^${range}"）にすること）`,
+      );
+    }
+  }
+  return violations;
+}
+
+/**
+ * `findExactPinnedDependencyViolations` の除外リスト（パッケージ名 → 依存名の配列）。
+ *
+ * **これは「問題ない」の一覧ではなく「未確認のまま残した負債」の一覧である**（Issue #166）。
+ * ルート `.npmrc` の `save-exact=true` により、ここに挙げた依存も zod と同じ経緯
+ * （機械的な完全固定）で pin されたと見られるが、Issue #166 が実測で報告したのは zod のみ
+ * であり、他の依存が同じ下流2本化を実際に起こすかは確認していない。
+ * `docs/autonomy.md` §2「ついでに直さない」に従い、対象を zod だけに絞ってここへ
+ * 明示的に退避する。将来これらを緩めるときは、ここから名前を消すだけでよい。
+ *
+ * **唯一の定義であること**: `scripts/check-publish-pack.mjs`（実行時に使う側）と
+ * `scripts/__tests__/check-publish-pack.test.mjs`（歯として検査する側）の両方がここから
+ * import する。かつて2箇所に写しを置いて後からずれた例（`PUBLISH_TARGETS`。ADR 0066）を
+ * 踏まえ、最初から1箇所にした——2箇所目を作らないので、ずれを検知する歯自体が不要になる。
+ */
+export const EXACT_PINNED_DEPENDENCY_EXEMPTIONS = {
+  "@mnemora/openai": ["openai"],
+  "@mnemora/anthropic": ["@anthropic-ai/sdk"],
+  "@mnemora/postgres": ["@types/pg", "drizzle-orm", "pg"],
+  "@mnemora/local-embedding": ["@huggingface/transformers"],
+};
+
 /**
  * `main` / `types` / `bin` / `exports` が指すファイルのうち、tarball 内に実在しないものを集める。
  *
