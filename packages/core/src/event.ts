@@ -4,6 +4,15 @@ import type { EventId, MemoryId } from "./ids.js";
 /**
  * 監査ログのイベント種別（docs/memory-model.md §9）。
  * 「状態が実際に変わった大分類」だけを列挙し、理由の粒度は `meta` に落とす。
+ *
+ * **⚠ `"purged"` と `"events_purged"` は、この union に在るが生成するコードが無い**
+ * （Issue #206 / [ADR 0117](../../../docs/decisions/0117-unreachable-union-values-inventory.md) で棚卸し済み）。
+ * `purge()`（物理削除）の書き手そのものが存在しない——Issue #198（オーナー §5.3 が
+ * `forget()`（論理削除）と分けると決めた片割れ）が実装されるまで、どちらも本番コードから
+ * 一度も書かれない。**`"purged"` は repo 全体でこの宣言以外に一度も出現しない**
+ * （テストのフィクスチャにも無い）。`"events_purged"` は `@mnemora/testkit` の適合テストが
+ * FK 制約（`memory_events.memory_id` が NULL を拒まないこと）を検査する
+ * リテラルとしてのみ現れ、`purge()` を模してはいない。
  */
 export type MemoryEventKind =
   "created" | "updated" | "superseded" | "archived" | "forgotten" | "purged" | "events_purged";

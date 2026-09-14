@@ -51,6 +51,19 @@ export const memories = pgTable(
     digest: text("digest").notNull(),
     digestSource: text("digest_source").notNull(),
 
+    /**
+     * `provenance.kind`（jsonb 側）と**意図的に二重で持つ、書き込み専用の列**
+     * （Issue #206 / [ADR 0117](../../../docs/decisions/0117-unreachable-union-values-inventory.md) で棚卸し済み）。
+     *
+     * **`rowToMemory`（`./mapping.ts`）はこの列を読み戻さない。** core の `Memory` 型は
+     * `provenance: Provenance` だけを持ち、`provenanceKind` という別欄を持たない
+     * （jsonb の `provenance.kind` が正）。この列の役割は**フィルタ述語**であり、
+     * `vector-store.ts` / `lexical-store.ts` の `excludeProvenanceKinds` が
+     * `provenance_kind <> ALL(...)` という形でこの列を直接引く——jsonb を都度展開せず、
+     * `idx_memories_provenance_kind`（`tenant_id, provenance_kind`）に載せるためにある。
+     * **読み戻す側が増えると、書き込みでの不一致（jsonb とこの列がずれる）が
+     * 静かに result へ混入する経路が生まれる**——増やさない。
+     */
     provenanceKind: text("provenance_kind").notNull(),
     provenance: jsonb("provenance").notNull(),
 

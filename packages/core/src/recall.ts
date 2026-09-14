@@ -22,6 +22,14 @@ export const CountKindSchema = z.enum([
 export interface StageSkippedOmission {
   kind: "stage_skipped";
   stage: "candidate_generation" | "rescore" | "index_band";
+  /**
+   * **⚠ `"budget_exhausted"` は、この union に在るが生成するコードが無い**
+   * （`recall-runtime.ts` はこの値を一度も push しない。Issue #206 / [ADR 0117](../../../docs/decisions/0117-unreachable-union-values-inventory.md) で棚卸し済み）。
+   * `RecallBudget` を使い切ったときの実際の落とし方は `budget_dropped`（`BudgetDroppedOmission`）
+   * であり、`stage_skipped` の理由としては使われていない。
+   * **実装するか、`@mnemora/core` の公開 API 破壊的変更として落とすかは、
+   * ADR 0117 の分類3としてオーナー判断待ちである——このリポジトリの作業者は落とさない。**
+   */
   reason: "embedding_provider_unavailable" | "empty_query_content" | "budget_exhausted";
 }
 
@@ -34,6 +42,16 @@ export interface FilteredOmission {
    * 利用者が明示的に忘れさせたという**製品の振る舞い**（指す先を持たない）。1つの
    * `"status"` に束ねると、「利用者が忘れてほしいと言ったのか、こちらが作り直したのか」を
    * 呼び出し側が判定できなくなる。`"archived"` が既に別条件として独立している先例に倣う。
+   *
+   * **⚠ `"tenant"` と `"taxonomy"` は、この union に在るが生成するコードが無い**
+   * （Issue #206 / [ADR 0117](../../../docs/decisions/0117-unreachable-union-values-inventory.md) で棚卸し済み）。**理由は別々である。**
+   * - `"tenant"`: **意図的に、恒久的に来ない。これは欠陥ではなく正しい状態である。**
+   *   tenant はスコープの外側の境界であり、`filtered` としては報告しない
+   *   （別テナントのデータを omission として報告しないのと同じ理由。`ScopeAggregate` の doc 参照）。
+   *   **実装を待っている値ではない**——生成するコードを足す予定は無い。
+   * - `"taxonomy"`: **Phase 1 に実体が無いため、今は来ない。**labels テーブルは Phase 2
+   *   （docs/memory-model.md §8、Issue #201）。あちらが入れば発火するようになる、
+   *   という意味で `"tenant"` とは性質が違う。
    */
   condition: "tenant" | "superseded" | "forgotten" | "archived" | "taxonomy" | "period";
   count: number;
@@ -319,6 +337,13 @@ export const OmissionSchema = z.discriminatedUnion("kind", [
 /**
  * D12: `key` は `string | null` にする。`subject_id IS NULL` の群を表すため。
  * `'(none)'` のような番兵文字列は実在する subject 名と衝突しうるので採らない。
+ *
+ * **⚠ `axis` は現在 `"subject"` でしか生成されない**（Issue #206 /
+ * [ADR 0117](../../../docs/decisions/0117-unreachable-union-values-inventory.md) で棚卸し済み）。
+ * - `"taxonomy"`: labels テーブルが Phase 2（Issue #201）で入るまで来ない。
+ * - `"time_window"`: 実装が消えたのに union に値だけ残っている
+ *   （ADR 0117 の分類3。実装するか、`@mnemora/core` の公開 API 破壊的変更として
+ *   落とすかはオーナー判断待ちであり、このリポジトリの作業者は落とさない）。
  */
 export interface GroupCount {
   axis: "subject" | "taxonomy" | "time_window";
@@ -452,10 +477,16 @@ export const DIGEST_BAND_MAX_ENTRY_CHARS = 120;
  * 在るという食い違い）。この型はその補完——status ゲート（段1と同じ
  * `status IN ('active','contested')`）をスコープの一部として確定する決定を反映する。
  *
- * **tenant と subject はスコープの外側の境界であり、`filtered` としては報告しない**
- * （`FilteredOmission.condition` に `'tenant'`/`'subject'` の値が無いことと対応する。
+ * **tenant と subject はスコープの外側の境界であり、`filtered` としては報告しない。**
  * ちょうど「別テナントのデータ」を omission として報告しないのと同じ理由——呼び出し側が
- * 明示した境界の外は「失われた」のではなく「そもそも問うていない」）。
+ * 明示した境界の外は「失われた」のではなく「そもそも問うていない」。
+ *
+ * **⚠ この文は2つの型の状態を1つの文で説明していたため、不正確だった（Issue #206 で発見）。**
+ * `subject` は `FilteredOmission.condition` の union に値そのものが無い。`tenant` は違う——
+ * `condition: "tenant" | ...` として union には**在る**が、`filtered` を組み立てるコードが
+ * この値を一度も生成しない（`recall-runtime.ts` に push 箇所ゼロ）。「値が無い」のではなく
+ * 「値は在るが生成されない」であり、この2つは型を読む側にとって別の事実である
+ * （詳細は `FilteredOmission.condition` の doc、[ADR 0117](../../../docs/decisions/0117-unreachable-union-values-inventory.md)）。
  * **period・status（archived / superseded / forgotten）が実際に `filtered` として
  * 報告される次元である。** taxonomy は Phase 1 に実体が無い（labels テーブルは Phase 2、docs/memory-model.md §8）ため、
  * この集約では常に発生しない（型としての `FilteredOmission.condition: 'taxonomy'` は
@@ -722,6 +753,11 @@ export interface RecalledMemory {
    * **これが Issue #106 の報告者が踏んだ罠そのものである**——型に名前が在るので
    * 呼び出し側は「使える」と読むが、実装が無いので黙って何も起きない。
    * `"lexical"` は実装を伴って足した値である。
+   *
+   * **Issue #206 / [ADR 0117](../../../docs/decisions/0117-unreachable-union-values-inventory.md)**:
+   * `"tag_match"`/`"recency"` は ADR 0084 の方針（実装を伴わない値を union に置かない）より前に
+   * 置かれた値であり、設計だけが消えて型に残った。**実装するか、`@mnemora/core` の公開 API
+   * 破壊的変更として落とすかはオーナー判断待ちであり、このリポジトリの作業者は落とさない。**
    */
   retrievedVia: "ann" | "lexical" | "tag_match" | "recency" | "mandatory_companion";
   /** 矛盾の相手として同伴取得された場合、その相手の memoryId。 */
