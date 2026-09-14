@@ -209,7 +209,6 @@ jobs:
         with:
           pattern: lexical-regime-*
           path: ${{ github.workspace }}/lexical-regime-artifacts
-          if-no-artifact-found: warn
 
       - name: 両方の regime が実際に走ったかを判定する(⛔ 値の良し悪しではなく「揃って別々に走ったか」の門)
         # scripts/lexical-regime-coverage.mjs が非0で終わる経路は、期待する脚の
