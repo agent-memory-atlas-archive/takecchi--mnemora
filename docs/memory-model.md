@@ -905,6 +905,9 @@ observed → extracted → active ───────────────�
                           │
                           ▼
                        archived  ──(forget() 呼び出し)──▶ forgotten ──(purge() 呼び出し・Phase 2)──▶ purged(*)
+
+(なし) ──consolidate() 呼び出し──▶ active   ※ Observation を経ない。統合元は同時に superseded へ（行5・行12）
+(なし) ──reflect() 呼び出し──────▶ active   ※ Observation を経ない。既存の行は一切書き換えない（行13）
 ```
 
 `(*)` `purged` は `memories.status` の値ではなく、`memory_events.kind = 'purged'` と
@@ -912,11 +915,23 @@ observed → extracted → active ───────────────�
 `memories.status` の値ではない——これらはパイプラインの段階を指す名前であり、
 `status` 列は Memory が最初に行として存在する時点（`active`）から始まる。
 
+**⚠ 上の図・この注記は、2026-09 追記まで `consolidate()`/`reflect()` の入口を欠いていた**
+（Issue #138。ADR 0089・ADR 0091 が現物からそれぞれ確かめて負債として記録していたが、
+どちらも「ついでに直さない」（`docs/autonomy.md` §2）を守って表自体は直さなかった）。
+`consolidate()`（行12）と `reflect()`（行13）が作る Memory には、**`observed`/`extracted` の
+段階自体が無い**——`observe()` を1回も経由せず、最初から `status='active'` の行として
+作られる。`source_observation_id`/`extractor_version` は常に `NULL` である（§2・§10 の
+`CHECK (provenance_kind NOT IN ('stated','inferred') OR source_observation_id IS NOT NULL)` が、
+`consolidated`/`reflected`/`imported` にはこの制約を課していないことに対応する）。**一度 `active`
+へ入ってしまえば、それがどの入口（行2・行12・行13）から来たかによらず、行3・行4・行6〜11の
+遷移はすべて同じに適用される**——`superseded`/`contested`/`archived`/`forgotten` の判定・
+埋め込みジョブ・強化のどれも、由来を区別する分岐を持たない。
+
 | # | 遷移 | トリガー | 同期/非同期 | 書き換わる列 | 残るイベント (`memory_events.kind`) |
 |---|---|---|---|---|---|
 | 1 | (なし) → observed | `observe()` 呼び出し | 同期 | `observations` へ INSERT | なし（`observations` 自体が追記専用の記録） |
 | 2 | observed → extracted → active | 抽出パイプライン実行。`extract: 'sync'` なら `observe()` 内、`'deferred'` なら `outbox` 経由のワーカー | `sync`: 同期 / `deferred`: 非同期（`outbox` 行は `observe()` と同一トランザクションで先に書かれる） | `memories` へ INSERT（`status='active'`、`digest`、`provenance`、`decay_floor_at` を初期計算） | `created` |
-| 3 | active → active（embedding 反映） | 抽出後の埋め込み計算ジョブ | 非同期（`outbox` 経由。外部 embedding provider 呼び出しをトランザクション内に置かない） | `memory_embeddings_<space>` へ INSERT、`memories.embedding_status` 更新 | なし（列単位の状態変化はログしない。§21 の監査ログ量リスクへの対処） |
+| 3 | active → active（embedding 反映） | 埋め込み計算ジョブ。行2・行12・行13のいずれで Memory が作られても同じ `embed` ジョブが積まれる | 非同期（`outbox` 経由。外部 embedding provider 呼び出しをトランザクション内に置かない） | `memory_embeddings_<space>` へ INSERT、`memories.embedding_status` 更新 | なし（列単位の状態変化はログしない。監査ログ量リスクへの対処） |
 | 4 | active → active（reinforced） | `observe({kind:'memory_usage', ...})` により `recall_usages` へ新規行が実際に挿入されたとき | 同期（`observe()` と同一トランザクション） | `recall_usages` へ INSERT（新規のみ）、`memories.last_reinforced_at` / `decay_floor_at` 更新（`strength` は動かさない。ADR 0041） | `updated`（`meta.reason='reinforced'`） |
 | 5 | active → superseded | 抽出・統合パイプラインが置換を機械的に決定 | 判定ロジック自体は非同期でよいが、書き込み（旧行の `status`/`superseded_by_id` 更新と新 Memory の作成）は1トランザクションで完結させる | `status='superseded'`、`superseded_by_id` | `superseded` |
 | 6 | active → contested | 判定できない対向を検出 | 同上 | 両側の `status='contested'`、`contested_with_id` を相互に設定 | `updated`（`meta.reason='contested'`） |
@@ -925,6 +940,8 @@ observed → extracted → active ───────────────�
 | 9 | 任意 → forgotten | `forget(ctx, target)` 呼び出し | 同期（`EventStore` への追記と同一トランザクション） | `status='forgotten'` | `forgotten` |
 | 10 | forgotten → purged（Phase 2） | `purge(ctx, target)` 呼び出し（法的要求） | 同期 | `content`/`digest` をトゥームストーンで上書き、`purged_at` 設定 | `purged` |
 | 11 | (memory_events の掃除) | 保持期間切れの定期ジョブ | 非同期（保守ジョブ。`EventStore` interface は経由しない） | `memory_events` から古い行を DELETE | `events_purged`（件数・期間のみ。削除対象の詳細は残さない） |
+| 12 | (なし) → active（統合先の新規作成。Observation を経ない） | `Runtime.consolidate()` 呼び出し（Issue #103、ADR 0089）。統合元 2件以上が確定した後、LLM 呼び出しが成功した場合のみ | 同期（`consolidate()` の呼び出し1回の中で完結し、`tick()` はこの操作を駆動しない）。統合元の supersede（行5）と同一トランザクションで書けるかは adapter 依存——口（`MemoryStore.supersedeWithNewMemories`）が在れば1トランザクション、無ければ2段（ADR 0100） | `memories` へ INSERT（`status='active'`、`provenance.kind='consolidated'`・`sources=<統合元の memoryId>`、`decay_floor_at` を初期計算、`strength=1`）。`source_observation_id`/`extractor_version` は常に `NULL` | `created`（`meta.reason='consolidated'`、`meta.sources=<統合元の memoryId>`） |
+| 13 | (なし) → active（内省による新規作成。Observation を経ない） | `Runtime.reflect()` 呼び出し（Issue #104、ADR 0091）。土台 1件以上に対し LLM が `outcome:'reflected'` を返した場合のみ | 同期（`reflect()` の呼び出し1回の中で完結し、`tick()` はこの操作を駆動しない） | `memories` へ INSERT（`status='active'`、`provenance.kind='reflected'`・`sources=<土台の memoryId>`、`decay_floor_at` を初期計算、`strength=1`）。`source_observation_id`/`extractor_version` は常に `NULL`。**既存の行へは一切書き込まない**——行5〜7のどれも発生しない | `created`（`meta.reason='reflected'`、`meta.sources=<土台の memoryId>`） |
 
 **同期/非同期の要点**: `observe()` は常に同期でリターンする（呼び出し側は待たされない）。
 「重い処理」——抽出・埋め込み・アーカイブ掃引・監査ログの保持期間掃除——はすべて非同期に
@@ -934,6 +951,10 @@ transactional outbox パターン（同一トランザクションでジョブ�
 保守ジョブであり、範囲走査（`decay_floor_at` の範囲、または保持期限）だけを行い全件走査を
 しない。`forget()` と `purge()` は例外的に同期処理として扱う——これらは「消えたことが
 確実に記録される」という保証が呼び出し側の応答を待ってでも必要な操作だからである。
+`consolidate()` と `reflect()`（行12・行13）も呼び出し自体は常に同期でリターンする——
+LLM 呼び出しを含め、呼び出し側の1回の `await` の中で完結する。**`tick()` はこの2つを
+駆動しない**——Background Cognition の実運用（スケジューラによる自動起動）は Phase 1 の
+範囲外であり（`docs/roadmap.md` §1.3）、呼び出し側が明示的に呼んだときだけ動く。
 
 ---
 
