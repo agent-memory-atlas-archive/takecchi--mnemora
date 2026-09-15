@@ -44,7 +44,8 @@ import {
   buildWeightsUnavailableIdentifierProbeJson,
 } from "./identifier-json.js";
 import { warmupLocalEmbedding } from "./local-embedding-warmup.js";
-import { buildMnemoraPrompt, ingestConversation, queryRecall } from "./mnemora-path.js";
+import { buildMnemoraPrompt, ingestConversation } from "./mnemora-path.js";
+import { TINY_BUDGET_CHARS, runBudgetDemo } from "./budget-demo.js";
 import { measureNaive, naivePrompt } from "./naive-path.js";
 import type { ProviderMode } from "./providers.js";
 import { decideProviderSource, describeProviderSourceReason } from "./providers.js";
@@ -70,8 +71,6 @@ import { formatNoApiCallsNotice } from "./usage-meter.js";
 
 /** `chat` サブコマンドで使う会話の長さ(filler 往復数)。サンプルアプリの裁量値。 */
 const DEFAULT_CHAT_FILLER_PAIRS = 8;
-/** budget が実際に切り詰めることを見せるための、意図的に小さい文字数予算。 */
-const TINY_BUDGET_CHARS = 60;
 
 function requireDatabaseUrl(): string {
   const url = process.env.DATABASE_URL;
@@ -194,8 +193,12 @@ async function runChat(): Promise<void> {
       `${conversation.userUtterances.length} 件の user 発話を observe() し、tick() で embed を処理した。`,
     );
 
+    // デモ本体は budget-demo.ts に切り出してある（Issue #306）——`__tests__` から
+    // 同じ2回の recall() 呼び出しを検査できるようにするためで、ここでの印字は
+    // これまでと1バイトも変えていない。
+    const { withoutBudget, withBudget } = await runBudgetDemo(handle.runtime, ctx, conversation);
+
     console.log("\n=== recall()（budget 無し） ===");
-    const withoutBudget = await queryRecall(handle.runtime, ctx, conversation);
     console.log(formatRecall(withoutBudget, "budget 無し"));
     console.log("呼び出し側がプロンプトへ積む文字列（recall() の返り値だけから組み立てる例）:");
     console.log(buildMnemoraPrompt(withoutBudget));
@@ -203,9 +206,6 @@ async function runChat(): Promise<void> {
     console.log(
       `\n=== budget を渡すと実際に切り詰められる（maxMemoryChars=${TINY_BUDGET_CHARS}） ===`,
     );
-    const withBudget = await queryRecall(handle.runtime, ctx, conversation, {
-      budget: { maxMemoryChars: TINY_BUDGET_CHARS },
-    });
     console.log(formatRecall(withBudget, `budget maxMemoryChars=${TINY_BUDGET_CHARS}`));
 
     console.log("\n=== まとめ ===");

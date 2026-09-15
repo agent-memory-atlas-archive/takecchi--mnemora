@@ -172,5 +172,6 @@ alteroid (github.com/takecchi/alteroid) を根拠として引く箇所は、確�
 | [0157](./0157-tick-drives-consolidate-and-reflect.md) | `tick()` が `consolidate()`/`reflect()` を駆動する — 事象駆動（outbox）、既定 off の opt-in | 採用 (2026-09) |
 | [0158](./0158-association-probes-bench.md) | 連想枠（ADR 0151）が想起の質を動かすかを測る `association-probes` ベンチを足す — この測定はまだ信頼できる状態にない（Issue #291 / #316 / #317） | 採用 (2026-09) |
 | [0159](./0159-omission-kind-generation-registry.md) | `Omission.kind` の11値に「本番コードが実際に生成する」歯を置く — レジストリ＋駆動、grep でも型だけでもなく | 採用 (2026-09) |
+| [0160](./0160-budget-demo-teeth-and-channel-registry.md) | `examples/chat` の「予算あり/なし」対比デモに歯を足し、`usage.byTier` の新チャンネル漏れを検査する「登録表」の歯を置く（Issue #306） | 採用 (2026-09) |
 
 <!-- ADR-INDEX:GENERATED:END -->
