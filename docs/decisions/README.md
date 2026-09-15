@@ -160,5 +160,6 @@ alteroid (github.com/takecchi/alteroid) を根拠として引く箇所は、確�
 | [0145](./0145-valid-from-until-storage.md) | `Memory.validFrom`/`validUntil` を配線する — 型・`packages/postgres` の読み書きだけを実装する（Issue #202 第1弾） | 採用 (2026-09) |
 | [0146](./0146-compare-quality-claim-reason-replaced.md) | `compare` が想起の質を主張しない理由を「擬似だから」から「正解集合を持たない器だから」へ差し替える — ADR 0022 決定2 の結論は維持する（Issue #263） | 採用 (2026-09) |
 | [0149](./0149-japanese-lexical-no-required-extension.md) | 日本語の語を語彙チャンネルで引けるようにするため `REQUIRED_EXTENSIONS` を増やさない — 「引けない」を明記する | 採用 (2026-09) |
+| [0150](./0150-resolve-contested-explicit-operation.md) | 矛盾の解決 — `Runtime.resolveContested` で `contested → active \| superseded` を閉じ、段3の発火を変異試験で測る | 採用 (2026-09) |
 
 <!-- ADR-INDEX:GENERATED:END -->

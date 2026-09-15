@@ -187,6 +187,22 @@ export interface MemoryStoreConformanceOptions {
    * ——`it.skip` にはしない。
    */
   supportsMarkContestedPair: boolean;
+  /**
+   * Issue #197 / ADR 0150: 対象の `MemoryStore` 実装が `resolveContestedPair`
+   * （任意メソッド、`markContestedPair` の解決側）を実装しているかどうか。**必須。**
+   *
+   * `supportsMarkContestedPair` と同じ判断——省略可にしない。`true` なら契約の歯
+   * （両側 `status='contested'` かつ相互参照が成立している場合のみを対象にする、
+   * 成功すると `contestedWithId` が両側とも `null` に戻り指定した `status`
+   * （`'active'`/`'superseded'`）へ更新される、`superseded` を指定した側は
+   * `supersededById` も書かれる、`status !== 'contested'` または相互参照が破れていれば
+   * {@link MemoryStatusConflictError} で弾かれ両側とも無傷、対象が無ければ
+   * 「memory not found」で両側とも無傷、`first.id === second.id` は `RangeError`、
+   * `memory_events` に両側1件ずつ積まれる、テナント分離）を実行する。`false` なら
+   * `expect(store.resolveContestedPair).toBeUndefined()` を積極的に assert する
+   * ——`it.skip` にはしない。
+   */
+  supportsResolveContestedPair: boolean;
 }
 
 /**
@@ -221,6 +237,7 @@ export function describeMemoryStoreConformance(options: MemoryStoreConformanceOp
     supportsArchiveDecayed,
     supportsPurgeMemory,
     supportsMarkContestedPair,
+    supportsResolveContestedPair,
   } = options;
 
   describe(`MemoryStore conformance (${name})`, () => {
@@ -3019,6 +3036,277 @@ export function describeMemoryStoreConformance(options: MemoryStoreConformanceOp
       it("markContestedPair は任意メソッドであり、この adapter は実装していない", async () => {
         const store = await createStore();
         expect(store.markContestedPair).toBeUndefined();
+      });
+    }
+
+    // -------------------------------------------------------------------
+    // resolveContestedPair（Issue #197 / ADR 0150: markContestedPair の解決側、任意メソッド）
+    // -------------------------------------------------------------------
+
+    if (supportsResolveContestedPair) {
+      /**
+       * `store.markContestedPair!` で実際に相互参照する `contested` の対を作る。
+       * **この歯は `supportsMarkContestedPair` も同時に `true` であることを前提にする**
+       * ——`resolveContestedPair` を実装する2つの adapter（testkit の in-memory・
+       * postgres）は、どちらも `markContestedPair` を実装済みである。`contestedWithId` を
+       * 作成後に書ける口は今日この2つしか無いため、この前提を外すと対の作り方が無くなる。
+       */
+      async function createContestedPair(
+        store: MemoryStore,
+        ctx: Ctx,
+        aContentHash: string,
+        bContentHash: string,
+      ): Promise<{ a: MemoryId; b: MemoryId }> {
+        const a = await store.createMemory(
+          ctx,
+          buildNewMemoryFixture({ tenantId: ctx.tenantId, contentHash: aContentHash }),
+        );
+        const b = await store.createMemory(
+          ctx,
+          buildNewMemoryFixture({ tenantId: ctx.tenantId, contentHash: bContentHash }),
+        );
+        const event = (memoryId: MemoryId): NewMemoryEvent => ({
+          tenantId: ctx.tenantId,
+          memoryId,
+          kind: "updated",
+          actor: { type: "system" },
+          digestSnapshot: "digest",
+          meta: { reason: "contested" },
+        });
+        await store.markContestedPair!(
+          ctx,
+          { id: a.id, event: event(a.id) },
+          { id: b.id, event: event(b.id) },
+        );
+        return { a: a.id, b: b.id };
+      }
+
+      function buildResolveEvent(
+        ctx: Ctx,
+        memoryId: MemoryId,
+        kind: "updated" | "superseded",
+      ): NewMemoryEvent {
+        return {
+          tenantId: ctx.tenantId,
+          memoryId,
+          kind,
+          actor: { type: "system" },
+          digestSnapshot: "digest",
+          sizeBeforeBytes: null,
+          meta: { reason: "contested_resolved" },
+        };
+      }
+
+      it("resolveContestedPair(supersede) は勝者を active、敗者を superseded + supersededById にし、contestedWithId を両側とも null に戻し、両側に1件ずつイベントを積む", async () => {
+        const store = await createStore();
+        const ctx: Ctx = { tenantId: "tenant-1" };
+        const { a, b } = await createContestedPair(
+          store,
+          ctx,
+          "resolve-contested-supersede-a",
+          "resolve-contested-supersede-b",
+        );
+
+        const result = await store.resolveContestedPair!(
+          ctx,
+          { id: a, status: "active", event: buildResolveEvent(ctx, a, "updated") },
+          {
+            id: b,
+            status: "superseded",
+            supersededById: a,
+            event: buildResolveEvent(ctx, b, "superseded"),
+          },
+        );
+
+        const afterA = await store.get(ctx, a);
+        const afterB = await store.get(ctx, b);
+        const eventsA = await listEventsForMemory(ctx, a);
+        const eventsB = await listEventsForMemory(ctx, b);
+
+        expect({
+          returnedFirstStatus: result.first.status,
+          returnedFirstContestedWith: result.first.contestedWithId,
+          returnedSecondStatus: result.second.status,
+          returnedSecondContestedWith: result.second.contestedWithId,
+          returnedSecondSupersededBy: result.second.supersededById,
+          afterAStatus: afterA?.status,
+          afterAContestedWith: afterA?.contestedWithId,
+          afterBStatus: afterB?.status,
+          afterBContestedWith: afterB?.contestedWithId,
+          afterBSupersededBy: afterB?.supersededById,
+          eventsAKinds: eventsA.map((e) => e.kind),
+          eventsBKinds: eventsB.map((e) => e.kind),
+        }).toEqual({
+          returnedFirstStatus: "active",
+          returnedFirstContestedWith: null,
+          returnedSecondStatus: "superseded",
+          returnedSecondContestedWith: null,
+          returnedSecondSupersededBy: a,
+          afterAStatus: "active",
+          afterAContestedWith: null,
+          afterBStatus: "superseded",
+          afterBContestedWith: null,
+          afterBSupersededBy: a,
+          // markContestedPair が積んだ 'updated' が既に1件あるので、resolve 後は2件。
+          eventsAKinds: ["updated", "updated"],
+          eventsBKinds: ["updated", "superseded"],
+        });
+      });
+
+      it("resolveContestedPair(both_active) は両側とも active にし、contestedWithId を両側とも null に戻す", async () => {
+        const store = await createStore();
+        const ctx: Ctx = { tenantId: "tenant-1" };
+        const { a, b } = await createContestedPair(
+          store,
+          ctx,
+          "resolve-contested-both-active-a",
+          "resolve-contested-both-active-b",
+        );
+
+        const result = await store.resolveContestedPair!(
+          ctx,
+          { id: a, status: "active", event: buildResolveEvent(ctx, a, "updated") },
+          { id: b, status: "active", event: buildResolveEvent(ctx, b, "updated") },
+        );
+
+        expect(result.first.status).toBe("active");
+        expect(result.first.contestedWithId).toBeNull();
+        expect(result.second.status).toBe("active");
+        expect(result.second.contestedWithId).toBeNull();
+
+        const afterA = await store.get(ctx, a);
+        const afterB = await store.get(ctx, b);
+        expect(afterA?.status).toBe("active");
+        expect(afterA?.contestedWithId ?? null).toBeNull();
+        expect(afterB?.status).toBe("active");
+        expect(afterB?.contestedWithId ?? null).toBeNull();
+      });
+
+      it("resolveContestedPair は first.id === second.id を RangeError で落とし、何も書き込まない", async () => {
+        const store = await createStore();
+        const ctx: Ctx = { tenantId: "tenant-1" };
+        const { a } = await createContestedPair(
+          store,
+          ctx,
+          "resolve-contested-same-id-a",
+          "resolve-contested-same-id-b",
+        );
+        const event = buildResolveEvent(ctx, a, "updated");
+
+        await expect(
+          store.resolveContestedPair!(
+            ctx,
+            { id: a, status: "active", event },
+            { id: a, status: "active", event },
+          ),
+        ).rejects.toThrow(RangeError);
+
+        const after = await store.get(ctx, a);
+        expect(after?.status).toBe("contested");
+      });
+
+      it.each(["active", "superseded", "archived", "forgotten"] as const)(
+        "resolveContestedPair は片方が status=%s（contested でない）だと MemoryStatusConflictError で弾かれ、両側とも無傷のまま",
+        async (status) => {
+          const store = await createStore();
+          const ctx: Ctx = { tenantId: "tenant-1" };
+          const { a, b } = await createContestedPair(
+            store,
+            ctx,
+            `resolve-contested-status-a-${status}`,
+            `resolve-contested-status-b-${status}`,
+          );
+          // b を対から外に出す（`updateStatus` は `contestedWithId` を書けないため、b は
+          // `contestedWithId` が残ったままの status だけ動く——これは
+          // `resolveContestedPair` の CAS 検査対象を作るためだけの下ごしらえであり、
+          // その残留自体は本歯の主題ではない）。
+          await store.updateStatus(ctx, b, status);
+
+          await expect(
+            store.resolveContestedPair!(
+              ctx,
+              { id: a, status: "active", event: buildResolveEvent(ctx, a, "updated") },
+              { id: b, status: "active", event: buildResolveEvent(ctx, b, "updated") },
+            ),
+          ).rejects.toThrow(MemoryStatusConflictError);
+
+          const afterA = await store.get(ctx, a);
+          const afterB = await store.get(ctx, b);
+          expect(afterA?.status).toBe("contested");
+          expect(afterA?.contestedWithId).toBe(b);
+          expect(afterB?.status).toBe(status);
+        },
+      );
+
+      it("resolveContestedPair は対象が存在しなければ「memory not found」を投げ、存在する側も無傷のまま", async () => {
+        const store = await createStore();
+        const ctx: Ctx = { tenantId: "tenant-1" };
+        const { a } = await createContestedPair(
+          store,
+          ctx,
+          "resolve-contested-not-found-a",
+          "resolve-contested-not-found-b",
+        );
+
+        await expect(
+          store.resolveContestedPair!(
+            ctx,
+            { id: a, status: "active", event: buildResolveEvent(ctx, a, "updated") },
+            {
+              id: NONEXISTENT_MEMORY_ID,
+              status: "active",
+              event: buildResolveEvent(ctx, NONEXISTENT_MEMORY_ID, "updated"),
+            },
+          ),
+        ).rejects.toThrow(NOT_FOUND_ERROR_MESSAGE);
+
+        const afterA = await store.get(ctx, a);
+        expect(afterA?.status).toBe("contested");
+        expect(afterA?.contestedWithId).not.toBeNull();
+      });
+
+      it("resolveContestedPair は他テナントの Memory を対象にしない（memory not found）", async () => {
+        const store = await createStore();
+        const ctxA: Ctx = { tenantId: "tenant-a" };
+        const ctxB: Ctx = { tenantId: "tenant-b" };
+        const { a: memoryAId, b: memoryAPartnerId } = await createContestedPair(
+          store,
+          ctxA,
+          "resolve-contested-tenant-a-1",
+          "resolve-contested-tenant-a-2",
+        );
+        const memoryB = await store.createMemory(
+          ctxB,
+          buildNewMemoryFixture({
+            tenantId: "tenant-b",
+            contentHash: "resolve-contested-tenant-b",
+          }),
+        );
+
+        await expect(
+          store.resolveContestedPair!(
+            ctxB,
+            {
+              id: memoryAId,
+              status: "active",
+              event: buildResolveEvent(ctxB, memoryAId, "updated"),
+            },
+            {
+              id: memoryB.id,
+              status: "active",
+              event: buildResolveEvent(ctxB, memoryB.id, "updated"),
+            },
+          ),
+        ).rejects.toThrow(NOT_FOUND_ERROR_MESSAGE);
+
+        const afterA = await store.get(ctxA, memoryAId);
+        expect(afterA?.status).toBe("contested"); // tenant-a 側は無傷
+        expect(afterA?.contestedWithId).toBe(memoryAPartnerId);
+      });
+    } else {
+      it("resolveContestedPair は任意メソッドであり、この adapter は実装していない", async () => {
+        const store = await createStore();
+        expect(store.resolveContestedPair).toBeUndefined();
       });
     }
 

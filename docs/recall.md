@@ -610,3 +610,7 @@ Memory 本体(内容・provenance の詳細・状態)の型は `./memory-model.m
 recall は既定で `status = 'active'` の Memory のみを候補にする。ただし `contested`(判定できない矛盾)の Memory は、候補になった時点で**単独では返さない**。対向する Memory(`contradicts` の相手)をスコアに関係なく候補集合へ追加する。これが段3の仕事であり、`RecalledMemory.retrievedVia = 'mandatory_companion'` として、それがスコアで選ばれたのではなく矛盾解決のために強制的に足されたことを型で示す。
 
 **予算(段4)と衝突したときの優先順位: 同伴を落とすくらいなら本体を落とす。** `contested` の Memory とその対向は必ずペアで扱い、ペアを分割して片方だけを予算内に残すことはしない。予算が両方を載せられない場合、そのペア全体を候補から外し、`Omission { kind: 'budget_dropped', ... }` に含める(あるいは、そのペアの片方だけを「争われている」という印を付けて残す設計も選択肢としてあり得るが、Phase 1 の既定は「両方落とす」とし、争われている主張を争われていない顔で出すという事故を避ける側に倒す)。**争われている主張を、争われていない顔で出すくらいなら、両方とも出さない**——これが原則1の recall パイプライン上の実装である。
+
+**⚠ 段3は長いあいだ「一度も発火しない分岐」だった**(Issue #197)。`contested` を書く本番コードが1つも無かったためである。2026-09 に `Runtime.markContested`([ADR 0134](./decisions/0134-mark-contested-explicit-operation.md))が入って発火するようになり、対の**解決**(`contested → active | superseded`。`./memory-model.md` §11 行7)は `Runtime.resolveContested`([ADR 0150](./decisions/0150-resolve-contested-explicit-operation.md))が担う。**決着がつくと `contested_with_id` が消えるため、負けた側は次の recall から返らなくなり、同伴取得も起きなくなる。**
+
+**この段を通ったかどうかは、`RecallResult.explain.stages` の `contradiction_resolution` の `detail.companionsAdded` で数えられる**(0 なら同伴取得は1件も起きていない)。ADR 0150 決定7は、この値を歯として使い、さらに**段3が壊れた世界をテスト側で作って歯が実際に赤くなることを示す変異試験**を置いている——**「テストが緑である」ことは「その分岐を通った」ことを意味しない**、という Issue #197 の指摘への答えである。

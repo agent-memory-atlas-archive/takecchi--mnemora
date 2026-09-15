@@ -967,6 +967,69 @@ export class InMemoryMemoryStore implements MemoryStore {
     return { first: firstMemory, second: secondMemory, events: [firstEvent, secondEvent] };
   }
 
+  /**
+   * Issue #197 / ADR 0150: `markContestedPair` の解決側。両側とも `status === 'contested'`
+   * かつ相互参照が成立していることを CAS で課したうえで、`contestedWithId` を両側とも
+   * `null` に戻し、呼び出し側が指定した `status`（`'active'`/`'superseded'`）へ更新する。
+   * **in-memory にトランザクションは無い**——`markContestedPair` と同じ「まだ何も書いて
+   * いないうちに判定する」作法（存在確認・CAS 判定の両方を先に済ませ、どちらか一方でも
+   * 失敗したらこの時点で throw する。`first`/`second` のどちらの Map エントリもまだ
+   * 書き換えていない）。
+   */
+  async resolveContestedPair(
+    ctx: Ctx,
+    first: {
+      id: MemoryId;
+      status: "active" | "superseded";
+      supersededById?: MemoryId;
+      event: NewMemoryEvent;
+    },
+    second: {
+      id: MemoryId;
+      status: "active" | "superseded";
+      supersededById?: MemoryId;
+      event: NewMemoryEvent;
+    },
+  ): Promise<{ first: Memory; second: Memory; events: [MemoryEvent, MemoryEvent] }> {
+    if (first.id === second.id) {
+      throw new RangeError("InMemoryMemoryStore: first.id and second.id must differ");
+    }
+
+    const firstMemory = await this.get(ctx, first.id);
+    if (!firstMemory) {
+      throw new Error(`InMemoryMemoryStore: memory not found for tenant: ${first.id}`);
+    }
+    const secondMemory = await this.get(ctx, second.id);
+    if (!secondMemory) {
+      throw new Error(`InMemoryMemoryStore: memory not found for tenant: ${second.id}`);
+    }
+    if (firstMemory.status !== "contested" || firstMemory.contestedWithId !== second.id) {
+      throw new MemoryStatusConflictError(first.id, "contested", firstMemory.status);
+    }
+    if (secondMemory.status !== "contested" || secondMemory.contestedWithId !== first.id) {
+      throw new MemoryStatusConflictError(second.id, "contested", secondMemory.status);
+    }
+
+    firstMemory.status = first.status;
+    firstMemory.contestedWithId = null;
+    if (first.supersededById !== undefined) {
+      firstMemory.supersededById = first.supersededById;
+    }
+    firstMemory.updatedAt = new Date();
+    secondMemory.status = second.status;
+    secondMemory.contestedWithId = null;
+    if (second.supersededById !== undefined) {
+      secondMemory.supersededById = second.supersededById;
+    }
+    secondMemory.updatedAt = new Date();
+
+    const firstEvent = buildStoredMemoryEvent(ctx, first.event);
+    const secondEvent = buildStoredMemoryEvent(ctx, second.event);
+    this.events.push(firstEvent, secondEvent);
+
+    return { first: firstMemory, second: secondMemory, events: [firstEvent, secondEvent] };
+  }
+
   private extractionKey(
     tenantId: string,
     sourceObservationId: string | null,

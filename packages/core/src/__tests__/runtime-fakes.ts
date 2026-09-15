@@ -859,6 +859,77 @@ export class FakeMemoryStore implements MemoryStore {
 
     return { first: firstMemory, second: secondMemory, events: [firstEvent, secondEvent] };
   }
+
+  /**
+   * Issue #197 / ADR 0150: `markContestedPair` の解決側。両側とも `status === 'contested'`
+   * かつ相互参照が成立していることを CAS で課したうえで、`contestedWithId` を両側とも
+   * `null` に戻し、呼び出し側が指定した `status`（`'active'`/`'superseded'`）へ更新する
+   * ——`markContestedPair` と同じ「事前検証してから書く」作法（まだ何も書いていないうちに
+   * 存在確認と CAS 判定を両方の対象について済ませ、in-memory の「ロールバック」を模す）。
+   *
+   * `beforeUpdateStatus` は各対象の CAS 判定の**直前**に発火する——`markContestedPair` と
+   * 同じ位置。TOCTOU の歯がこの口でも決定的に再現できるようにする。
+   */
+  async resolveContestedPair(
+    ctx: Ctx,
+    first: {
+      id: MemoryId;
+      status: "active" | "superseded";
+      supersededById?: MemoryId;
+      event: NewMemoryEvent;
+    },
+    second: {
+      id: MemoryId;
+      status: "active" | "superseded";
+      supersededById?: MemoryId;
+      event: NewMemoryEvent;
+    },
+  ): Promise<{ first: Memory; second: Memory; events: [MemoryEvent, MemoryEvent] }> {
+    if (first.id === second.id) {
+      throw new RangeError("FakeMemoryStore: first.id and second.id must differ");
+    }
+
+    // 1. 事前検証——存在確認。まだ何も書いていない。
+    const firstMemory = await this.get(ctx, first.id);
+    if (!firstMemory) {
+      throw new Error(`FakeMemoryStore: memory not found for tenant: ${first.id}`);
+    }
+    const secondMemory = await this.get(ctx, second.id);
+    if (!secondMemory) {
+      throw new Error(`FakeMemoryStore: memory not found for tenant: ${second.id}`);
+    }
+
+    // 2. 事前検証——CAS（両側とも `contested` かつ相互参照が成立していること）。
+    //    まだ何も書いていない。
+    this.beforeUpdateStatus?.(first.id);
+    if (firstMemory.status !== "contested" || firstMemory.contestedWithId !== second.id) {
+      throw new MemoryStatusConflictError(first.id, "contested", firstMemory.status);
+    }
+    this.beforeUpdateStatus?.(second.id);
+    if (secondMemory.status !== "contested" || secondMemory.contestedWithId !== first.id) {
+      throw new MemoryStatusConflictError(second.id, "contested", secondMemory.status);
+    }
+
+    // 3. ここから先は両方成功する（in-memory であり、途中失敗の余地が無い）。
+    firstMemory.status = first.status;
+    firstMemory.contestedWithId = null;
+    if (first.supersededById !== undefined) {
+      firstMemory.supersededById = first.supersededById;
+    }
+    firstMemory.updatedAt = new Date();
+    secondMemory.status = second.status;
+    secondMemory.contestedWithId = null;
+    if (second.supersededById !== undefined) {
+      secondMemory.supersededById = second.supersededById;
+    }
+    secondMemory.updatedAt = new Date();
+
+    const firstEvent = buildStoredEvent(ctx, first.event);
+    const secondEvent = buildStoredEvent(ctx, second.event);
+    this.backing.events.push(firstEvent, secondEvent);
+
+    return { first: firstMemory, second: secondMemory, events: [firstEvent, secondEvent] };
+  }
 }
 
 export class FakeOutboxStore implements OutboxStore {

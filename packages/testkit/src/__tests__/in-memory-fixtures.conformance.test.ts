@@ -101,6 +101,8 @@ describeMemoryStoreConformance({
   supportsPurgeMemory: true,
   // Issue #197 / ADR 0134: InMemoryMemoryStore は markContestedPair を実装している。
   supportsMarkContestedPair: true,
+  // Issue #197 / ADR 0150: InMemoryMemoryStore は resolveContestedPair を実装している。
+  supportsResolveContestedPair: true,
 });
 
 // `InMemoryVectorStore` は `status`/`subjectId`/`decayFloorAt`（Memory の属性であり

@@ -921,6 +921,100 @@ export interface MarkContestedResult {
   outcome: MarkContestedOutcome;
 }
 
+/**
+ * `runtime.resolveContested` が対象1件（`first`/`second` のどちらか）ごとに分類する適格性
+ * （Issue #197、ADR 0150）。**新しい語彙を作りすぎない**——`MarkContestedSideOutcome` が
+ * 既に持つ `"not_found"`/`"eligible"` はそのまま使う。この操作固有に足すのは2つだけである。
+ *
+ * - `"eligible"` — `status === "contested"` かつ、相手の `contestedWithId` が互いを指して
+ *   いる（`first.contestedWithId === second.id` かつ `second.contestedWithId === first.id`）。
+ *   書き込みの CAS 条件を満たす。
+ * - `"not_found"` — そのテナントにその id の Memory がそもそも無い。
+ * - `"status_not_contested"` — 存在はするが `status !== "contested"`。`status` に現在値が
+ *   入る。
+ * - `"pair_broken"` — `status === "contested"` ではあるが、相互参照が成立していない
+ *   （`contestedWithId` が相手を指していない、または `null`）。[ADR 0046](../../../docs/decisions/0046-contested-pair-invariant-tooth.md)
+ *   が数え上げた「一対一が破れた状態」の読み取り側の反映であり、`markContestedPair`
+ *   （ADR 0134）を経由する限り今日の実装では到達しないはずだが、`PurgeOutcome` の
+ *   `"conflicted"` と同じ「防御的な分類」として残す。`contestedWithId` に観測した現在値
+ *   （`null` を含む）が入る。
+ */
+export type ResolveContestedSideOutcome =
+  | { memoryId: MemoryId; kind: "eligible" }
+  | { memoryId: MemoryId; kind: "not_found" }
+  | { memoryId: MemoryId; kind: "status_not_contested"; status: Exclude<MemoryStatus, "contested"> }
+  | { memoryId: MemoryId; kind: "pair_broken"; contestedWithId: MemoryId | null };
+
+/**
+ * `runtime.resolveContested` に「どちらが正しいか」を渡すための判別可能 union
+ * （Issue #197、ADR 0150）。**この型自身は何も判定しない**——呼び出し側が既に下した決定を
+ * 運ぶだけである（`resolveContested` の interface JSDoc 参照）。
+ *
+ * - `"supersede"` — `winnerId` 側が勝ち残る。勝った側は `status: "active"`、負けた側は
+ *   `status: "superseded"` + `supersededById: <勝者>` になる。
+ * - `"both_active"` — どちらも正しかった（対向ではなかったと分かった）。両側とも
+ *   `status: "active"` に戻る。`docs/memory-model.md` §11 lifecycle 行7の
+ *   「（負けた側は）」という括弧書きが、負けた側が存在しない決着を許している。
+ */
+export type ContestedResolution =
+  { kind: "supersede"; winnerId: MemoryId } | { kind: "both_active" };
+
+/**
+ * `runtime.resolveContested` 全体の結末（Issue #197、ADR 0150）。`MarkContestedOutcome`
+ * と対称——「対象が適格でなかった」「書き込み時点で競合した」「対応していない」を
+ * 1つの `false`/例外に潰さない（ADR 0008 の「無い」の分類の適用）。
+ *
+ * - `"resolved"` — 両側を解決後の状態へ動かした。**部分成功は無い**——対向ペアは本質的に
+ *   結合しているため（`MarkContestedOutcome` の `"contested"` と同じ理由）。
+ * - `"ineligible"` — `getMany` で読んだ時点で、どちらか一方（または両方）が
+ *   `"eligible"` でなかった。**書き込みは一切試みていない。**
+ * - `"conflict"` — 読んだ時点では両側とも `"eligible"` だったが、書き込み時点で
+ *   {@link MemoryStatusConflictError} が投げられた（TOCTOU）。`markContested` と同じく
+ *   **1回だけ**再読した現在の `status` を `conflicts` に積み、そこで打ち切る
+ *   （上限の無い再試行ループにしない）。
+ * - `"not_attempted"` — `MemoryStore.resolveContestedPair` が実装されていない
+ *   （`ResolveContestedResult.supported: false`）。フォールバック経路は無い
+ *   （`markContestedPair`/`archiveDecayed`/`purgeMemory` と同じ理由——`contestedWithId` を
+ *   `null` へ戻せる口はこの口以外に無い。`resolveContestedPair` の interface JSDoc 参照）。
+ */
+export type ResolveContestedOutcome =
+  | { kind: "resolved"; first: Memory; second: Memory }
+  | { kind: "ineligible"; sides: [ResolveContestedSideOutcome, ResolveContestedSideOutcome] }
+  | {
+      kind: "conflict";
+      conflicts: ReadonlyArray<{ id: MemoryId; observedStatus: MemoryStatus | null }>;
+    }
+  | { kind: "not_attempted" };
+
+/**
+ * `runtime.resolveContested` の任意オプション（Issue #197、ADR 0150）。`MarkContestedOptions`
+ * と同じ形。
+ */
+export interface ResolveContestedOptions {
+  /** `memory_events.actor`。省略時 `{ type: "system" }`。 */
+  actor?: EventActor;
+  /**
+   * `memory_events.meta.note` へ足す補足（`meta.reason` は常に固定値
+   * `'contested_resolved'` であり、この欄では上書きしない——`markContested`/`consolidate`/
+   * `reflect` の `opts.reason` → `meta.note` と同じ形）。省略時は `meta` に `note` キー
+   * 自体を持たせない。
+   */
+  reason?: string;
+}
+
+/**
+ * `runtime.resolveContested` の結果（Issue #197、ADR 0150）。
+ */
+export interface ResolveContestedResult {
+  /**
+   * `MemoryStore.resolveContestedPair` が実装されていたか。**`false` のとき `outcome` は
+   * 必ず `{ kind: "not_attempted" }`**（`MarkContestedResult.supported`（ADR 0134）と同じ
+   * 「無い」の扱い）。
+   */
+  supported: boolean;
+  outcome: ResolveContestedOutcome;
+}
+
 export interface Runtime {
   observe(ctx: Ctx, input: ObserveInput): Promise<ObserveResult>;
   /**
@@ -1237,6 +1331,75 @@ export interface Runtime {
     secondId: MemoryId,
     opts?: MarkContestedOptions,
   ): Promise<MarkContestedResult>;
+  /**
+   * Issue #197（ADR 0150）: `docs/memory-model.md` §11 lifecycle 行7「`contested` →
+   * `active | superseded`」を実行する**明示的操作**。`markContested`（`docs/decisions/
+   * 0134-mark-contested-explicit-operation.md`）の解決側であり、その形を手本に対称に
+   * 書いてある。
+   *
+   * **この操作自身も「どちらが正しいか」を判定しない。**`markContested` と同じ理由——
+   * 呼び出し側（人・上位のアプリケーション層）が既に下した決定（{@link ContestedResolution}）
+   * を、`docs/memory-model.md` が要求する形（CAS・イベント・1トランザクション）で機械的に
+   * 書き込むだけである。⟹ **`recordedAt`/`occurredAt` を一度も参照しない**——
+   * `docs/memory-model.md` §5「順序では解かない」に抵触しない。**LLM を呼ばない。**
+   *
+   * 手順:
+   * 1. `firstId === secondId` は呼び出し前の programmer error として扱い、`RangeError`
+   *    （`Runtime.resolveContested: firstId and secondId must differ`）を投げる。書き込みは
+   *    一切試みない（`markContested` と同じ「開く前に落とす」位置）。
+   * 2. `resolution.kind === "supersede"` のとき、`resolution.winnerId` が `firstId`/`secondId`
+   *    のどちらでもなければ、同じく書き込み前に `RangeError`
+   *    （`Runtime.resolveContested: resolution.winnerId must be firstId or secondId`）を
+   *    投げる。
+   * 3. `deps.memoryStore.resolveContestedPair` が無ければ、ここで打ち切り
+   *    `{ supported: false, outcome: { kind: "not_attempted" } }` を返す——フォールバック
+   *    経路は無い（`MemoryStore.resolveContestedPair` の interface JSDoc 参照）。
+   * 4. `getMany([firstId, secondId])` で一括読み、それぞれを {@link ResolveContestedSideOutcome}
+   *    に分類する（`"not_found"`/`"status_not_contested"`/`"pair_broken"`/`"eligible"`。
+   *    適格性は「両側とも `status === 'contested'` かつ相互参照が成立している」——
+   *    [ADR 0046](../../../docs/decisions/0046-contested-pair-invariant-tooth.md) の対不変
+   *    条件を読む側からも守る）。どちらか一方でも `"eligible"` でなければ、書き込みを
+   *    一切試みず `{ supported: true, outcome: { kind: "ineligible", sides: [...] } }` を返す。
+   * 5. 両側とも `"eligible"` なら `deps.memoryStore.resolveContestedPair` を呼ぶ。
+   *    - `resolution.kind === "both_active"`: 両側とも `status: "active"`。
+   *    - `resolution.kind === "supersede"`: `winnerId` 側は `status: "active"`、もう一方は
+   *      `status: "superseded"` + `supersededById: <winnerId>`。
+   *
+   *    成功すれば `{ supported: true, outcome: { kind: "resolved", first, second } }`。
+   * 6. {@link MemoryStatusConflictError} が投げられたら（4で読んだ後、5で書く前に別の
+   *    書き込みが割り込んだ TOCTOU）、`markContested` と同じく**1回だけ**再読して
+   *    `conflicts` に両側の現在の `status` を積み、
+   *    `{ supported: true, outcome: { kind: "conflict", conflicts } }` を返す——上限の無い
+   *    再試行ループにはしない。
+   *
+   * `memory_events` へ両側それぞれ1件ずつ積む（`docs/memory-model.md` §11 行7
+   * 「`updated` または `superseded`」）:
+   * - `"supersede"`: 勝者に `kind: 'updated'`、敗者に `kind: 'superseded'`。
+   * - `"both_active"`: 両側とも `kind: 'updated'`。
+   *
+   * どちらも `meta.reason` は固定値 `'contested_resolved'`、`meta.resolution` に
+   * `'supersede' | 'both_active'`（監査ログから「なぜ contested が消えたか」を追えるように
+   * するための欄——`meta.reason` だけでは決着の種類までは分からない）。`opts.reason` を
+   * 渡すと `meta.note` に追加で入る（`meta.reason`/`meta.resolution` は上書きしない）。
+   * `digestSnapshot` にはその Memory の現在の `digest` を入れる（`content` は運ばない。
+   * `markContested`/`forget`/`reextract` と同じ規律）。
+   *
+   * ⚠ **`recall()` 側は一切変更していない。**`status` が `'contested'` から
+   * `'active'`/`'superseded'` へ離れた時点で、既存の段1 status ゲート
+   * （`["active","contested"]`）・段3 mandatory companion retrieval（`contestedWithId` を
+   * 辿る既存実装）から自然に外れる——敗者側は次の `recall` から二度と単独でも同伴でも
+   * 出てこない（同伴として出てくるのは、対向がまだ `contested` のときだけ）。
+   *
+   * 🔴 **`tick()`/`observe()` からは一度も呼ばれない。**明示的に呼んだときだけ動く
+   * ——`markContested`/`forget`/`purge`/`restoreArchived` と同じ立場。
+   */
+  resolveContested(
+    ctx: Ctx,
+    firstId: MemoryId,
+    secondId: MemoryId,
+    resolution: ContestedResolution,
+    opts?: ResolveContestedOptions,
+  ): Promise<ResolveContestedResult>;
   /**
    * Issue #103（ADR 0089）: 複数の Memory を1件に統合する（docs/vision.md「5動詞」の1つ）。
    *
@@ -2416,6 +2579,145 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
   }
 
   /**
+   * `Runtime.resolveContested` の実装（Issue #197、ADR 0150）。doc コメントは interface 側
+   * （`resolveContested` の JSDoc）にある——ここはアルゴリズムそのものだけ。`markContested`
+   * の実装と対称に書いてある（読み方も同じ順で追える）。
+   */
+  async function resolveContested(
+    ctx: Ctx,
+    firstId: MemoryId,
+    secondId: MemoryId,
+    resolution: ContestedResolution,
+    opts?: ResolveContestedOptions,
+  ): Promise<ResolveContestedResult> {
+    if (firstId === secondId) {
+      throw new RangeError("Runtime.resolveContested: firstId and secondId must differ");
+    }
+    if (
+      resolution.kind === "supersede" &&
+      resolution.winnerId !== firstId &&
+      resolution.winnerId !== secondId
+    ) {
+      throw new RangeError(
+        "Runtime.resolveContested: resolution.winnerId must be firstId or secondId",
+      );
+    }
+
+    // `.call(deps.memoryStore, ...)` で `this` を明示的に束ね直す（`markContested` と同じ作法。
+    // 分割代入したメソッドは `this` を失う）。
+    const resolveContestedPair = deps.memoryStore.resolveContestedPair;
+    if (resolveContestedPair === undefined) {
+      return { supported: false, outcome: { kind: "not_attempted" } };
+    }
+
+    const classify = (
+      id: MemoryId,
+      memory: Memory | undefined,
+      otherId: MemoryId,
+    ): ResolveContestedSideOutcome => {
+      if (memory === undefined) {
+        return { memoryId: id, kind: "not_found" };
+      }
+      if (memory.status !== "contested") {
+        return { memoryId: id, kind: "status_not_contested", status: memory.status };
+      }
+      if (memory.contestedWithId !== otherId) {
+        // ADR 0046 が数え上げた「一対一が破れた状態」——今日の実装では
+        // `markContestedPair`（ADR 0134）経由でしか `contestedWithId` は書かれないため
+        // 到達しないはずだが、防御的に分類する（`PurgeOutcome.conflicted` と同じ立場）。
+        return {
+          memoryId: id,
+          kind: "pair_broken",
+          contestedWithId: memory.contestedWithId ?? null,
+        };
+      }
+      return { memoryId: id, kind: "eligible" };
+    };
+
+    const found = await deps.memoryStore.getMany(ctx, [firstId, secondId]);
+    const byId = new Map<MemoryId, Memory>();
+    for (const memory of found) {
+      byId.set(memory.id, memory);
+    }
+
+    const firstMemory = byId.get(firstId);
+    const secondMemory = byId.get(secondId);
+    const firstSide = classify(firstId, firstMemory, secondId);
+    const secondSide = classify(secondId, secondMemory, firstId);
+    if (firstSide.kind !== "eligible" || secondSide.kind !== "eligible") {
+      return { supported: true, outcome: { kind: "ineligible", sides: [firstSide, secondSide] } };
+    }
+
+    const actor = opts?.actor ?? { type: "system" };
+    const resolutionKind = resolution.kind;
+    const buildMeta = (): Record<string, unknown> =>
+      opts?.reason === undefined
+        ? { reason: "contested_resolved", resolution: resolutionKind }
+        : { reason: "contested_resolved", resolution: resolutionKind, note: opts.reason };
+
+    // `docs/memory-model.md` §11 行7「`updated` または `superseded`」: `both_active` は
+    // 両側とも `updated`、`supersede` は勝者が `updated`・敗者が `superseded`。
+    const buildSide = (
+      id: MemoryId,
+      memory: Memory,
+    ): {
+      id: MemoryId;
+      status: "active" | "superseded";
+      supersededById?: MemoryId;
+      event: NewMemoryEvent;
+    } => {
+      const buildEvent = (kind: "updated" | "superseded"): NewMemoryEvent => ({
+        tenantId: ctx.tenantId,
+        memoryId: id,
+        kind,
+        actor,
+        digestSnapshot: memory.digest,
+        meta: buildMeta(),
+      });
+      if (resolution.kind === "both_active") {
+        return { id, status: "active", event: buildEvent("updated") };
+      }
+      if (id === resolution.winnerId) {
+        return { id, status: "active", event: buildEvent("updated") };
+      }
+      return {
+        id,
+        status: "superseded",
+        supersededById: resolution.winnerId,
+        event: buildEvent("superseded"),
+      };
+    };
+
+    try {
+      const { first, second } = await resolveContestedPair.call(
+        deps.memoryStore,
+        ctx,
+        buildSide(firstId, firstMemory!),
+        buildSide(secondId, secondMemory!),
+      );
+      return { supported: true, outcome: { kind: "resolved", first, second } };
+    } catch (error) {
+      if (error instanceof MemoryStatusConflictError) {
+        // 安全弁（`markContested` と同じ形。1回だけ再読して打ち切る——上限の無い再試行
+        // ループを作らない）。
+        const refetched = await deps.memoryStore.getMany(ctx, [firstId, secondId]);
+        const refetchedById = new Map(refetched.map((m) => [m.id, m]));
+        return {
+          supported: true,
+          outcome: {
+            kind: "conflict",
+            conflicts: [
+              { id: firstId, observedStatus: refetchedById.get(firstId)?.status ?? null },
+              { id: secondId, observedStatus: refetchedById.get(secondId)?.status ?? null },
+            ],
+          },
+        };
+      }
+      throw error;
+    }
+  }
+
+  /**
    * `Runtime.consolidate` の実装（Issue #103、ADR 0089）。doc コメントは interface 側
    * （`consolidate` の JSDoc）にある——ここはアルゴリズムそのものだけ。
    */
@@ -2949,6 +3251,7 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
     forget,
     purge,
     markContested,
+    resolveContested,
     consolidate,
     reflect,
   };

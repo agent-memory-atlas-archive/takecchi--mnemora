@@ -81,6 +81,8 @@ describeMemoryStoreConformance({
   supportsPurgeMemory: true,
   // Issue #197 / ADR 0134: PostgresMemoryStore は markContestedPair を実装している。
   supportsMarkContestedPair: true,
+  // Issue #197 / ADR 0150: PostgresMemoryStore は resolveContestedPair を実装している。
+  supportsResolveContestedPair: true,
 });
 
 describeEventStoreConformance({

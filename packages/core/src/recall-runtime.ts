@@ -718,6 +718,16 @@ export async function runRecall(
   // （Issue #243）は、上の単位を組む繰り返しで ADR 0136 により塞いだ**——単独候補は
   // 単位を組まず、この shortfall の一部として `unit_assembly_dropped` に計上される。
   //
+  // ⚠ **Issue #197 / ADR 0150（2026-09 追記）で、この段の反対側——`contested` から出る経路
+  // （`Runtime.resolveContested`。docs/memory-model.md §11 行7）——も入った。** 決着が
+  // つくと両側の `contestedWithId` が `null` に戻るため、**負けた側は次の recall から
+  // 返らず、この段の同伴取得も起きなくなる**（`companionsAdded` が 0 に戻る）。
+  // ⟹ **この段が発火したかどうかは `contradiction_resolution` の
+  // `detail.companionsAdded` で数えられる**——`executed` は `companions.length` に
+  // 関わらず常に `true` であり、**発火の有無を測っていない**（ADR 0150「測ったこと」が
+  // 変異試験で実測した。歯は
+  // `__tests__/stage3-mandatory-companion-mutation.test.ts`）。
+  //
   // ⚠ 二重計上のときに出さない判断は `unitAssemblyShortfall` が持つ（その doc を参照）。
   const unitsShortfall = unitAssemblyShortfall(units, allCandidates.length);
   if (unitsShortfall > 0) {
