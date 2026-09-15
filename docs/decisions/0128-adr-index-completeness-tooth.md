@@ -3,6 +3,17 @@
 - **状態**: 採用 (2026-09)
 - **日付**: 2026-09-15
 
+> **⚠ 2026-09-15 追記（[ADR 0137](./0137-adr-index-generated-from-source.md) で置き換え）。**
+> issue #230 の案A（索引を機械生成にする）が採用され、`docs/decisions/README.md` の
+> 索引テーブルは `scripts/generate-adr-index.mjs` が `docs/decisions/*.md` から生成する
+> 形になった。本 ADR が新設した `scripts/adr-index-completeness-lib.mjs` と、その2本の
+> テストファイル（`missing`/`orphan`/`broken` を常に検査する形）はこの変更で削除した
+> ——`orphan`/`broken` は生成物になった時点で構成上起こりえなくなり、`missing`
+> 相当の検査は「`main` に限って」判定する鮮度検査（`scripts/__tests__/adr-index-freshness.test.mjs`）
+> に引き継いだ（ADR PR 自身は索引を触らない設計になったため、`missing` を
+> 常時検査すると設計と矛盾する）。**この節から下の記述は書き換えず、当時の記録として
+> そのまま残す。**
+
 **⚠ 各主張の出所を分ける**（ADR 0105 / 0106 / 0127 の体裁を踏む）。
 
 - **【現物】** — この repo のコード・文書を書き手が読んで確かめた。
