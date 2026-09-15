@@ -102,6 +102,23 @@ export interface Memory {
 
   embeddingStatus: EmbeddingStatus;
 
+  /**
+   * Issue #198（[ADR 0124](../../../docs/decisions/0124-purge-physical-delete.md)）:
+   * 非 `null` なら `content`/`digest` は物理削除のトゥームストーンで上書き済み
+   * （docs/memory-model.md §9・§11 行10）。`status` はこの操作で動かないため
+   * （`purged` は `memories.status` の値ではない）、「purge されたか」は常にこの列で判定する。
+   *
+   * DB 列自体は `packages/postgres/migrations/0001_init.sql` に Phase 1 から存在するが、
+   * `Memory`/`MemoryRow` にこのフィールドが無く一度も読み書きされていなかった
+   * （`purge()` の書き手そのものが無かったため）。本 ADR がここに初めて配線する。
+   *
+   * **省略可能な既存フィールドとして足した**（`Memory` は `@mnemora/core` の公開型。
+   * `purgedAt` を必須にすると、この型を自分でリテラルとして組み立てている既存の
+   * 呼び出し元・adapter・テストのフィクスチャすべてに新しい必須プロパティを強制する
+   * 破壊的変更になる。省略可能なら、値を持たない既存の組み立て方はそのまま型を満たす）。
+   */
+  purgedAt?: Date | null;
+
   createdAt: Date;
   updatedAt: Date;
 }
@@ -155,6 +172,9 @@ export const MemorySchema = z.object({
   decayFloorAt: z.date(),
 
   embeddingStatus: EmbeddingStatusSchema,
+
+  // Issue #198（ADR 0124）: `Memory.purgedAt` の doc コメント参照。
+  purgedAt: z.date().nullable().optional(),
 
   createdAt: z.date(),
   updatedAt: z.date(),

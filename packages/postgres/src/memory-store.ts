@@ -1,7 +1,11 @@
 import { sql } from "drizzle-orm";
 import type { SQL } from "drizzle-orm";
 import { defaultDecayStrategy } from "@mnemora/core";
-import { EMBEDDING_STATUS_ROLLBACK, MemoryStatusConflictError } from "@mnemora/core";
+import {
+  EMBEDDING_STATUS_ROLLBACK,
+  MemoryPurgeConflictError,
+  MemoryStatusConflictError,
+} from "@mnemora/core";
 import type {
   AggregateScopeOptions,
   ArchiveDecayedOptions,
@@ -1172,6 +1176,75 @@ export class PostgresMemoryStore implements MemoryStore {
       return { memoryId: r.id as MemoryId, decayFloorAt: parsePgTimestamp(r.decay_floor_at) };
     });
     return { archived, reachedLimit: archived.length === opts.limit };
+  }
+
+  /**
+   * Issue #198 / ADR 0124: `forgotten` かつ未 purge（`purged_at IS NULL`）の Memory だけを
+   * 対象にした CAS。`updateStatusWithEvent`（本ファイル上部）と同じ形——条件付き `UPDATE`
+   * が0行なら、対象がそもそも存在しないのか（`isUuidLike` の事前チェックで弾く、または
+   * 読み直しで0行）、条件を満たさなかったのか（読み直して {@link MemoryPurgeConflictError}
+   * を投げる）を切り分ける。`status` は更新しない——`purged` は `memories.status` の値
+   * ではない（docs/memory-model.md §11 行10）。
+   */
+  async purgeMemory(
+    ctx: Ctx,
+    id: MemoryId,
+    tombstone: { content: string; digest: string },
+    event: NewMemoryEvent,
+  ): Promise<{ memory: Memory; event: MemoryEvent }> {
+    if (!isUuidLike(id)) {
+      throw new Error(`PostgresMemoryStore: memory not found for tenant: ${id}`);
+    }
+
+    return this.db.transaction(async (tx) => {
+      const result = await tx.execute(sql`
+        UPDATE memories
+        SET content = ${tombstone.content},
+            digest = ${tombstone.digest},
+            purged_at = now(),
+            updated_at = now()
+        WHERE tenant_id = ${ctx.tenantId} AND id = ${id}
+          AND status = 'forgotten' AND purged_at IS NULL
+        RETURNING *
+      `);
+
+      if (result.rows.length === 0) {
+        // 0行だった理由を切り分けるための読み直し（`updateStatusWithEvent` と同じ作法）。
+        const current = await tx.execute(sql`
+          SELECT status, purged_at FROM memories
+          WHERE tenant_id = ${ctx.tenantId} AND id = ${id} LIMIT 1
+        `);
+        if (current.rows.length === 0) {
+          throw new Error(`PostgresMemoryStore: memory not found for tenant: ${id}`);
+        }
+        const row = current.rows[0] as unknown as {
+          status: MemoryStatus;
+          purged_at: string | null;
+        };
+        throw new MemoryPurgeConflictError(id, row.status, parsePgTimestamp(row.purged_at));
+      }
+
+      const memory = rowToMemory(result.rows[0] as unknown as MemoryRow);
+
+      const eventResult = await tx.execute(sql`
+        INSERT INTO memory_events (id, tenant_id, memory_id, kind, at, actor, digest_snapshot, size_before_bytes, meta)
+        VALUES (
+          gen_random_uuid(),
+          ${ctx.tenantId},
+          ${event.memoryId},
+          ${event.kind},
+          ${event.at ?? new Date()},
+          ${JSON.stringify(event.actor)}::jsonb,
+          ${event.digestSnapshot ?? null},
+          ${event.sizeBeforeBytes ?? null},
+          ${JSON.stringify(event.meta)}::jsonb
+        )
+        RETURNING *
+      `);
+      const storedEvent = rowToMemoryEvent(eventResult.rows[0] as unknown as MemoryEventRow);
+
+      return { memory, event: storedEvent };
+    });
   }
 }
 

@@ -228,6 +228,16 @@ mnemora はこの前提を採用しない。mnemora は計測（`usage`）を提
 分ける」のとおり Phase 2 以降）。⚠ **`decay_floor_at` を読み取りに使っていない点も変わっていない**
 ——`forget()` は明示操作であり、§5.3 が言う「既定の忘却」（減衰による自然な弱化）とは別の話である。
 
+**2026-09-15 追記（Issue #198、[ADR 0124](./decisions/0124-purge-physical-delete.md)）**:
+上の ⚠ のうち **`purge()` の側も解消した**——`Runtime.purge(ctx, target, opts?)` を実装した。
+`forgotten` からのみ遷移できる（任意 status からの直接 purge は設計判断として採らなかった。
+ADR 0124 決定1）。`content`/`digest` を固定のトゥームストーンで上書きし `purged_at` を設定、
+`memory_events` に `kind: 'purged'` を積む——`status` そのものは動かさない（`purged` は
+`memories.status` の値ではない）。`MemoryStore.purgeMemory`（任意メソッド）の CAS 条件は
+`status = 'forgotten' AND purged_at IS NULL` の両方（`status` だけでは2回目の呼び出しを
+弾けないため）。`opts.dryRun`（下見）を持ち、`tick()`/`observe()` には配線していない。
+`decay_floor_at` を読み取りに使っていない点は本 PR の範囲外のままであり、変わっていない。
+
 ### 5.4 監査ログの既定保持期間
 
 **なぜオーナーが決めるべきか**: 適正な保持期間はコンプライアンス要件（法域・業種）によって変わり、技術だけでは決まらない。

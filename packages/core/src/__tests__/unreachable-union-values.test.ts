@@ -27,6 +27,11 @@ import { describe, expect, it } from "vitest";
  * `condition: "tenant"` 等のオブジェクトリテラルを一時的に挿入し、このテストが赤くなる
  * ことを手元で確認した（挿入前後で `git diff` が無いことも確認済み。PR 本文の
  * 「測ったこと」節に出力を貼ってある）。
+ *
+ * **2026-09 追記（Issue #198、[ADR 0124](../../../../docs/decisions/0124-purge-physical-delete.md)）**:
+ * `kind: "purged"`（分類2「後続 Phase 待ち」）を棚卸しの対象から外した。`Runtime.purge` が
+ * 実際にこの値を生成するようになったため——この歯自身が「生成された」ことを検知して
+ * 赤くなった（後述の変異試験と同じ仕組みが、今回は実装漏れではなく実装完了を検知した）。
  */
 
 const PACKAGES_ROOT = join(__dirname, "../../../");
@@ -90,12 +95,6 @@ const UNREACHABLE_VALUES: {
     field: "axis",
     value: "taxonomy",
     declaredAt: "packages/core/src/recall.ts (GroupCount)",
-    classification: "2: 後続 Phase 待ち",
-  },
-  {
-    field: "kind",
-    value: "purged",
-    declaredAt: "packages/core/src/event.ts (MemoryEventKind)",
     classification: "2: 後続 Phase 待ち",
   },
   {

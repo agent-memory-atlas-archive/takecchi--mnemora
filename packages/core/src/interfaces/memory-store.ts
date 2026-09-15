@@ -35,6 +35,59 @@ export class MemoryStatusConflictError extends Error {
 }
 
 /**
+ * `MemoryStore.purgeMemory` の CAS 条件（`status = 'forgotten' AND purged_at IS NULL`）が
+ * 破れたときに投げる（Issue #198、[ADR 0124](../../../../docs/decisions/0124-purge-physical-delete.md)）。
+ *
+ * 🔴 **`MemoryStatusConflictError` を再利用しない。**`purge` は `status` を動かさない
+ * （`purged` は `memories.status` の値ではなく `purged_at IS NOT NULL` で表される、
+ * docs/memory-model.md §11 行10）ため、CAS が破れても `observedStatus` は
+ * `expectedStatus`（常に `'forgotten'`）と**同じ値になりうる**——「期待した値と違う値を
+ * 観測した」という `MemoryStatusConflictError` の前提そのものが成り立たない場面がある
+ * （例: 既に purge 済みで `status` は依然 `'forgotten'` のまま）。この専用の型は
+ * `status` に加えて `purgedAt` も運ぶことで、その区別を表現する。
+ *
+ * **`observedStatus`/`observedPurgedAt` は「弾かれた後に読み直した値」であり、弾かれた
+ * 瞬間の値とは限らない**（`MemoryStatusConflictError` の doc コメントと同じ注意）。
+ * 呼び出し側（`Runtime.purge`）はこの値を信用せず、自分でもう一度 `get` を呼んで
+ * `not_found`/`already_purged`/`status_not_forgotten`/`conflicted` のどれかに分類する。
+ */
+export class MemoryPurgeConflictError extends Error {
+  constructor(
+    readonly memoryId: MemoryId,
+    readonly observedStatus: MemoryStatus | null,
+    readonly observedPurgedAt: Date | null,
+  ) {
+    super(
+      `MemoryStore.purgeMemory: memory ${memoryId} is not purgeable ` +
+        `(expected status "forgotten" with purgedAt null, observed ` +
+        `${
+          observedStatus === null
+            ? "(memory disappeared)"
+            : `status="${observedStatus}", purgedAt=${observedPurgedAt === null ? "null" : observedPurgedAt.toISOString()}`
+        })`,
+    );
+    this.name = "MemoryPurgeConflictError";
+  }
+}
+
+/**
+ * `MemoryStore.purgeMemory` が `content`/`digest` を上書きする固定の文字列
+ * （Issue #198、[ADR 0124](../../../../docs/decisions/0124-purge-physical-delete.md)）。
+ * docs/memory-model.md §9「forget() と purge() を分ける」: 「`content` と `digest` を
+ * 固定のトゥームストーン文字列で上書きする…『NULL にする』ではなく『消えたことを示す値で
+ * 上書きする』ことで、NOT NULL と物理削除の両立を図る」。
+ *
+ * `content`/`digest` に同じ文字列を使う——別々の文字列を持つ利点が無い一方、値を1つに
+ * 保つほうが「これが tombstone だ」という直感的な確認がしやすい。
+ *
+ * 🔴 **「purge されたか」の判定にこの文字列を使わない。**常に `Memory.purgedAt !== null`
+ * で判定する（`memories.status` は動かないため、`content`/`digest` の値そのものを
+ * 判定の根拠にすると、将来この文字列を変えたときに判定ロジックまで壊れる）。
+ */
+export const PURGE_TOMBSTONE_CONTENT = "[purged]";
+export const PURGE_TOMBSTONE_DIGEST = "[purged]";
+
+/**
  * `setEmbeddingStatus` が**唯一禁じる遷移**
  * （`docs/decisions/0053-set-embedding-status-does-not-roll-back-ready.md`）。
  * `ready` は `VectorStore.upsert` が返った*後*にしか書かれない——すなわち
@@ -607,6 +660,59 @@ export interface MemoryStore {
    * （`Runtime.sweepArchive` の doc コメント参照）。
    */
   archiveDecayed?(ctx: Ctx, opts: ArchiveDecayedOptions): Promise<ArchiveDecayedResult>;
+  /**
+   * Issue #198（docs/roadmap.md §5.3、docs/memory-model.md「forget() と purge() を分ける」・
+   * §11 行10、[ADR 0124](../../../../docs/decisions/0124-purge-physical-delete.md)）:
+   * `forgotten` な Memory を物理削除する——`content`/`digest` を固定のトゥームストーン
+   * 文字列（{@link PURGE_TOMBSTONE_CONTENT}/{@link PURGE_TOMBSTONE_DIGEST}）で上書きし、
+   * `purgedAt` を設定する。**行そのものは消さない**（`memory_events` からの外部キー
+   * 参照整合性のため、また `superseded_by_id`/`contested_with_id` の参照先としても
+   * 残す必要があるため）。
+   *
+   * 🔴 **任意メソッドである。**必須にすると `MemoryStore` を実装する第三者の adapter を
+   * 壊す破壊的変更になる（`@mnemora/core` は npm に公開済み、`docs/autonomy.md`「してはいけ
+   * ないこと」表の「公開 API の破壊的変更」、[ADR 0100](../../../../docs/decisions/0100-supersede-with-new-memories.md)
+   * 決定1と同じ理由）。この口を実装しない adapter では `Runtime.purge` が
+   * `{ supported: false, outcomes: [...すべて not_attempted] }` を返す——`archiveDecayed`/
+   * `purgeExpiredEvents` と同じ「フォールバック経路を持たない」形（`content`/`digest`/
+   * `purgedAt` を書く経路はこの口以外に無いため）。
+   *
+   * **なぜ既存の `updateStatusWithEvent` を再利用しないか**: [ADR 0122](../../../../docs/decisions/0122-restore-archived-memory.md)
+   * の `restoreArchived` は「`status` を1つ動かし、同一トランザクションで
+   * `memory_events` に1件積む」という形が既存の `updateStatusWithEvent` にそのまま
+   * 収まったため、新しい任意メソッドを足さなかった。**`purge` はこの形に収まらない**
+   * ——`status` を動かさない代わりに `content`/`digest`/`purgedAt` という、
+   * `updateStatusWithEvent` のシグネチャには無い列を書く必要がある
+   * （`archiveDecayed`/`purgeExpiredEvents` と同じ「既存のどのメソッドにも無い形」）。
+   *
+   * 契約:
+   * - 対象の行が存在しなければ「memory not found」の `Error` を投げる
+   *   （`updateStatusWithEvent` と同じ規約。`id` が adapter の期待する形式でない場合も
+   *   同じ結果になる——`packages/postgres/src/mapping.ts` の `isUuidLike` の doc 参照）。
+   * - 🔴 **CAS の条件は `status = 'forgotten' AND purged_at IS NULL` の両方。**
+   *   `purge` は `status` を動かさないため（`purged` は `memories.status` の値ではない）、
+   *   `status` だけを条件にすると、同じ Memory への2回目の呼び出しも条件を満たしてしまい、
+   *   `content`/`digest`/`purgedAt` が再び書かれ、`purged` イベントが2件目積まれる
+   *   ——**`purged_at IS NULL` がこの操作固有のべき等性を買う。**
+   * - 条件を満たさない場合（対象は存在するが `status !== 'forgotten'` または
+   *   `purgedAt` が既に非 `null`）は {@link MemoryPurgeConflictError} を投げる。
+   * - 条件を満たす場合、`content`/`digest` を `tombstone.content`/`tombstone.digest` へ
+   *   上書きし、`purgedAt` に書き込み時刻を設定し、同一トランザクションで `event`
+   *   （`kind: 'purged'`）を追記する。**片方だけ起きることはない**（ADR 0031 が確立した
+   *   「更新とイベントは同値」をここでも適用）。
+   * - `status`/`contentHash`/`digestSource` は変更しない。**`status` は `'forgotten'` の
+   *   ままである。**
+   * - `event.digestSnapshot` は呼び出し側が上書き**前**の digest を渡すこと
+   *   （このメソッド自身は snapshot を作らない——`updateStatusWithEvent` と同じ、
+   *   「呼び出し側が読んだ値を event に埋める」規律）。**purge 後、元の digest が残る
+   *   唯一の場所はこの監査ログである**（`content` は事後もどこにも残らない）。
+   */
+  purgeMemory?(
+    ctx: Ctx,
+    id: MemoryId,
+    tombstone: { content: string; digest: string },
+    event: NewMemoryEvent,
+  ): Promise<{ memory: Memory; event: MemoryEvent }>;
 }
 
 /**

@@ -16,7 +16,12 @@ import { heuristicTokenCounter } from "./heuristic-token-counter.js";
 import type { EmbeddingProvider } from "./interfaces/embedding-provider.js";
 import type { EventStore } from "./interfaces/event-store.js";
 import type { LLMProvider } from "./interfaces/llm-provider.js";
-import { MemoryStatusConflictError } from "./interfaces/memory-store.js";
+import {
+  MemoryPurgeConflictError,
+  MemoryStatusConflictError,
+  PURGE_TOMBSTONE_CONTENT,
+  PURGE_TOMBSTONE_DIGEST,
+} from "./interfaces/memory-store.js";
 import type {
   ArchiveDecayedOptions,
   MemoryStore,
@@ -718,6 +723,92 @@ export interface RestoreArchivedResult {
   outcomes: RestoreArchivedOutcome[];
 }
 
+/**
+ * `runtime.purge` の対象（Issue #198、ADR 0124）。`ForgetTarget`/`RestoreArchivedTarget` と
+ * 意図的に同じ形——`{ memoryId }`（単数）と `{ memoryIds }`（複数）のどちらでも同じ意味論であり、
+ * 内部で `MemoryId[]` に正規化してから処理する。
+ */
+export type PurgeTarget = { memoryId: MemoryId } | { memoryIds: MemoryId[] };
+
+/** `runtime.purge` の任意オプション（Issue #198、ADR 0124）。`ForgetOptions`/`RestoreArchivedOptions` と同じ形に `dryRun` を足す。 */
+export interface PurgeOptions {
+  /**
+   * 監査ログ（`memory_events.meta.reason`）に残る自由文。省略時、`meta` に `reason`
+   * キー自体を持たせない（`ForgetOptions.reason` と同じ規律）。
+   */
+  reason?: string;
+  /** イベントの `actor`。省略時 `{ type: "system" }`。 */
+  actor?: EventActor;
+  /**
+   * 🔴 **下見（issue #198 の受け入れ条件が名指しする「dryRun 相当の下見」）。**
+   * `true` のとき、一切の書き込み（`content`/`digest`/`purgedAt` の更新、
+   * `memory_events` への追記、`VectorStore.delete`）を行わず、「実行していたら何が
+   * 起きたか」だけを {@link PurgeOutcome} の `"would_purge"`/`"already_purged"`/
+   * `"status_not_forgotten"`/`"not_found"` として返す。省略時 `false`。
+   */
+  dryRun?: boolean;
+}
+
+/**
+ * `runtime.purge` が対象1件ごとに返す結果（Issue #198、ADR 0124）。
+ * `ForgetOutcome`/`RestoreArchivedOutcome` と同じ「無い」の分類（ADR 0008）に、
+ * `purge` 固有の2値（`"would_purge"`/`"already_purged"`）を足す。
+ *
+ * - `"purged"`: この呼び出しで実際に `content`/`digest` をトゥームストーンで上書きし、
+ *   `purgedAt` を設定し、`memory_events` に `kind: 'purged'` を積んだ（`VectorStore.delete`
+ *   もベストエフォートで試みた——失敗してもこの kind は変わらない。`Runtime.purge` の
+ *   doc コメント参照）。`previousStatus` は常に `"forgotten"`。
+ * - `"would_purge"`: `opts.dryRun: true` のとき、対象が `status === "forgotten"` かつ
+ *   未 purge（`purgedAt` が `null`）であり、`dryRun: false` で呼べば `"purged"` に
+ *   なったはずであることを示す。**書き込みは一切起きていない。**
+ * - `"already_purged"`: 対象は既に purge 済み（`purgedAt` が非 `null`）だった。
+ *   **書き込みは一切起きていない**（`dryRun` の有無に関わらず同じ kind——「何も起きない」
+ *   という結論自体は `dryRun` で変わらない）。
+ * - `"status_not_forgotten"`: 対象の `status` が `"forgotten"` ではなかった
+ *   （`purge` は `forgotten` からのみ遷移できる、ADR 0124 決定1）。`status` に現在値が入る。
+ *   **書き込みは一切起きていない。**
+ * - `"not_found"`: そのテナントにその id の Memory がそもそも無い。
+ * - `"conflicted"`: compare-and-swap が破れ、1回だけ再読した結果も上の3分岐のどれにも
+ *   明確に分類できなかった——`forgotten` から抜け出す経路も、`purge` 以外に `purgedAt`
+ *   を書く経路も本 PR の時点で存在しないため、**現在の実装では到達しない防御的な分類**
+ *   （`forget`/`restoreArchived` と同じ、上限の無い再試行にしない安全弁）。
+ * - `"failed"`: 競合以外の例外で書き込みそのものが失敗した。**この時点で処理を打ち切る。**
+ * - `"not_attempted"`: それより前の要素が `"failed"` になった、または
+ *   `MemoryStore.purgeMemory` が実装されていない（`PurgeResult.supported: false`）ため、
+ *   この要素はまだ見ていない。
+ */
+export type PurgeOutcome =
+  | { memoryId: MemoryId; kind: "purged"; previousStatus: "forgotten" }
+  | { memoryId: MemoryId; kind: "would_purge"; previousStatus: "forgotten" }
+  | { memoryId: MemoryId; kind: "already_purged" }
+  | { memoryId: MemoryId; kind: "status_not_forgotten"; status: Exclude<MemoryStatus, "forgotten"> }
+  | { memoryId: MemoryId; kind: "not_found" }
+  | { memoryId: MemoryId; kind: "conflicted"; observedStatus: MemoryStatus | null }
+  | { memoryId: MemoryId; kind: "failed"; error: string }
+  | { memoryId: MemoryId; kind: "not_attempted" };
+
+/**
+ * `runtime.purge` の結果（Issue #198、ADR 0124）。
+ *
+ * ⛔ `purgedCount` のような派生値を持たない（`ForgetResult`/`RestoreArchivedResult` と
+ * 同じ理由——`outcomes` を数えれば得られる値を欄として複製すると、片方だけ直してずれる
+ * という、このリポジトリが繰り返し踏んできた欠陥を新しく作ることになる）。
+ */
+export interface PurgeResult {
+  /**
+   * `MemoryStore.purgeMemory` が実装されていたか。**`false` のとき `outcomes` は
+   * 全要素が `"not_attempted"`**（`opts.dryRun` の有無に関わらず——`SweepArchiveResult.supported`
+   * （ADR 0114）と同じ「無い」の扱い。この口を実装しない adapter に対しては、実際の
+   * purge も下見も一様に「見ていない」と名乗る）。
+   */
+  supported: boolean;
+  /**
+   * 入力（`PurgeTarget` を正規化した `MemoryId[]`）と**同じ順序・同じ長さ**。
+   * 入力に同じ id が2回現れたら、結果にも2回現れる（`ForgetResult.outcomes` と同じ規律）。
+   */
+  outcomes: PurgeOutcome[];
+}
+
 export interface Runtime {
   observe(ctx: Ctx, input: ObserveInput): Promise<ObserveResult>;
   /**
@@ -909,6 +1000,73 @@ export interface Runtime {
    * `{ outcomes: [] }` を返す。
    */
   forget(ctx: Ctx, target: ForgetTarget, opts?: ForgetOptions): Promise<ForgetResult>;
+  /**
+   * Issue #198（docs/roadmap.md §5.3、[ADR 0124](../../../docs/decisions/0124-purge-physical-delete.md)）:
+   * `forgotten` な Memory を**物理削除**する。`forget()` が可逆な論理削除（`status` を
+   * 動かすだけ）であるのに対し、`purge()` は不可逆——`content`/`digest` を固定の
+   * トゥームストーン文字列で上書きし、`purgedAt` を設定する。**行そのものは消さない**
+   * （`memory_events` からの外部キー参照整合性のため。docs/memory-model.md
+   * 「forget() と purge() を分ける」）。
+   *
+   * 🔴 **`forgotten` からのみ遷移できる。**`active`/`archived`/`superseded`/`contested`
+   * な Memory を直接 purge することはできない——`forget → purge` の二段階を、不可逆操作
+   * に対する最小の安全弁にする（ADR 0124 決定1。`docs/memory-model.md` §11 lifecycle 表
+   * 行10が既に `forgotten → purged` とだけ書いている）。`status` がそれ以外の対象は
+   * `status_not_forgotten` を返し、書き込みは一切起きない。
+   *
+   * 🔴 **`MemoryStore.purgeMemory`（任意メソッド）が無い adapter では、この操作は
+   * 一切実行できない。**`{ supported: false, outcomes: [...すべて "not_attempted"] }`
+   * を返す——`sweepArchive`（ADR 0114）と同じ「フォールバック経路を持たない」形
+   * （`content`/`digest`/`purgedAt` を書く経路はこの口以外に無いため）。`opts.dryRun`
+   * の有無に関わらず同じ扱いにする——下見だけを許して実際の purge を許さない adapter を
+   * 作ると、下見が約束する内容と実際の振る舞いが食い違いうる。
+   *
+   * 手順（`forget`/`restoreArchived` と同じ骨格。**CAS の条件だけが違う**——下記参照）:
+   * 1. `target` を `MemoryId[]` に正規化する。空配列は store に一切触れず
+   *    `{ supported: <purgeMemory の有無>, outcomes: [] }`。
+   * 2. `deps.memoryStore.purgeMemory` が無ければ、ここで打ち切り全対象を
+   *    `{ supported: false, outcomes: [...すべて "not_attempted"] }` として返す。
+   * 3. `getMany` で一括読み。存在しなければ `"not_found"`。`status !== "forgotten"`
+   *    なら `"status_not_forgotten"`（現在の `status` を添える。書き込み無し）。
+   *    `status === "forgotten"` かつ `purgedAt` が非 `null` なら `"already_purged"`
+   *    （書き込み無し）。
+   * 4. それ以外（`status === "forgotten"` かつ `purgedAt === null`）は、`opts.dryRun`
+   *    なら書き込みをせず `"would_purge"` を返す。そうでなければ
+   *    `deps.memoryStore.purgeMemory(ctx, id, { content: PURGE_TOMBSTONE_CONTENT,
+   *    digest: PURGE_TOMBSTONE_DIGEST }, event)` を呼ぶ。成功したら `"purged"` を返し、
+   *    続けて `deps.vectorStore.delete(ctx, deps.embeddingProvider.space, id)` を
+   *    ベストエフォートで試みる（例外は握り潰す——ADR 0124 決定5。`MemoryStore` 側の
+   *    書き込みは既に確定しているため、この失敗を理由に `"purged"` を `"failed"` に
+   *    格下げすると「安全に再試行できる」という `"failed"`/`"not_attempted"` の意味を
+   *    裏切る）。
+   * 5. {@link MemoryPurgeConflictError} が投げられたら**1回だけ**再読し、
+   *    再読した `purgedAt` が非 `null` なら `"already_purged"`、`status` が
+   *    `"forgotten"` でなければ `"status_not_forgotten"`、行が消えていれば
+   *    `"not_found"`、それ以外（`status === "forgotten"` かつ `purgedAt === null` の
+   *    まま）なら `"conflicted"`——**上限の無い再試行ループにはしない。**
+   * 6. それ以外の例外（DB 接続断等）は `"failed"` を積んだ上で**その場で処理を打ち切り**、
+   *    残りの対象は一切試みずに `"not_attempted"` として返す。例外はこのメソッドの外へは
+   *    投げない。
+   *
+   * `memory_events` へ積むイベントの `kind` は `"purged"`（`MemoryEventKind` に
+   * 既に在る値——追加していない）。`digestSnapshot` には上書き**前**の digest を入れ、
+   * **`content`（本文）は運ばない**（`forget`/`restoreArchived` と同じ規律。
+   * docs/memory-model.md §9）。`opts.reason` を渡すと `meta.reason` に入り、省略すると
+   * `meta` に `reason` キー自体を持たせない。
+   *
+   * 🔴 **`tick()`/`observe()` からは一度も呼ばれない。**`TICK_SUPPORTED_JOB_KINDS` に
+   * `purge` 相当の job kind を足していない・`observe()` の入力分岐に `purge` を混ぜて
+   * いない——issue #198 が要求する「明示的でない経路からは絶対に呼ばれない」ことを、
+   * 歯（`purge.test.ts`）で実測する。
+   *
+   * ⚠ **`recall()`/`aggregateScope` 側は一切変更していない。**`purge` は `status` を
+   * 動かさないため、purge された Memory は purge の前後を通じて常に `status = 'forgotten'`
+   * であり——`docs/recall.md` §2 段0・§5 の決定（スコープ = tenant + subject + period +
+   * taxonomy + status ゲート、status ゲートで落ちた Memory はスコープ内に含まれない）
+   * により、そもそも一度も「スコープ内」に入ったことが無い。群カウント
+   * （`ScopeAggregate.groups`/`totalInScope`）に触れようがない（ADR 0124 決定6）。
+   */
+  purge(ctx: Ctx, target: PurgeTarget, opts?: PurgeOptions): Promise<PurgeResult>;
   /**
    * Issue #103（ADR 0089）: 複数の Memory を1件に統合する（docs/vision.md「5動詞」の1つ）。
    *
@@ -1812,6 +1970,138 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
   }
 
   /**
+   * `Runtime.purge` の実装（Issue #198、ADR 0124）。doc コメントは interface 側
+   * （`purge` の JSDoc）にある——ここはアルゴリズムそのものだけ。`forget`/`restoreArchived`
+   * と意図的に同じ骨格を持つ。CAS の条件・`dryRun`・`supported`・`vectorStore.delete` の
+   * 4点だけが違う。
+   */
+  async function purge(ctx: Ctx, target: PurgeTarget, opts?: PurgeOptions): Promise<PurgeResult> {
+    const ids: MemoryId[] = "memoryId" in target ? [target.memoryId] : target.memoryIds;
+
+    // `.call(deps.memoryStore, ...)` で `this` を明示的に束ね直す（ADR 0100/ADR 0114 と
+    // 同じ作法。分割代入したメソッドは `this` を失う）。
+    const purgeMemory = deps.memoryStore.purgeMemory;
+    const supported = purgeMemory !== undefined;
+
+    if (ids.length === 0) {
+      return { supported, outcomes: [] };
+    }
+    if (!supported) {
+      return {
+        supported: false,
+        outcomes: ids.map((id) => ({ memoryId: id, kind: "not_attempted" }) as const),
+      };
+    }
+
+    const found = await deps.memoryStore.getMany(ctx, ids);
+    // `forget` と同じ理由（往復の節約。`ADR 0087`）——正しさのためではない。
+    const byId = new Map<MemoryId, Memory>();
+    for (const memory of found) {
+      byId.set(memory.id, memory);
+    }
+
+    const actor = opts?.actor ?? { type: "system" };
+    const dryRun = opts?.dryRun ?? false;
+    const outcomes: PurgeOutcome[] = [];
+
+    for (let i = 0; i < ids.length; i += 1) {
+      const id = ids[i]!;
+      const current = byId.get(id);
+      if (current === undefined) {
+        outcomes.push({ memoryId: id, kind: "not_found" });
+        continue;
+      }
+      if (current.status !== "forgotten") {
+        outcomes.push({
+          memoryId: id,
+          kind: "status_not_forgotten",
+          status: current.status as Exclude<MemoryStatus, "forgotten">,
+        });
+        continue;
+      }
+      if ((current.purgedAt ?? null) !== null) {
+        outcomes.push({ memoryId: id, kind: "already_purged" });
+        continue;
+      }
+
+      if (dryRun) {
+        outcomes.push({ memoryId: id, kind: "would_purge", previousStatus: "forgotten" });
+        continue;
+      }
+
+      try {
+        const { memory } = await purgeMemory.call(
+          deps.memoryStore,
+          ctx,
+          id,
+          { content: PURGE_TOMBSTONE_CONTENT, digest: PURGE_TOMBSTONE_DIGEST },
+          {
+            tenantId: ctx.tenantId,
+            memoryId: id,
+            kind: "purged",
+            actor,
+            digestSnapshot: current.digest,
+            meta: opts?.reason === undefined ? {} : { reason: opts.reason },
+          },
+        );
+        byId.set(id, memory);
+        outcomes.push({ memoryId: id, kind: "purged", previousStatus: "forgotten" });
+
+        // ADR 0124 決定5: ベストエフォート。失敗しても "purged" の判定は変えない
+        // ——MemoryStore 側の書き込みは既に確定しており、ここで "failed" に格下げすると
+        // 「安全に再試行できる」という failed/not_attempted の意味を裏切る。
+        try {
+          await deps.vectorStore.delete(ctx, deps.embeddingProvider.space, id);
+        } catch {
+          // 握り潰す。ADR 0124「引き受けた負債」参照。
+        }
+      } catch (error) {
+        if (error instanceof MemoryPurgeConflictError) {
+          // 安全弁（`forget`/`restoreArchived` と同じ形。1回だけ再読して打ち切る
+          // ——上限の無い再試行ループを作らない）。
+          const refetched = await deps.memoryStore.get(ctx, id);
+          if (refetched === null) {
+            outcomes.push({ memoryId: id, kind: "not_found" });
+          } else if ((refetched.purgedAt ?? null) !== null) {
+            byId.set(id, refetched);
+            outcomes.push({ memoryId: id, kind: "already_purged" });
+          } else if (refetched.status !== "forgotten") {
+            byId.set(id, refetched);
+            outcomes.push({
+              memoryId: id,
+              kind: "status_not_forgotten",
+              status: refetched.status as Exclude<MemoryStatus, "forgotten">,
+            });
+          } else {
+            // status === "forgotten" かつ purgedAt === null のまま——本 PR の時点では
+            // 到達しないはずの防御的な分岐（ADR 0124 決定2「並行呼び出し」参照）。
+            byId.set(id, refetched);
+            outcomes.push({
+              memoryId: id,
+              kind: "conflicted",
+              observedStatus: refetched.status,
+            });
+          }
+          continue;
+        }
+        // 競合以外の例外——打ち切って、残りは「見ていない」として返す（interface の
+        // doc コメント参照）。例外をここより外へは投げない。
+        outcomes.push({
+          memoryId: id,
+          kind: "failed",
+          error: error instanceof Error ? error.message : String(error),
+        });
+        for (let j = i + 1; j < ids.length; j += 1) {
+          outcomes.push({ memoryId: ids[j]!, kind: "not_attempted" });
+        }
+        return { supported: true, outcomes };
+      }
+    }
+
+    return { supported: true, outcomes };
+  }
+
+  /**
    * `Runtime.consolidate` の実装（Issue #103、ADR 0089）。doc コメントは interface 側
    * （`consolidate` の JSDoc）にある——ここはアルゴリズムそのものだけ。
    */
@@ -2343,6 +2633,7 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
     sweepArchive,
     restoreArchived,
     forget,
+    purge,
     consolidate,
     reflect,
   };

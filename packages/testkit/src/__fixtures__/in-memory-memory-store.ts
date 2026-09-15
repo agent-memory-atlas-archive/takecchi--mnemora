@@ -3,6 +3,7 @@ import {
   isEmbeddingStatusRollback,
   isStrengthInRange,
   MAX_STRENGTH,
+  MemoryPurgeConflictError,
   MemoryStatusConflictError,
   resolveIdempotentCreate,
 } from "@mnemora/core";
@@ -216,6 +217,7 @@ export class InMemoryMemoryStore implements MemoryStore {
         halfLifeHours: input.halfLifeHours,
         decayFloorAt: input.decayFloorAt,
         embeddingStatus: input.embeddingStatus,
+        purgedAt: input.purgedAt ?? null,
         createdAt: now,
         updatedAt: now,
       };
@@ -845,6 +847,35 @@ export class InMemoryMemoryStore implements MemoryStore {
       archived.push({ memoryId: memory.id, decayFloorAt: memory.decayFloorAt });
     }
     return { archived, reachedLimit: archived.length === opts.limit };
+  }
+
+  /**
+   * Issue #198 / ADR 0124: `forgotten` かつ未 purge（`purgedAt === null`）の Memory だけを
+   * 対象にした CAS——`content`/`digest` をトゥームストーンで上書きし `purgedAt` を設定した上で
+   * `kind: 'purged'` のイベントを積む。`status` は動かさない（`purged` は `status` の値では
+   * ない）。条件を満たさなければ {@link MemoryPurgeConflictError} を投げる（`updateStatus`/
+   * `updateStatusWithEvent` と同じ「まだ何も書いていないうちに判定する」作法）。
+   */
+  async purgeMemory(
+    ctx: Ctx,
+    id: MemoryId,
+    tombstone: { content: string; digest: string },
+    event: NewMemoryEvent,
+  ): Promise<{ memory: Memory; event: MemoryEvent }> {
+    const memory = await this.get(ctx, id);
+    if (!memory) {
+      throw new Error(`InMemoryMemoryStore: memory not found for tenant: ${id}`);
+    }
+    if (memory.status !== "forgotten" || (memory.purgedAt ?? null) !== null) {
+      throw new MemoryPurgeConflictError(id, memory.status, memory.purgedAt ?? null);
+    }
+    memory.content = tombstone.content;
+    memory.digest = tombstone.digest;
+    memory.purgedAt = new Date();
+    memory.updatedAt = new Date();
+    const storedEvent = buildStoredMemoryEvent(ctx, event);
+    this.events.push(storedEvent);
+    return { memory, event: storedEvent };
   }
 
   private extractionKey(

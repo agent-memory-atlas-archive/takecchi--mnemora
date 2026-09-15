@@ -86,6 +86,7 @@ export interface MemoryRow {
   half_life_hours: number;
   decay_floor_at: string;
   embedding_status: string;
+  purged_at: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -113,6 +114,7 @@ export function rowToMemory(row: MemoryRow): Memory {
     halfLifeHours: row.half_life_hours,
     decayFloorAt: parsePgTimestamp(row.decay_floor_at),
     embeddingStatus: row.embedding_status as EmbeddingStatus,
+    purgedAt: parsePgTimestamp(row.purged_at),
     createdAt: parsePgTimestamp(row.created_at),
     updatedAt: parsePgTimestamp(row.updated_at),
   };

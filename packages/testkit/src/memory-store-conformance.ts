@@ -10,7 +10,7 @@ import type {
   OutboxJobRecord,
   RecallId,
 } from "@mnemora/core";
-import { MemoryStatusConflictError } from "@mnemora/core";
+import { MemoryPurgeConflictError, MemoryStatusConflictError } from "@mnemora/core";
 import { buildNewMemoryFixture, buildNewObservationFixture } from "./test-data.js";
 
 /**
@@ -154,6 +154,21 @@ export interface MemoryStoreConformanceOptions {
    * ——`it.skip` にはしない。
    */
   supportsArchiveDecayed: boolean;
+  /**
+   * Issue #198 / ADR 0124: 対象の `MemoryStore` 実装が `purgeMemory`（任意メソッド）を
+   * 実装しているかどうか。**必須。**
+   *
+   * `supportsArchiveDecayed`/`supportsPurgeExpiredEvents` と同じ判断——省略可にしない。
+   * `true` なら契約の歯（`forgotten` かつ未 purge のみを対象にする、`content`/`digest`
+   * がトゥームストーンで上書きされ `purgedAt` が設定される、`status` は動かない、
+   * `active`/`archived`/`superseded`/`contested`/既に purge 済みは
+   * {@link MemoryPurgeConflictError} で弾かれる、対象が無ければ「memory not found」、
+   * `memory_events` に `kind='purged'` が1件だけ積まれ `digestSnapshot` が更新前の
+   * digest と一致する、テナント分離）を実行する。`false` なら
+   * `expect(store.purgeMemory).toBeUndefined()` を積極的に assert する
+   * ——`it.skip` にはしない。
+   */
+  supportsPurgeMemory: boolean;
 }
 
 /**
@@ -186,6 +201,7 @@ export function describeMemoryStoreConformance(options: MemoryStoreConformanceOp
     supportsPurgeExpiredEvents,
     listPurgedEvents,
     supportsArchiveDecayed,
+    supportsPurgeMemory,
   } = options;
 
   describe(`MemoryStore conformance (${name})`, () => {
@@ -2234,6 +2250,199 @@ export function describeMemoryStoreConformance(options: MemoryStoreConformanceOp
       it("archiveDecayed は任意メソッドであり、この adapter は実装していない", async () => {
         const store = await createStore();
         expect(store.archiveDecayed).toBeUndefined();
+      });
+    }
+
+    // -------------------------------------------------------------------
+    // purgeMemory（Issue #198 / ADR 0124: 物理削除、任意メソッド）
+    // -------------------------------------------------------------------
+
+    if (supportsPurgeMemory) {
+      it("purgeMemory は forgotten な Memory の content/digest をトゥームストーンで上書きし、purgedAt を設定し、status は動かさず、purged イベントを積む", async () => {
+        const store = await createStore();
+        const ctx: Ctx = { tenantId: "tenant-1" };
+        const memory = await store.createMemory(
+          ctx,
+          buildNewMemoryFixture({
+            tenantId: "tenant-1",
+            contentHash: "purge-memory-basic",
+            status: "forgotten",
+            content: "秘密の本文",
+            digest: "元の要旨",
+          }),
+        );
+
+        const { memory: returned, event } = await store.purgeMemory!(
+          ctx,
+          memory.id,
+          { content: "[purged]", digest: "[purged]" },
+          {
+            tenantId: "tenant-1",
+            memoryId: memory.id,
+            kind: "purged",
+            actor: { type: "system" },
+            digestSnapshot: memory.digest,
+            meta: {},
+          },
+        );
+
+        const after = await store.get(ctx, memory.id);
+        const events = await listEventsForMemory(ctx, memory.id);
+
+        expect({
+          returnedContent: returned.content,
+          returnedDigest: returned.digest,
+          returnedStatus: returned.status,
+          returnedPurgedAt: returned.purgedAt instanceof Date,
+          afterContent: after?.content,
+          afterDigest: after?.digest,
+          afterStatus: after?.status,
+          afterPurgedAt: after?.purgedAt instanceof Date,
+          eventKind: event.kind,
+          eventDigestSnapshot: event.digestSnapshot,
+          eventKinds: events.map((e) => e.kind),
+        }).toEqual({
+          returnedContent: "[purged]",
+          returnedDigest: "[purged]",
+          returnedStatus: "forgotten",
+          returnedPurgedAt: true,
+          afterContent: "[purged]",
+          afterDigest: "[purged]",
+          afterStatus: "forgotten",
+          afterPurgedAt: true,
+          eventKind: "purged",
+          eventDigestSnapshot: "元の要旨",
+          eventKinds: ["purged"],
+        });
+      });
+
+      it.each(["active", "archived", "superseded", "contested"] as const)(
+        "purgeMemory は status=%s な Memory を対象にしない（MemoryPurgeConflictError）",
+        async (status) => {
+          const store = await createStore();
+          const ctx: Ctx = { tenantId: "tenant-1" };
+          const memory = await store.createMemory(
+            ctx,
+            buildNewMemoryFixture({
+              tenantId: "tenant-1",
+              contentHash: `purge-memory-status-${status}`,
+              status,
+            }),
+          );
+
+          await expect(
+            store.purgeMemory!(
+              ctx,
+              memory.id,
+              { content: "[purged]", digest: "[purged]" },
+              {
+                tenantId: "tenant-1",
+                memoryId: memory.id,
+                kind: "purged",
+                actor: { type: "system" },
+                digestSnapshot: memory.digest,
+                meta: {},
+              },
+            ),
+          ).rejects.toThrow(MemoryPurgeConflictError);
+
+          const after = await store.get(ctx, memory.id);
+          expect(after?.status).toBe(status);
+          expect(after?.content).toBe(memory.content);
+        },
+      );
+
+      it("purgeMemory は既に purge 済みの Memory を対象にしない（MemoryPurgeConflictError、べき等性の要）", async () => {
+        const store = await createStore();
+        const ctx: Ctx = { tenantId: "tenant-1" };
+        const memory = await store.createMemory(
+          ctx,
+          buildNewMemoryFixture({
+            tenantId: "tenant-1",
+            contentHash: "purge-memory-already-purged",
+            status: "forgotten",
+          }),
+        );
+        const event: NewMemoryEvent = {
+          tenantId: "tenant-1",
+          memoryId: memory.id,
+          kind: "purged",
+          actor: { type: "system" },
+          digestSnapshot: memory.digest,
+          meta: {},
+        };
+        await store.purgeMemory!(
+          ctx,
+          memory.id,
+          { content: "[purged]", digest: "[purged]" },
+          event,
+        );
+
+        await expect(
+          store.purgeMemory!(ctx, memory.id, { content: "[purged]", digest: "[purged]" }, event),
+        ).rejects.toThrow(MemoryPurgeConflictError);
+
+        const events = await listEventsForMemory(ctx, memory.id);
+        expect(events.filter((e) => e.kind === "purged")).toHaveLength(1); // 2件目は積まれない
+      });
+
+      it("purgeMemory は対象が存在しなければ「memory not found」を投げる", async () => {
+        const store = await createStore();
+        const ctx: Ctx = { tenantId: "tenant-1" };
+
+        await expect(
+          store.purgeMemory!(
+            ctx,
+            NONEXISTENT_MEMORY_ID,
+            { content: "[purged]", digest: "[purged]" },
+            {
+              tenantId: "tenant-1",
+              memoryId: NONEXISTENT_MEMORY_ID,
+              kind: "purged",
+              actor: { type: "system" },
+              digestSnapshot: null,
+              meta: {},
+            },
+          ),
+        ).rejects.toThrow(/memory not found/);
+      });
+
+      it("purgeMemory は他テナントの Memory を対象にしない（memory not found）", async () => {
+        const store = await createStore();
+        const ctxA: Ctx = { tenantId: "tenant-a" };
+        const ctxB: Ctx = { tenantId: "tenant-b" };
+        const memoryA = await store.createMemory(
+          ctxA,
+          buildNewMemoryFixture({
+            tenantId: "tenant-a",
+            contentHash: "purge-memory-tenant-a",
+            status: "forgotten",
+          }),
+        );
+
+        await expect(
+          store.purgeMemory!(
+            ctxB,
+            memoryA.id,
+            { content: "[purged]", digest: "[purged]" },
+            {
+              tenantId: "tenant-b",
+              memoryId: memoryA.id,
+              kind: "purged",
+              actor: { type: "system" },
+              digestSnapshot: memoryA.digest,
+              meta: {},
+            },
+          ),
+        ).rejects.toThrow(/memory not found/);
+
+        const afterA = await store.get(ctxA, memoryA.id);
+        expect(afterA?.content).toBe(memoryA.content); // tenant-a 側は無傷
+      });
+    } else {
+      it("purgeMemory は任意メソッドであり、この adapter は実装していない", async () => {
+        const store = await createStore();
+        expect(store.purgeMemory).toBeUndefined();
       });
     }
 

@@ -19,6 +19,7 @@ import type { MemoryEvent, NewMemoryEvent, EventFilter } from "../event.js";
 import type { EventId } from "../ids.js";
 import {
   isEmbeddingStatusRollback,
+  MemoryPurgeConflictError,
   MemoryStatusConflictError,
 } from "../interfaces/memory-store.js";
 import type {
@@ -239,6 +240,7 @@ export class FakeMemoryStore implements MemoryStore {
         halfLifeHours: input.halfLifeHours,
         decayFloorAt: input.decayFloorAt,
         embeddingStatus: input.embeddingStatus,
+        purgedAt: input.purgedAt ?? null,
         createdAt: now,
         updatedAt: now,
       };
@@ -769,6 +771,35 @@ export class FakeMemoryStore implements MemoryStore {
       archived.push({ memoryId: memory.id, decayFloorAt: memory.decayFloorAt });
     }
     return { archived, reachedLimit: archived.length === opts.limit };
+  }
+
+  /**
+   * Issue #198 / ADR 0124: `forgotten` かつ未 purge（`purgedAt === null`）な Memory だけを
+   * 対象にした CAS。`beforeUpdateStatus`（テスト専用のフック）を CAS 判定の直前に発火する
+   * ——`updateStatus`/`updateStatusWithEvent` と同じ位置・同じ理由（`purge` の並行の歯も
+   * この既存のフックで決定的に再現する）。
+   */
+  async purgeMemory(
+    ctx: Ctx,
+    id: MemoryId,
+    tombstone: { content: string; digest: string },
+    event: NewMemoryEvent,
+  ): Promise<{ memory: Memory; event: MemoryEvent }> {
+    this.beforeUpdateStatus?.(id);
+    const memory = await this.get(ctx, id);
+    if (!memory) {
+      throw new Error(`FakeMemoryStore: memory not found for tenant: ${id}`);
+    }
+    if (memory.status !== "forgotten" || (memory.purgedAt ?? null) !== null) {
+      throw new MemoryPurgeConflictError(id, memory.status, memory.purgedAt ?? null);
+    }
+    memory.content = tombstone.content;
+    memory.digest = tombstone.digest;
+    memory.purgedAt = new Date();
+    memory.updatedAt = new Date();
+    const storedEvent = buildStoredEvent(ctx, event);
+    this.backing.events.push(storedEvent);
+    return { memory, event: storedEvent };
   }
 }
 

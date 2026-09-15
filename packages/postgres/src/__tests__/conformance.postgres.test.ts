@@ -77,6 +77,8 @@ describeMemoryStoreConformance({
   },
   // ADR 0114: PostgresMemoryStore は archiveDecayed を実装している。
   supportsArchiveDecayed: true,
+  // Issue #198 / ADR 0124: PostgresMemoryStore は purgeMemory を実装している。
+  supportsPurgeMemory: true,
 });
 
 describeEventStoreConformance({
