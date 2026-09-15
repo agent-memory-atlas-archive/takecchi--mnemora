@@ -1,7 +1,10 @@
 #!/usr/bin/env node
 import { writeFileSync } from "node:fs";
-import { heuristicTokenCounter } from "@mnemora/core";
+import { DEFAULT_RECALL_LIMIT, heuristicTokenCounter } from "@mnemora/core";
 import { CassetteRecorder } from "@mnemora/testkit";
+import { runAssociationArm } from "./association-arm.js";
+import { formatAssociationProbeRunReport } from "./association-format.js";
+import { buildAssociationProbeRunJson } from "./association-json.js";
 import type { CassetteTarget } from "./cassette-io.js";
 import {
   cassetteExists,
@@ -1000,6 +1003,137 @@ async function runIdentifierProbes(): Promise<void> {
 }
 
 /**
+ * `association-probes` サブコマンド(連想枠、ADR 0151、Issue #291)。
+ *
+ * **`identifier-probes` と同じ provider の組み合わせ**(`deterministic` LLM +
+ * `local` 埋め込み。鍵・カセット不要)——差は probe set と arm(`./association-arm.js`)。
+ *
+ * **同じ会話を、別テナントへ4回 ingest する**(`off` / `on(maxCount=3)` /
+ * `on(maxCount=5)` / `on(maxCount=10)`)。`maxCount=10` は、CI 実測(commit `4362333`)で
+ * `returnedCount` が全 probe で「10 + maxCount」ちょうどになっていた
+ * (連想枠が常に満杯)ことを受け、「gold は枠のすぐ下に居て `maxCount` を増やせば
+ * 届くのか、それとも枠を広げても届かないのか」を切り分けるために足した(Issue #291
+ * フォローアップ)。arm 間の汚染を断つため、テナントは `buildArmTenantId` で
+ * 必ず別々にする(`retrieval-quality.ts` の先例と同じ理由)。
+ *
+ * **`warmup()` を明示的に呼び、失敗を区別する**(`identifier-probes` と同じ理由)。
+ * `ok: false` なら、メトリクスを1つも出さずに打ち切る——この bench の
+ * `AssociationProbeRunJson`(`./association-json.js`)は4 arm・3 delta を持つ形で
+ * 確定しており、「一部だけ測れた」を表す枠が無い。⟹ 失敗時は JSON も書かない
+ * (打ち切ったことは標準エラー出力と `process.exitCode` で伝える)。
+ */
+async function runAssociationProbes(): Promise<void> {
+  const databaseUrl = requireDatabaseUrl();
+  const runToken = newRunToken();
+  const measuredAt = new Date();
+  const commit = tryGitRevParseHead(process.cwd());
+
+  const handle = await createExampleRuntime(databaseUrl, {
+    ...process.env,
+    MNEMORA_LLM: "deterministic",
+    MNEMORA_EMBEDDING: "local",
+  });
+  printProviderMode(handle.llmMode, handle.embeddingMode);
+
+  try {
+    console.log(
+      "\n[association-probes] warmup() でモデルの読み込みを先に済ませる" +
+        "(取得に失敗したら、ここでメトリクスを出さずに打ち切る)…",
+    );
+    const warmup = await warmupLocalEmbedding(handle.embeddingProvider);
+    if (!warmup.ok) {
+      console.error(`\n🔴 ${warmup.detail}`);
+      console.error(
+        "  メトリクスは1件も測っていない(前回の値・既定値・0 へは倒さない)。" +
+          "ネットワーク・Hugging Face repo の状態を確認し、再実行すること。",
+      );
+      process.exitCode = 1;
+      return;
+    }
+    console.log(`  ${warmup.detail}`);
+
+    const embeddingSpace = handle.embeddingProvider.space;
+    console.log(
+      `[association-probes] embedding space: provider=${embeddingSpace.provider} ` +
+        `model=${embeddingSpace.model} dimensions=${embeddingSpace.dimensions}`,
+    );
+
+    console.log("\n=== arm: off(連想枠なし、既定の recall) ===");
+    const offReport = await runAssociationArm({
+      armLabel: `off: 連想枠なし（既定の recall）(llm=${handle.llmMode}, embedding=${handle.embeddingMode}/${embeddingSpace.model}/${embeddingSpace.dimensions}次元)`,
+      tenantId: buildArmTenantId("assoc-off", runToken),
+      runtime: handle.runtime,
+      memoryStore: handle.memoryStore,
+    });
+    console.log(
+      `  goldReturned=${offReport.goldReturnedCount}/${offReport.probeCount} MRR=${offReport.mrr.toFixed(3)}`,
+    );
+
+    console.log("\n=== arm: on(連想枠あり、maxCount=3) ===");
+    const on3Report = await runAssociationArm({
+      armLabel: `on: 連想枠あり（maxCount=3）(llm=${handle.llmMode}, embedding=${handle.embeddingMode}/${embeddingSpace.model}/${embeddingSpace.dimensions}次元)`,
+      tenantId: buildArmTenantId("assoc-on3", runToken),
+      runtime: handle.runtime,
+      memoryStore: handle.memoryStore,
+      association: { maxCount: 3 },
+    });
+    console.log(
+      `  goldReturned=${on3Report.goldReturnedCount}/${on3Report.probeCount} MRR=${on3Report.mrr.toFixed(3)}`,
+    );
+
+    console.log("\n=== arm: on(連想枠あり、maxCount=5) ===");
+    const on5Report = await runAssociationArm({
+      armLabel: `on: 連想枠あり（maxCount=5）(llm=${handle.llmMode}, embedding=${handle.embeddingMode}/${embeddingSpace.model}/${embeddingSpace.dimensions}次元)`,
+      tenantId: buildArmTenantId("assoc-on5", runToken),
+      runtime: handle.runtime,
+      memoryStore: handle.memoryStore,
+      association: { maxCount: 5 },
+    });
+    console.log(
+      `  goldReturned=${on5Report.goldReturnedCount}/${on5Report.probeCount} MRR=${on5Report.mrr.toFixed(3)}`,
+    );
+
+    console.log("\n=== arm: on(連想枠あり、maxCount=10) ===");
+    const on10Report = await runAssociationArm({
+      armLabel: `on: 連想枠あり（maxCount=10）(llm=${handle.llmMode}, embedding=${handle.embeddingMode}/${embeddingSpace.model}/${embeddingSpace.dimensions}次元)`,
+      tenantId: buildArmTenantId("assoc-on10", runToken),
+      runtime: handle.runtime,
+      memoryStore: handle.memoryStore,
+      association: { maxCount: 10 },
+    });
+    console.log(
+      `  goldReturned=${on10Report.goldReturnedCount}/${on10Report.probeCount} MRR=${on10Report.mrr.toFixed(3)}`,
+    );
+
+    const json = buildAssociationProbeRunJson({
+      offReport,
+      on3Report,
+      on5Report,
+      on10Report,
+      embeddingSpace,
+      recallLimit: DEFAULT_RECALL_LIMIT,
+      warmup,
+      measuredAt,
+      commit,
+    });
+
+    console.log(`\n${formatAssociationProbeRunReport(json)}`);
+    console.log(
+      `\n(注) ADR 0033 §3: 標本${offReport.probeCount}件からは統計的に主張しない。` +
+        "ここで言えるのは「今回、この母数のうち何件・何文字だったか」までである。",
+    );
+
+    const jsonPath = process.env.MNEMORA_ASSOCIATION_JSON;
+    if (jsonPath) {
+      writeFileSync(jsonPath, `${JSON.stringify(json, null, 2)}\n`, "utf-8");
+      console.log(`\n[association-probes] 機械可読な結果を書き出した: ${jsonPath}`);
+    }
+  } finally {
+    await handle.close();
+  }
+}
+
+/**
  * `consolidation-cost` サブコマンド(Issue #136)。
  *
  * **なぜ `deterministic` LLM + `local` embedding か**（仕様書「使う provider 層」節）:
@@ -1182,6 +1316,9 @@ function printHelp(): void {
       "  DATABASE_URL=... pnpm --filter @mnemora/example-chat run identifier-probes",
       "                                                                      # ASCII識別子・固有名詞を含む probe(Issue #109)を@mnemora/local-embeddingで測る",
       "                                                                      #   鍵・カセット不要。日本語意味probe7件・識別子probe30件(sparse/dense haystack)を別々に集計する",
+      "  DATABASE_URL=... pnpm --filter @mnemora/example-chat run association-probes",
+      "                                                                      # 連想枠(段3.5、ADR 0151、Issue #291)が想起の質を動かすかを、off/on(maxCount=3)/on(maxCount=5)の3armで比較",
+      "                                                                      #   鍵・カセット不要(deterministic LLM + local embedding)。MNEMORA_ASSOCIATION_JSON で機械可読出力",
       "  DATABASE_URL=... pnpm --filter @mnemora/example-chat run consolidation-cost",
       "                                                                      # Runtime.consolidate() の統合が「載る量」をどう動かすかをラウンド制で実測する(Issue #136)",
       "                                                                      #   鍵・カセット不要(deterministic LLM + local embedding)。MNEMORA_CONSOLIDATION_JSON で機械可読出力",
@@ -1220,6 +1357,8 @@ async function main(): Promise<void> {
     await runTimeTerm();
   } else if (command === "identifier-probes") {
     await runIdentifierProbes();
+  } else if (command === "association-probes") {
+    await runAssociationProbes();
   } else if (command === "consolidation-cost") {
     await runConsolidationCostCommand();
   } else if (command === "archive-sweep-cost") {

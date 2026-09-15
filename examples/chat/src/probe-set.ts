@@ -202,14 +202,21 @@ export function findTopicKeywordViolations(utterances: readonly string[]): Topic
 // 会話の組み立て — PR 本文 (C).2・(C).3
 // ---------------------------------------------------------------------------
 
-export type ProbeUtteranceKind = "gold" | "distractor" | "haystack";
+/**
+ * `"anchor"` は Issue #291（連想枠、ADR 0151）の probe set（`./association-probe-set.js`）が
+ * 使う。**この値を足したことは、既存の呼び出し(`./probe-set.js` 自身・`./identifier-probe-
+ * set.js`・`./japanese-name-probe-set.js`)の挙動を1バイトも変えない**——どの集合も
+ * `kind: "anchor"` を1件も生成しておらず、`ProbeUtteranceKind` は網羅的な `switch` の
+ * 対象になっていない(このファイルにも呼び出し側にも `switch (u.kind)` は無い)。
+ */
+export type ProbeUtteranceKind = "gold" | "distractor" | "haystack" | "anchor";
 
 export interface ProbeUtterance {
   /** observe() に渡す一意な externalId(PR 本文 (C).3)。返ってきた記憶の系譜を辿る鍵。 */
   externalId: string;
   text: string;
   kind: ProbeUtteranceKind;
-  /** gold/distractor のみ。どの probe に属するか。 */
+  /** gold/distractor/anchor のみ。どの probe に属するか。 */
   probeId?: string;
 }
 
