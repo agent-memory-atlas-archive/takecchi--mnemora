@@ -160,9 +160,26 @@ async function insertManyMemories(
   statuses: MemoryStatus[],
   pool: Pool,
 ) {
+  // ADR 0140: `createMemory` は `status: 'contested'` を `contestedWithId` 無しでは
+  // 作れない（`ContestedWithoutCompanionError`）。この歯の主題は段1のゲート述語が
+  // 拾う status の集合であって contested の一対一ではないので、対向として使うだけの
+  // companion を1件だけ先に作る（companion 自身は active——ゲートの述語にはどのみち
+  // 入る値であり、この歯が見る「has('active')」「has('contested')」の判定にも
+  // 3経路（natural/btree/seqscan）の一致判定にも影響しない）。
+  const contestedCompanion = await store.createMemory(
+    ctx,
+    buildNewMemoryFixture({ tenantId: ctx.tenantId }),
+  );
   for (let i = 0; i < ROW_COUNT; i += 1) {
     const status = statuses[i % statuses.length]!;
-    await store.createMemory(ctx, buildNewMemoryFixture({ tenantId: ctx.tenantId, status }));
+    await store.createMemory(
+      ctx,
+      buildNewMemoryFixture({
+        tenantId: ctx.tenantId,
+        status,
+        contestedWithId: status === "contested" ? contestedCompanion.id : undefined,
+      }),
+    );
   }
   // 統計情報が無いと、プランナが誤った行数見積もりで無関係な索引を選んでしまう
   // （実測: ANALYZE 無しでは idx_memories_provenance_kind が選ばれることがあった）。

@@ -10,7 +10,11 @@ import type {
   OutboxJobRecord,
   RecallId,
 } from "@mnemora/core";
-import { MemoryPurgeConflictError, MemoryStatusConflictError } from "@mnemora/core";
+import {
+  ContestedWithoutCompanionError,
+  MemoryPurgeConflictError,
+  MemoryStatusConflictError,
+} from "@mnemora/core";
 import { buildNewMemoryFixture, buildNewObservationFixture } from "./test-data.js";
 
 /**
@@ -2164,6 +2168,21 @@ export function describeMemoryStoreConformance(options: MemoryStoreConformanceOp
         const now = new Date("2026-06-01T00:00:00.000Z");
         const past = new Date(now.getTime() - 1_000);
         const statuses = ["contested", "superseded", "forgotten", "archived"] as const;
+        // ADR 0140: status='contested' は contestedWithId 無しでは作れない。この歯の
+        // 主題は archiveDecayed の status ゲートであって contested の一対一ではないので、
+        // 対向として使うだけの companion を先に作る。**decayFloorAt を `now` より先に
+        // 置く**——既定の fixture の decayFloorAt は `past` より古く、companion が active の
+        // ままだと archiveDecayed 自身の対象に紛れ込み、この歯が検査したい「対象が
+        // ちょうど4件（各 status に1件ずつ）」という前提を壊す。
+        const future = new Date(now.getTime() + 1_000);
+        const contestedCompanion = await store.createMemory(
+          ctx,
+          buildNewMemoryFixture({
+            tenantId: "tenant-1",
+            contentHash: "archive-decayed-contested-companion",
+            decayFloorAt: future,
+          }),
+        );
 
         const created = [];
         for (const [i, status] of statuses.entries()) {
@@ -2174,6 +2193,7 @@ export function describeMemoryStoreConformance(options: MemoryStoreConformanceOp
                 tenantId: "tenant-1",
                 contentHash: `archive-decayed-status-${i}`,
                 status,
+                contestedWithId: status === "contested" ? contestedCompanion.id : undefined,
                 decayFloorAt: past,
               }),
             ),
@@ -2393,12 +2413,26 @@ export function describeMemoryStoreConformance(options: MemoryStoreConformanceOp
         async (status) => {
           const store = await createStore();
           const ctx: Ctx = { tenantId: "tenant-1" };
+          // ADR 0140: status='contested' は contestedWithId 無しでは作れない。この歯の
+          // 主題は purgeMemory の CAS であって contested の一対一ではないので、
+          // 対向として使うだけの companion を必要な場合にだけ用意する。
+          const companion =
+            status === "contested"
+              ? await store.createMemory(
+                  ctx,
+                  buildNewMemoryFixture({
+                    tenantId: "tenant-1",
+                    contentHash: `purge-memory-status-${status}-companion`,
+                  }),
+                )
+              : undefined;
           const memory = await store.createMemory(
             ctx,
             buildNewMemoryFixture({
               tenantId: "tenant-1",
               contentHash: `purge-memory-status-${status}`,
               status,
+              contestedWithId: companion?.id,
             }),
           );
 
@@ -2519,6 +2553,179 @@ export function describeMemoryStoreConformance(options: MemoryStoreConformanceOp
     }
 
     // -------------------------------------------------------------------
+    // ADR 0140（Issue #243 続き・ADR 0136 決定3の実装）:
+    // `status: 'contested'` を対向（`contestedWithId`）無しで書くことを、書き込み側で
+    // 拒否する。`updateStatus`/`updateStatusWithEvent` には `contestedWithId` を渡す
+    // 引数がそもそも無いため、この2メソッドは status='contested' を対象にした呼び出しを
+    // **常に**拒否する。`createMemory`/`createMemoryWithOutbox`/`supersedeWithNewMemories`
+    // （`news` 側）は `contestedWithId` が `null`/`undefined` のときにだけ拒否する——
+    // 対向を明示した作成（既存 Memory を指す `contestedWithId` 付き）は引き続き許される。
+    // -------------------------------------------------------------------
+
+    it("createMemory は status='contested' かつ contestedWithId 無し を ContestedWithoutCompanionError で拒否する（何も書かれない）", async () => {
+      const store = await createStore();
+      const ctx: Ctx = { tenantId: "tenant-1" };
+
+      await expect(
+        store.createMemory(
+          ctx,
+          buildNewMemoryFixture({
+            tenantId: "tenant-1",
+            status: "contested",
+            contentHash: "lone-contested-create",
+          }),
+        ),
+      ).rejects.toBeInstanceOf(ContestedWithoutCompanionError);
+
+      // 何も書かれていないことを、別クエリ（aggregateScope）で確かめる——例外の型だけでなく
+      // 副作用の不在まで見る。
+      const aggregate = await store.aggregateScope(ctx, {});
+      expect(aggregate.totalInScope).toBe(0);
+    });
+
+    it("createMemory は status='contested' かつ contestedWithId が既存 Memory を指すなら受け付ける", async () => {
+      const store = await createStore();
+      const ctx: Ctx = { tenantId: "tenant-1" };
+      const companion = await store.createMemory(
+        ctx,
+        buildNewMemoryFixture({ tenantId: "tenant-1", contentHash: "companion-for-create-ok" }),
+      );
+
+      const memory = await store.createMemory(
+        ctx,
+        buildNewMemoryFixture({
+          tenantId: "tenant-1",
+          status: "contested",
+          contestedWithId: companion.id,
+          contentHash: "contested-with-companion",
+        }),
+      );
+
+      expect(memory.status).toBe("contested");
+      expect(memory.contestedWithId).toBe(companion.id);
+    });
+
+    it("createMemoryWithOutbox は status='contested' かつ contestedWithId 無し を ContestedWithoutCompanionError で拒否する（jobs も積まれない）", async () => {
+      const store = await createStore();
+      const ctx: Ctx = { tenantId: "tenant-1" };
+
+      await expect(
+        store.createMemoryWithOutbox(
+          ctx,
+          buildNewMemoryFixture({
+            tenantId: "tenant-1",
+            status: "contested",
+            contentHash: "lone-contested-create-outbox",
+          }),
+          ["embed"],
+        ),
+      ).rejects.toBeInstanceOf(ContestedWithoutCompanionError);
+
+      const aggregate = await store.aggregateScope(ctx, {});
+      expect(aggregate.totalInScope).toBe(0);
+    });
+
+    it("updateStatus は status='contested' への書き込みを常に ContestedWithoutCompanionError で拒否する（対象は無傷）", async () => {
+      const store = await createStore();
+      const ctx: Ctx = { tenantId: "tenant-1" };
+      const memory = await store.createMemory(
+        ctx,
+        buildNewMemoryFixture({ tenantId: "tenant-1", contentHash: "update-status-contested" }),
+      );
+
+      await expect(store.updateStatus(ctx, memory.id, "contested")).rejects.toBeInstanceOf(
+        ContestedWithoutCompanionError,
+      );
+
+      const after = await store.get(ctx, memory.id);
+      expect(after?.status).toBe("active"); // 無傷
+      expect(after?.contestedWithId ?? null).toBeNull();
+    });
+
+    it("updateStatusWithEvent は status='contested' への書き込みを常に ContestedWithoutCompanionError で拒否し、イベントも1件も積まれない", async () => {
+      const store = await createStore();
+      const ctx: Ctx = { tenantId: "tenant-1" };
+      const memory = await store.createMemory(
+        ctx,
+        buildNewMemoryFixture({
+          tenantId: "tenant-1",
+          contentHash: "update-status-with-event-contested",
+        }),
+      );
+
+      await expect(
+        store.updateStatusWithEvent(
+          ctx,
+          memory.id,
+          "contested",
+          {},
+          buildSupersedeEvent(ctx, memory.id, memory.digest),
+        ),
+      ).rejects.toBeInstanceOf(ContestedWithoutCompanionError);
+
+      const after = await store.get(ctx, memory.id);
+      expect(after?.status).toBe("active"); // 無傷
+      const events = await listEventsForMemory(ctx, memory.id);
+      expect(events).toHaveLength(0);
+    });
+
+    if (supportsSupersedeWithNewMemories) {
+      it("supersedeWithNewMemories は news のいずれかが status='contested' かつ contestedWithId 無し なら ContestedWithoutCompanionError で拒否し、news も supersede も一切起きない", async () => {
+        const store = await createStore();
+        const ctx: Ctx = { tenantId: "tenant-1" };
+        const oldMemory = await store.createMemory(
+          ctx,
+          buildNewMemoryFixture({
+            tenantId: "tenant-1",
+            contentHash: "supersede-guard-old",
+          }),
+        );
+
+        await expect(
+          store.supersedeWithNewMemories!(
+            ctx,
+            [
+              // 🔴 先に有効な news を1件置く——違反する要素（index 1）へ到達する前に
+              // 有効な要素（index 0）が書き込まれてしまう実装（事前検査を素通りし、
+              // ループの途中で初めて落ちる）を、この順序でなければ見逃す。
+              {
+                input: buildNewMemoryFixture({
+                  tenantId: "tenant-1",
+                  contentHash: "supersede-guard-valid-news",
+                }),
+                jobKinds: [],
+              },
+              {
+                input: buildNewMemoryFixture({
+                  tenantId: "tenant-1",
+                  status: "contested",
+                  contentHash: "supersede-guard-lone-contested",
+                }),
+                jobKinds: [],
+              },
+            ],
+            [
+              {
+                id: oldMemory.id,
+                supersededByIndex: 0,
+                expectedStatus: "active",
+                event: buildSupersedeEvent(ctx, oldMemory.id, oldMemory.digest),
+              },
+            ],
+          ),
+        ).rejects.toBeInstanceOf(ContestedWithoutCompanionError);
+
+        // supersede 対象も無傷（ロールバック済みと同じに見える）。
+        const afterOld = await store.get(ctx, oldMemory.id);
+        expect(afterOld?.status).toBe("active");
+        // news 側（有効だった index 0 も含めて）も一切作られていない——事前検査が
+        // 全要素を見てから初めて書き込みを始めることの歯。
+        const aggregate = await store.aggregateScope(ctx, {});
+        expect(aggregate.totalInScope).toBe(1); // oldMemory だけ
+      });
+    }
+
+    // -------------------------------------------------------------------
     // markContestedPair（Issue #197 / ADR 0134: 矛盾の検出・明示的操作、任意メソッド）
     // -------------------------------------------------------------------
 
@@ -2628,12 +2835,27 @@ export function describeMemoryStoreConformance(options: MemoryStoreConformanceOp
               contentHash: `mark-contested-status-active-${status}`,
             }),
           );
+          // ADR 0140: status='contested' は contestedWithId 無しでは作れない。この歯の
+          // 主題は markContestedPair の CAS（対象が active でない）であって contested の
+          // 一対一ではないので、対向として使うだけの第三の companion を必要な場合にだけ
+          // 用意する（a・b とは無関係——a・b 自体のペア構成をこの companion で乱さない）。
+          const bContestedCompanion =
+            status === "contested"
+              ? await store.createMemory(
+                  ctx,
+                  buildNewMemoryFixture({
+                    tenantId: "tenant-1",
+                    contentHash: `mark-contested-status-other-${status}-companion`,
+                  }),
+                )
+              : undefined;
           const b = await store.createMemory(
             ctx,
             buildNewMemoryFixture({
               tenantId: "tenant-1",
               contentHash: `mark-contested-status-other-${status}`,
               status,
+              contestedWithId: bContestedCompanion?.id,
             }),
           );
           const event = (memoryId: MemoryId): NewMemoryEvent => ({
@@ -2944,13 +3166,28 @@ export function describeMemoryStoreConformance(options: MemoryStoreConformanceOp
     it("aggregateScope は status='contested' を totalInScope に含める（段1と同じゲート）", async () => {
       const store = await createStore();
       const ctx: Ctx = { tenantId: "tenant-1" };
+      // ADR 0140: `status: 'contested'` は `contestedWithId` 無しでは作れない
+      // （`ContestedWithoutCompanionError`）。この歯の主題は aggregateScope の
+      // ゲートであって contested の一対一ではないので、対向として使うだけの
+      // companion を先に作る（companion 自身も active として totalInScope に入る）。
+      const companion = await store.createMemory(
+        ctx,
+        buildNewMemoryFixture({ tenantId: "tenant-1", contentHash: "contested-scope-companion" }),
+      );
       await store.createMemory(
         ctx,
-        buildNewMemoryFixture({ tenantId: "tenant-1", status: "contested" }),
+        buildNewMemoryFixture({
+          tenantId: "tenant-1",
+          status: "contested",
+          contestedWithId: companion.id,
+          contentHash: "contested-scope-subject",
+        }),
       );
 
       const aggregate = await store.aggregateScope(ctx, {});
-      expect(aggregate.totalInScope).toBe(1);
+      // companion（active）+ 本体（contested）の2件とも status IN ('active','contested') の
+      // ゲートに入る。
+      expect(aggregate.totalInScope).toBe(2);
     });
 
     it("aggregateScope は occurredAfter の外にある Memory を filteredPeriod に計上し、totalInScope から除く", async () => {

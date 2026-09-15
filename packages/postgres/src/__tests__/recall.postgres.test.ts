@@ -440,15 +440,43 @@ describe("runtime.recall() — 本物の Postgres + pgvector（roadmap.md 段階
     const { runtime, memoryStore, vectorStore } = await buildTestRuntime();
     const ctx: Ctx = { tenantId: TENANT };
 
+    // ADR 0140（Issue #243続き）: `createMemory` は `status: 'contested'` を
+    // `contestedWithId` 無しでは作れなくなった（`ContestedWithoutCompanionError`）。
+    // `status: 'contested'` を正しく（両側 CAS・相互参照・同一トランザクション）書く
+    // 唯一の口は `markContestedPair`（ADR 0134）——まず両方を active で作り、
+    // それから相互に contested へ倒す。
     const b = await memoryStore.createMemory(
       ctx,
-      buildNewMemoryFixture({ tenantId: TENANT, status: "contested", digest: "B".repeat(30) }),
+      buildNewMemoryFixture({ tenantId: TENANT, digest: "B".repeat(30) }),
     );
     const a = await createEmbeddedMemory(memoryStore, vectorStore, ctx, [1, 0, 0], {
-      status: "contested",
-      contestedWithId: b.id,
       digest: "A".repeat(5),
     });
+    await memoryStore.markContestedPair!(
+      ctx,
+      {
+        id: a.id,
+        event: {
+          tenantId: TENANT,
+          memoryId: a.id,
+          kind: "updated",
+          actor: { type: "system" },
+          digestSnapshot: a.digest,
+          meta: { reason: "contested" },
+        },
+      },
+      {
+        id: b.id,
+        event: {
+          tenantId: TENANT,
+          memoryId: b.id,
+          kind: "updated",
+          actor: { type: "system" },
+          digestSnapshot: b.digest,
+          meta: { reason: "contested" },
+        },
+      },
+    );
 
     const withoutBudget = await runtime.recall(ctx, { vector: [1, 0, 0] });
     const withoutBudgetIds = withoutBudget.memories.map((m) => m.memoryId);

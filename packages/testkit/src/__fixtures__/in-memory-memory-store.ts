@@ -1,5 +1,7 @@
 import {
+  ContestedWithoutCompanionError,
   defaultDecayStrategy,
+  isContestedWithoutCompanion,
   isEmbeddingStatusRollback,
   isHalfLifeHoursInRange,
   isStrengthInRange,
@@ -154,7 +156,16 @@ export class InMemoryMemoryStore implements MemoryStore {
    * ADR 0054: 冪等キーの判定と挿入を1つの同期区間に閉じ、`created` をその判定そのものから
    * 出す（`createObservationIdempotent` と同じ理由）。
    */
-  private createMemoryIdempotent(ctx: Ctx, input: NewMemory): IdempotentCreateResult<Memory> {
+  private createMemoryIdempotent(
+    ctx: Ctx,
+    input: NewMemory,
+    method: "createMemory" | "createMemoryWithOutbox" = "createMemory",
+  ): IdempotentCreateResult<Memory> {
+    // ADR 0140: createMemory/createMemoryWithOutbox 共通の入口。PostgresMemoryStore の
+    // createMemory と同じ位置（何も書く前）で落とす——冪等衝突の判定より前に見る。
+    if (isContestedWithoutCompanion(input.status, input.contestedWithId)) {
+      throw new ContestedWithoutCompanionError(method, null);
+    }
     const idemKey = this.extractionKey(
       ctx.tenantId,
       input.sourceObservationId ?? null,
@@ -248,7 +259,11 @@ export class InMemoryMemoryStore implements MemoryStore {
     input: NewMemory,
     jobKinds: OutboxJobKind[],
   ): Promise<{ memory: Memory; created: boolean; jobs: OutboxJobRecord[] }> {
-    const { value: memory, created } = this.createMemoryIdempotent(ctx, input);
+    const { value: memory, created } = this.createMemoryIdempotent(
+      ctx,
+      input,
+      "createMemoryWithOutbox",
+    );
     if (!created) {
       return { memory, created: false, jobs: [] };
     }
@@ -325,6 +340,12 @@ export class InMemoryMemoryStore implements MemoryStore {
     status: MemoryStatus,
     opts?: { supersededById?: MemoryId; expectedStatus?: MemoryStatus },
   ): Promise<Memory> {
+    // ADR 0140: この口には contestedWithId を渡す引数が無いため、status: 'contested' への
+    // 書き込みは常に単独になる。PostgresMemoryStore と同じ位置（対象の存在確認より前）で
+    // 落とす。
+    if (status === "contested") {
+      throw new ContestedWithoutCompanionError("updateStatus", id);
+    }
     const memory = await this.get(ctx, id);
     if (!memory) {
       throw new Error(`InMemoryMemoryStore: memory not found for tenant: ${id}`);
@@ -359,6 +380,10 @@ export class InMemoryMemoryStore implements MemoryStore {
     opts: { supersededById?: MemoryId; expectedStatus?: MemoryStatus },
     event: NewMemoryEvent,
   ): Promise<{ memory: Memory; event: MemoryEvent }> {
+    // ADR 0140: updateStatus と同じ理由・同じ位置。
+    if (status === "contested") {
+      throw new ContestedWithoutCompanionError("updateStatusWithEvent", id);
+    }
     const memory = await this.get(ctx, id);
     if (!memory) {
       throw new Error(`InMemoryMemoryStore: memory not found for tenant: ${id}`);
@@ -442,6 +467,12 @@ export class InMemoryMemoryStore implements MemoryStore {
       const memory = this.memories.get(target.id);
       if (!memory || memory.tenantId !== ctx.tenantId) {
         throw new Error(`InMemoryMemoryStore: memory not found for tenant: ${target.id}`);
+      }
+    }
+    // 1c. ADR 0140: news の各要素にも createMemory と同じ制約を課す。
+    for (const { input } of news) {
+      if (isContestedWithoutCompanion(input.status, input.contestedWithId)) {
+        throw new ContestedWithoutCompanionError("supersedeWithNewMemories", null);
       }
     }
 

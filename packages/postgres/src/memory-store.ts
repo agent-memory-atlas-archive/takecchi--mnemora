@@ -2,7 +2,9 @@ import { sql } from "drizzle-orm";
 import type { SQL } from "drizzle-orm";
 import { defaultDecayStrategy } from "@mnemora/core";
 import {
+  ContestedWithoutCompanionError,
   EMBEDDING_STATUS_ROLLBACK,
+  isContestedWithoutCompanion,
   MemoryPurgeConflictError,
   MemoryStatusConflictError,
 } from "@mnemora/core";
@@ -172,6 +174,10 @@ export class PostgresMemoryStore implements MemoryStore {
   }
 
   async createMemory(ctx: Ctx, input: NewMemory): Promise<Memory> {
+    // ADR 0140: DB へ1バイトも書く前に落とす（`supersededByIndex` の範囲検査と同じ位置）。
+    if (isContestedWithoutCompanion(input.status, input.contestedWithId)) {
+      throw new ContestedWithoutCompanionError("createMemory", null);
+    }
     const sourceObservationId = input.sourceObservationId ?? null;
     const extractorVersion = input.extractorVersion ?? null;
     const provenanceKind = input.provenance.kind;
@@ -231,6 +237,10 @@ export class PostgresMemoryStore implements MemoryStore {
     input: NewMemory,
     jobKinds: OutboxJobKind[],
   ): Promise<{ memory: Memory; created: boolean; jobs: OutboxJobRecord[] }> {
+    // ADR 0140: トランザクションを開く前に落とす（`createMemory` と同じ位置・同じ理由）。
+    if (isContestedWithoutCompanion(input.status, input.contestedWithId)) {
+      throw new ContestedWithoutCompanionError("createMemoryWithOutbox", null);
+    }
     const sourceObservationId = input.sourceObservationId ?? null;
     const extractorVersion = input.extractorVersion ?? null;
     const provenanceKind = input.provenance.kind;
@@ -375,6 +385,11 @@ export class PostgresMemoryStore implements MemoryStore {
     status: MemoryStatus,
     opts?: { supersededById?: MemoryId; expectedStatus?: MemoryStatus },
   ): Promise<Memory> {
+    // ADR 0140: この口には contestedWithId を渡す引数が無いため、status: 'contested' への
+    // 書き込みは常に単独になる。UPDATE を投げる前に落とす。
+    if (status === "contested") {
+      throw new ContestedWithoutCompanionError("updateStatus", id);
+    }
     // id 列は uuid 型。この口の契約は「無い == 例外」なので、形式が壊れた入力も
     // クエリを投げる前に同じ「memory not found」の Error へ寄せる——ドライバの
     // invalid input syntax for type uuid を呼び出し側に漏らさない
@@ -432,6 +447,11 @@ export class PostgresMemoryStore implements MemoryStore {
     opts: { supersededById?: MemoryId; expectedStatus?: MemoryStatus },
     event: NewMemoryEvent,
   ): Promise<{ memory: Memory; event: MemoryEvent }> {
+    // ADR 0140: updateStatus と同じ理由（contestedWithId を渡す引数が無い）。
+    // トランザクションを開く前に落とす。
+    if (status === "contested") {
+      throw new ContestedWithoutCompanionError("updateStatusWithEvent", id);
+    }
     // id 列は uuid 型。この口の契約は「無い == 例外」なので、形式が壊れた入力は
     // トランザクションを開く前に同じ「memory not found」の Error へ寄せる——
     // トランザクション内で投げても結果（イベントが積まれない）は同じだが、そもそも
@@ -536,6 +556,13 @@ export class PostgresMemoryStore implements MemoryStore {
         throw new RangeError(
           `PostgresMemoryStore: supersededByIndex out of range: ${target.supersededByIndex} (news.length=${news.length})`,
         );
+      }
+    }
+    // ADR 0140: createMemory と同じ制約を `news` の各要素にも課す。1件でも違反があれば
+    // トランザクションを開く前に落とす（`news`/`supersede` どちらの書き込みも起きない）。
+    for (const { input } of news) {
+      if (isContestedWithoutCompanion(input.status, input.contestedWithId)) {
+        throw new ContestedWithoutCompanionError("supersedeWithNewMemories", null);
       }
     }
 
