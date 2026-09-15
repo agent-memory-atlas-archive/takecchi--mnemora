@@ -206,7 +206,8 @@ export function findAssociationBridgeViolations(
   for (const probe of ASSOCIATION_PROBES) {
     utterances.forEach((utterance, index) => {
       const isOwnAnchorOrGold =
-        utterance.probeId === probe.id && (utterance.kind === "anchor" || utterance.kind === "gold");
+        utterance.probeId === probe.id &&
+        (utterance.kind === "anchor" || utterance.kind === "gold");
       if (isOwnAnchorOrGold) {
         return;
       }
