@@ -243,7 +243,19 @@
       `examples/chat/src/archive-sweep-cost.ts:80-113` が `default_half_life_hours` に対して
       既にやっている「**公開 interface を迂回して生 SQL で UPSERT する**」を、もう1つ
       増やすことになる。⟹ 足すのは `getDecayClock` / `setDecayClock` /
-      `getDefaultHalfLifeRecalls` と、活動カウンタを進める `bumpActivitySeq` / 読む `getActivitySeq`。
+      `getDefaultHalfLifeRecalls` / `getActivitySeq`（**読むだけ**）。
+
+      ⚠ **カウンタを進める口（`bumpActivitySeq`）は、ここに置けない。**
+      本 ADR の初版はここに置くと書いていたが、それは「決めたこと」5（`activity_seq` の前進は
+      `createRecall` と**同一トランザクション**）と矛盾する——**`MemoryStore` と
+      `TenantSettingsStore` は別 adapter であり、トランザクションを跨げない。**
+      ⟹ **5 のほうが正しい。** 前進は `MemoryStore.createRecall` の入力
+      （`NewRecallRecord.advanceActivityClock?: boolean`）として渡し、adapter が
+      `recalls` への INSERT と同じトランザクションで両方を書く。
+      **（2026-09-16、実装中に発見して訂正した。）**
+
+      なお `createRecall` の戻り値を `{ recallId, activitySeq }` へ広げる案は採らない
+      ——`@mnemora/core` は npm 公開済みであり、破壊的変更になる。
 
   14. **境界の非対称を、1バイトも変えずに踏襲する。**
       現物はゲートが**狭義**（`decay_floor_at > $n`、境界は落ちる）、掃引が**境界を含む**
