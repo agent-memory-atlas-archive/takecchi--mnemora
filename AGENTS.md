@@ -55,8 +55,8 @@
 
 **⚠ 「実 API を叩かない」は「擬似物で走る」と同じではない。CI のジョブごとに層が違う**
 （[ADR 0088](./docs/decisions/0088-retrieval-quality-measured-in-ci.md)）。
-`example-chat` ジョブの `compare` は `deterministic`（意味を持たない stub）で走るが、
-`retrieval-quality` ジョブは **`recorded`（記録した実 API の応答の再生）**で走る——
+`example-chat` ジョブの `compare` も、`retrieval-quality` ジョブも、
+**`recorded`（記録した実 API の応答の再生）**で走る——
 **鍵は要らないが、擬似物でもない。**下の3層の表で、どのジョブがどの層かを見分けること。
 
 **provider は3層ある**（[ADR 0051](./docs/decisions/0051-recorded-provider-cassette.md)）。
@@ -65,8 +65,14 @@
 | 層 | 何か | 使う場所 |
 |---|---|---|
 | `deterministic` | 意味を持たない stub（文字コードからベクトルを作る／発話を40字で切る） | 配線・契約・適合テスト |
-| `recorded` | 記録した実 API の応答の再生。**記録に無い入力は例外** | 北極星の物差し（`retrieval`） |
+| `recorded` | 記録した実 API の応答の再生。**記録に無い入力は例外** | 北極星の物差し（`retrieval` / `compare`） |
 | `openai` | 実 API | 記録を録るとき・乖離を測るとき |
+
+**⚠ `recorded` で測った `compare` の数字も、「実運用でも同じ削減率になる」ことを
+保証しない。**理由は「擬似物だから」ではない——**カセットは記録した時点の応答の再生**
+であり（[ADR 0051](./docs/decisions/0051-recorded-provider-cassette.md)）、記録に無い
+入力は黙って別のものへ倒れず例外になる。割り引くのは、擬似物だからではなく、
+**記録した時点のものだからである。**
 
 **⚠ `deterministic` で測った想起の質は、性能について何も言っていない**——arm A の MRR は
 **0.018**（実質ランダム）である。**擬似物での ✅ を「引けた」と読まないこと。**
