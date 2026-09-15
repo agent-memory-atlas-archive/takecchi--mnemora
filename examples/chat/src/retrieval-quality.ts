@@ -1,4 +1,12 @@
-import type { Ctx, MemoryStore, RecalledMemory, Runtime, ScoreBreakdown } from "@mnemora/core";
+import type {
+  Ctx,
+  MemoryStore,
+  RecallChannel,
+  RecalledMemory,
+  Runtime,
+  ScoreBreakdown,
+} from "@mnemora/core";
+import { DEFAULT_RECALL_CHANNELS, RECALL_CHANNELS } from "@mnemora/core";
 import { drainEmbedTicks } from "./embed-drain.js";
 import type { DrainResult } from "./embed-drain.js";
 import type { ProviderMode } from "./providers.js";
@@ -331,6 +339,46 @@ export function buildArmTenantId(armKey: string, runToken: string): string {
 }
 
 // ---------------------------------------------------------------------------
+// 語彙チャンネルを通す構成を選べるようにする(ADR 0148、Issue #179)
+//
+// **既定は今日までと1バイトも変えない**——`MNEMORA_BENCH_CHANNELS` を指定しない
+// 呼び出しは `parseBenchChannels` が `undefined` を返し、`RunRetrievalQualityArmOptions
+// .channels` を省略した呼び出しと同じ挙動になる(`runRetrievalQualityArm` は
+// `options.channels` が `undefined` のとき `recall()` に `channels` を渡さず、
+// `packages/core` 自身の既定 `DEFAULT_RECALL_CHANNELS` = `["ann"]` に委ねる)。
+// ---------------------------------------------------------------------------
+
+/**
+ * `MNEMORA_BENCH_CHANNELS` の値(生の env 文字列)を読み、`recall()` へ渡す
+ * `channels` を決める。**純関数**——`consolidation-cost-options.ts` の
+ * `parseBudgetLadder` と同じ形で、env オブジェクトそのものではなく値1つを受け取る。
+ *
+ * **未指定・空文字なら `undefined`**(=呼び出し側は `channels` を渡さず、既定
+ * `["ann"]` のまま)。カンマ区切りで `RECALL_CHANNELS`(`packages/core` の唯一の
+ * 出所)の値だけを受け付ける——値の一覧をここに書き写さない(`RecallQuery.channels`
+ * の doc が「値の一覧を散文で書かない」と定める規律と同じ)。未知の値は
+ * `parseModeOverride`(`providers.ts`)と同じ形で例外にする——黙って無視すると、
+ * typo が「既定のまま静かに ann だけで走った」に化ける。
+ */
+export function parseBenchChannels(
+  value: string | undefined,
+): readonly RecallChannel[] | undefined {
+  if (value === undefined || value.trim() === "") {
+    return undefined;
+  }
+  const values = value.split(",").map((v) => v.trim());
+  for (const v of values) {
+    if (!(RECALL_CHANNELS as readonly string[]).includes(v)) {
+      throw new Error(
+        `MNEMORA_BENCH_CHANNELS の要素は ${RECALL_CHANNELS.map((c) => `"${c}"`).join(" / ")} の` +
+          `いずれかであること(カンマ区切り)。渡された値: "${value}"`,
+      );
+    }
+  }
+  return values as RecallChannel[];
+}
+
+// ---------------------------------------------------------------------------
 // arm 単位の実行
 // ---------------------------------------------------------------------------
 
@@ -345,6 +393,15 @@ export interface RunRetrievalQualityArmOptions {
   usageMeter?: UsageMeter;
   /** 既定は `DEFAULT_HAYSTACK_SIZE`(`DEFAULT_TICK_LIMIT`=50 を超える件数)。 */
   haystackSize?: number;
+  /**
+   * `recall()` に渡す `channels`(ADR 0148、Issue #179)。
+   *
+   * **省略時は `recall()` 自身の既定(`DEFAULT_RECALL_CHANNELS` = `["ann"]`)のまま**
+   * ——この欄を渡さない既存の呼び出しは1バイトも挙動が変わらない(`cli.ts` の
+   * `runRetrieval()` は既定でこの欄を渡さない)。呼び出し側が明示的に
+   * `["ann", "lexical"]` 等を渡したときだけ、語彙チャンネルを通る構成に切り替わる。
+   */
+  channels?: readonly RecallChannel[];
 }
 
 /**
@@ -415,6 +472,13 @@ export interface ArmReport {
   mrrNonLexical: number;
   /** usage-meter のレポート、または擬似 provider の場合の明示的な注記。 */
   usageReport: string;
+  /**
+   * この arm が実際に `recall()` へ渡した(または渡さず既定へ委ねた)チャンネル
+   * (ADR 0148、Issue #179)。**数字と条件を同じオブジェクトから離さない**という
+   * ADR 0088 §4 の規律の適用——`options.channels` を省略した呼び出しでも、
+   * ここには実際に使われた既定値(`DEFAULT_RECALL_CHANNELS`)がそのまま入る。
+   */
+  channels: readonly RecallChannel[];
 }
 
 /**
@@ -462,7 +526,10 @@ export async function runRetrievalQualityArm(
 
   const probes: ProbeOutcome[] = [];
   for (const probe of PROBES) {
-    const result = await options.runtime.recall(ctx, { text: probe.query });
+    const result = await options.runtime.recall(ctx, {
+      text: probe.query,
+      ...(options.channels !== undefined ? { channels: [...options.channels] } : {}),
+    });
     const resolvedExternalIds = await Promise.all(
       result.memories.map((m) => resolveExternalId(options.memoryStore, ctx, m.memoryId)),
     );
@@ -518,6 +585,7 @@ export async function runRetrievalQualityArm(
           llmMode: options.llmMode,
           embeddingMode: options.embeddingMode,
         }),
+    channels: options.channels ?? DEFAULT_RECALL_CHANNELS,
   };
 }
 
@@ -734,6 +802,7 @@ export function formatArmDetail(report: ArmReport): string {
   const lines: string[] = [];
   lines.push(`=== arm ${report.armLabel}(tenant=${report.tenantId}) ===`);
   lines.push(`provider: llm=${report.llmMode} / embedding=${report.embeddingMode}`);
+  lines.push(`channels: [${report.channels.join(", ")}]`);
   lines.push(
     `ingest: observations=${report.ingest.observationCount} ` +
       `ticks=${report.ingest.drain.ticks} ` +

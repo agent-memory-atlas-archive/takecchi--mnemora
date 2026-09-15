@@ -32,6 +32,7 @@ function minimalJapaneseReport(): ArmReport {
     mrrLexicalControl: 1,
     mrrNonLexical: 0.778,
     usageReport: "no calls",
+    channels: ["ann"],
   };
 }
 

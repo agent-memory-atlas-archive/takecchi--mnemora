@@ -226,6 +226,129 @@ describe("examples/chat: retrieval-quality の仕組み(擬似 provider・本物
   );
 
   /**
+   * ⭐ [ADR 0148] 上の ADR 0108 の歯と対になる歯(Issue #179)。
+   *
+   * **上の歯が固定するのは「既定構成(`channels` を渡さない)では通らない」ことだけである。**
+   * この歯はその裏——**`channels:["ann","lexical"]` を明示すれば、`examples/chat` の
+   * `Runtime` に配線された `LexicalStore`(`runtime-factory.ts`、ADR 0148)を実際に通り、
+   * `score.lexicalMatch` 欄が現れる**ことを固定する。2本合わせて、既定構成・語彙構成の
+   * どちらも主張を持つ状態にする(ADR 0148 決定2)。
+   *
+   * **なぜ `runRetrievalQualityArm`(既存の日本語 probe 7件、`../probe-set.js`)を
+   * 使わないか**: 測定B(ADR 0108)と Issue #179 のコメント(2026-09-13、takecchi)が
+   * 実測・訂正した通り、postgres 実装はクエリ側の語をトークン化する前提が
+   * **本文側のトークン境界**(日本語は文ごと1トークンになり、非ASCII 除去はその帰結
+   * であって独立した原因ではない)にあり、日本語の自然文クエリは `channels` に
+   * `"lexical"` を足しても段1で0件のままである——これは配線の欠陥ではない
+   * (Issue #179「⟹ 原因は3つではなく2つ」表を参照)。
+   *
+   * ⟹ この歯は測定Bが実測した ASCII クエリ(`"TypeScript"`)と同種の入力を使い、
+   * **配線が実際に効くこと**そのものを示す。probe 集合・日本語トークナイザの限界には
+   * 触れない(ADR 0148「確かめていないこと」)。
+   */
+  it(
+    "🟢 [ADR 0148] channels:['ann','lexical'] を明示すれば、ASCII クエリで " +
+      "score.lexicalMatch 欄が現れる — examples/chat の Runtime に LexicalStore が" +
+      "配線されていることを直接示す",
+    async () => {
+      await resetTestDatabase();
+      await getTestClient();
+      const handle = await createExampleRuntime(requireDatabaseUrl(), {
+        MNEMORA_LLM: "deterministic",
+        MNEMORA_EMBEDDING: "deterministic",
+      });
+      try {
+        const ctx: Ctx = { tenantId: "retrieval-quality-test-lexical-channel" };
+        await handle.runtime.observe(ctx, {
+          kind: "utterance",
+          text: "We are using TypeScript for this project's backend.",
+          externalId: "lexical-channel-ascii-fact",
+        });
+
+        const result = await handle.runtime.recall(ctx, {
+          text: "TypeScript",
+          channels: ["ann", "lexical"],
+        });
+
+        // まず、この歯自体が何も測っていない(候補が1件も返らない)状態ではないことを
+        // 確かめる(ADR 0108 の歯と同じ番人)。
+        expect(result.memories.length).toBeGreaterThan(0);
+
+        const lexicalMatchRows = result.memories.filter((m) => m.score.lexicalMatch !== undefined);
+        expect(
+          lexicalMatchRows.length,
+          "この歯が赤いのは、examples/chat の Runtime から LexicalStore の配線が" +
+            "外れた(runtime-factory.ts の createRuntime() に lexicalStore を渡さなく" +
+            "なった)、または packages/core 側の語彙チャンネルの契約が壊れたことを意味する。" +
+            "⟹ ADR 0148 の主張(配線されている)が崩れている。",
+        ).toBeGreaterThan(0);
+        // 被覆率は (0, 1] の値を取る(ADR 0092)——0 や負値ではない。
+        for (const memory of lexicalMatchRows) {
+          expect(memory.score.lexicalMatch).toBeGreaterThan(0);
+          expect(memory.score.lexicalMatch).toBeLessThanOrEqual(1);
+        }
+      } finally {
+        await handle.close();
+      }
+    },
+  );
+
+  /**
+   * ⭐ [ADR 0148] `runRetrievalQualityArm` の `options.channels` が、実際に `recall()`
+   * まで届いていることの間接的な証拠(Issue #179)。
+   *
+   * **なぜ直接 `score.lexicalMatch` の有無で確かめないか**: 上の歯が ASCII クエリで
+   * 直接示した通り、`channels` が実際に `recall()` に渡っていることは既に確かめてある。
+   * ここで確かめたいのは別のこと——`runRetrievalQualityArm` という**呼び出し口**が
+   * `options.channels` を握り潰さずに転送しているかである。
+   *
+   * **手法**: `channels: ["lexical"]`(`"ann"` を含めない)を渡す。ANN チャンネルを
+   * 落としたので、`../probe-set.js` の日本語 probe 7件は(測定B・Issue #179 の訂正が
+   * 実測した通り、postgres 実装はトークン境界により日本語で段1が0件になる)**候補が
+   * 1件も返らないはずである**。もし `options.channels` が `recall()` まで届いていない
+   * (黙って既定 `["ann"]` のまま recall している)なら、ANN チャンネルは生きているので
+   * 候補は普通に返ってしまう——**その場合はこの歯が失敗する。**
+   */
+  it(
+    "🟢 [ADR 0148] runRetrievalQualityArm に channels:['lexical'](ann を含まない)を渡すと、" +
+      "日本語 probe 7件はどれも候補0件になる — options.channels が recall() まで" +
+      "実際に届いていることの証拠",
+    async () => {
+      await resetTestDatabase();
+      await getTestClient();
+      const handle = await createExampleRuntime(requireDatabaseUrl(), {
+        MNEMORA_LLM: "deterministic",
+        MNEMORA_EMBEDDING: "deterministic",
+      });
+      try {
+        const report = await runRetrievalQualityArm({
+          armLabel: "test-arm-adr-0148-lexical-only",
+          tenantId: "retrieval-quality-test-arm-adr-0148-lexical-only",
+          runtime: handle.runtime,
+          memoryStore: handle.memoryStore,
+          llmMode: handle.llmMode,
+          embeddingMode: handle.embeddingMode,
+          haystackSize: 20,
+          channels: ["lexical"],
+        });
+
+        expect(report.channels).toEqual(["lexical"]);
+
+        const totalRecalledRows = report.probes.reduce((sum, p) => sum + p.recalledRows, 0);
+        expect(
+          totalRecalledRows,
+          "この歯が赤い(候補が返っている)のは、runRetrievalQualityArm が " +
+            "options.channels を recall() へ渡さなくなった(既定 ['ann'] のまま走っている) " +
+            "ことを意味する。⟹ ADR 0148 の配線の前提が崩れている——" +
+            "'retrieval-quality.ts の recall() 呼び出しを確認すること。",
+        ).toBe(0);
+      } finally {
+        await handle.close();
+      }
+    },
+  );
+
+  /**
    * ⭐ 向きを反転させた歯(ADR 0109)。ADR 0108 の歯と同じ形。
    *
    * **他の歯はすべて「いま赤く、直ったら緑」だが、これは逆である**——

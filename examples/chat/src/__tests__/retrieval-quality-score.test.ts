@@ -325,6 +325,7 @@ function armReport(): ArmReport {
     mrrLexicalControl: 0,
     mrrNonLexical: 0.5,
     usageReport: "(usage)",
+    channels: ["ann"],
   };
 }
 

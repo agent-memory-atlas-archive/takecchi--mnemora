@@ -73,6 +73,7 @@ function makeArmReport(armLabel: string, probes: ProbeOutcome[], mrrOverall: num
     mrrLexicalControl: 0.123,
     mrrNonLexical: 0.456,
     usageReport: "(usage)",
+    channels: ["ann"],
   };
 }
 

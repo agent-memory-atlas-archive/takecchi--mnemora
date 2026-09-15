@@ -3,6 +3,7 @@ import { createRuntime } from "@mnemora/core";
 import type { PostgresClient } from "@mnemora/postgres";
 import {
   PostgresEventStore,
+  PostgresLexicalStore,
   PostgresMemoryStore,
   PostgresOutboxStore,
   PostgresTenantSettingsStore,
@@ -75,6 +76,12 @@ export interface ExampleRuntimeHandle {
  *   `decay` を `freshness` から分離して測る `time-term` arm（`mutable-clock.ts` の
  *   `MutableClock`）だけがこの4番目の引数を渡す。**`packages/*` は変更していない**
  *   （`RuntimeDeps.clock` は元から公開 interface の省略可能な欄である）。
+ * - **`lexicalStore` を常に配線する**（ADR 0148、Issue #179）。`RuntimeDeps.lexicalStore`
+ *   に `PostgresLexicalStore` を渡す——`packages/core` の `recall()` は `channels` に
+ *   `"lexical"` を含めたときだけこの store を呼ぶため、**配線そのものは既定の挙動を
+ *   1バイトも変えない**（`RecallQuery.channels` の既定は `DEFAULT_RECALL_CHANNELS`
+ *   = `["ann"]` のまま、`packages/core` 側も変更していない）。**`channels` を明示して
+ *   `"lexical"` を含めた呼び出し側だけが、この配線の効果を受け取る。**
  */
 export async function createExampleRuntime(
   databaseUrl: string,
@@ -94,6 +101,7 @@ export async function createExampleRuntime(
     memoryStore,
     outboxStore: new PostgresOutboxStore(client.db),
     vectorStore: new PostgresVectorStore(client.db),
+    lexicalStore: new PostgresLexicalStore(client.db),
     eventStore: new PostgresEventStore(client.db),
     tenantSettingsStore: new PostgresTenantSettingsStore(client.db),
     llmProvider,

@@ -53,6 +53,7 @@ function fakeReport(overrides: Partial<ArmReport> = {}, probeCount = 7): ArmRepo
     mrrLexicalControl: 1,
     mrrNonLexical: 0.4,
     usageReport: "(テスト用の usageReport)",
+    channels: ["ann"],
     ...overrides,
   };
 }
@@ -129,6 +130,23 @@ describe("buildRetrievalQualityJson", () => {
       const arm = json.arms[0]!;
       expect(arm.lexicalMatchRows).toBe(0);
       expect(arm.recalledRows).toBeGreaterThan(0);
+    },
+  );
+
+  it(
+    "arm が実際に使った channels を運ぶ(ADR 0148、Issue #179) — " +
+      "既定構成(['ann'])でも語彙構成(['ann','lexical'])でも、数字と条件が同じ場所に残る",
+    () => {
+      const defaultArm = fakeReport({ armLabel: "default" });
+      const lexicalArm = fakeReport({ armLabel: "lexical", channels: ["ann", "lexical"] });
+      const json = buildRetrievalQualityJson({
+        reports: [defaultArm, lexicalArm],
+        providerSource: "recorded",
+        cassette: FAKE_CASSETTE,
+        measuredAt: new Date(),
+        commit: null,
+      });
+      expect(json.arms.map((a) => a.channels)).toEqual([["ann"], ["ann", "lexical"]]);
     },
   );
 

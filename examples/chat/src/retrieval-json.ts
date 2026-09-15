@@ -1,3 +1,4 @@
+import type { RecallChannel } from "@mnemora/core";
 import type { Cassette } from "@mnemora/testkit";
 import type { ProviderMode } from "./providers.js";
 import { armHeadline } from "./retrieval-quality.js";
@@ -69,6 +70,15 @@ export interface RetrievalQualityArmJson {
   termDistinct?: ArmTermDistinct[];
   decayFreshnessEqualRows?: number;
   decayFreshnessDifferentRows?: number;
+  /**
+   * この arm が実際に `recall()` へ渡した(または既定へ委ねた)チャンネル
+   * (ADR 0148、Issue #179)。**省略可能欄にした理由は `lexicalMatchRows` と同じ**
+   * ——既存の欄の意味を変えない追加であり、古い実測 JSON・`retrieval-baseline.json`
+   * (この欄を持たない)は引き続き `validateMeasured`/`validateBaseline` を通る
+   * (`REQUIRED_ARM_*_FIELDS`/`DIFF_FIELDS` のどちらにも含めていない)。
+   * ⛔ **門にはしない**——ADR 0148 の決定により、語彙構成の数字は報告に留める。
+   */
+  channels?: readonly RecallChannel[];
 }
 
 export interface RetrievalQualityCassetteJson {
@@ -166,6 +176,7 @@ export function buildRetrievalQualityJson(
         termDistinct: headline.termDistinct,
         decayFreshnessEqualRows: headline.decayFreshnessEqualRows,
         decayFreshnessDifferentRows: headline.decayFreshnessDifferentRows,
+        channels: report.channels,
       };
     }),
   };

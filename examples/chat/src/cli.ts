@@ -53,6 +53,7 @@ import {
   formatArmSummaryTable,
   formatProbeComparisonTable,
   newRunToken,
+  parseBenchChannels,
   runRetrievalQualityArm,
 } from "./retrieval-quality.js";
 import { createExampleRuntime } from "./runtime-factory.js";
@@ -427,6 +428,19 @@ async function runRetrieval(): Promise<void> {
   const runToken = newRunToken();
   const armSpecs = buildArmSpecs(cassette ? "recorded" : "openai", runToken);
 
+  // **`MNEMORA_BENCH_CHANNELS` を選べるようにする（ADR 0148、Issue #179）。**
+  // 未指定なら `undefined`——`runRetrievalQualityArm` は `channels` を渡さず、
+  // `packages/core` の既定 `["ann"]` のまま 1 バイトも挙動が変わらない。
+  // 明示的に `MNEMORA_BENCH_CHANNELS=ann,lexical` 等を渡した呼び出しだけが、
+  // `examples/chat` の `Runtime` に配線済みの `LexicalStore`（`runtime-factory.ts`）
+  // を実際に通る構成へ切り替わる。
+  const benchChannels = parseBenchChannels(process.env.MNEMORA_BENCH_CHANNELS);
+  if (benchChannels !== undefined) {
+    console.log(
+      `\n[retrieval] MNEMORA_BENCH_CHANNELS により channels=[${benchChannels.join(", ")}] で実行する`,
+    );
+  }
+
   const reports = [];
   for (const arm of armSpecs) {
     console.log(`\n########## arm ${arm.armLabel} ##########`);
@@ -449,6 +463,7 @@ async function runRetrieval(): Promise<void> {
         llmMode: handle.llmMode,
         embeddingMode: handle.embeddingMode,
         ...(handle.usageMeter !== undefined ? { usageMeter: handle.usageMeter } : {}),
+        ...(benchChannels !== undefined ? { channels: benchChannels } : {}),
       });
       reports.push(report);
       console.log(formatArmDetail(report));
