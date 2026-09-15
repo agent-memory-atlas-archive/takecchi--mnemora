@@ -2,14 +2,21 @@ import type {
   DigestSource,
   EmbeddingStatus,
   EventActor,
+  IndexBand,
   Memory,
   MemoryEvent,
   MemoryEventKind,
   MemoryStatus,
   Observation,
+  Omission,
   OutboxJobKind,
   OutboxJobRecord,
   Provenance,
+  RecallBudget,
+  RecallRecord,
+  RecallRecordReturnedMemories,
+  RecallUsage,
+  StageTrace,
 } from "@mnemora/core";
 
 /**
@@ -202,6 +209,42 @@ export function rowToOutboxJob(row: OutboxJobRow): OutboxJobRecord {
     completedAt: parsePgTimestamp(row.completed_at),
     failedAt: parsePgTimestamp(row.failed_at),
     lastError: row.last_error,
+    createdAt: parsePgTimestamp(row.created_at),
+  };
+}
+
+/**
+ * Issue #298 / [ADR 0155](../../../docs/decisions/0155-recall-score-breakdown-persisted.md):
+ * `recalls` 行（`MemoryStore.getRecall` が読む側）。`createRecall` の書き込みが埋める
+ * 列と1対1に対応する（`packages/postgres/src/memory-store.ts` の `createRecall`/`getRecall`
+ * 参照）。
+ */
+export interface RecallRow {
+  id: string;
+  tenant_id: string;
+  subject_id: string | null;
+  query: unknown;
+  budget: RecallBudget | null;
+  omitted: Omission[];
+  usage: RecallUsage;
+  index_band: IndexBand;
+  explain: { stages: StageTrace[] };
+  returned_memories: RecallRecordReturnedMemories;
+  created_at: string;
+}
+
+export function rowToRecallRecord(row: RecallRow): RecallRecord {
+  return {
+    recallId: row.id,
+    tenantId: row.tenant_id,
+    subjectId: row.subject_id,
+    query: row.query,
+    budget: row.budget,
+    omitted: row.omitted,
+    usage: row.usage,
+    indexBand: row.index_band,
+    explain: row.explain,
+    returnedMemories: row.returned_memories,
     createdAt: parsePgTimestamp(row.created_at),
   };
 }

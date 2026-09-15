@@ -63,7 +63,7 @@ describeMemoryStoreConformance({
       },
       indexBand: { groups: [], totalInScope: 0, countKind: "exact" },
       explain: { stages: [] },
-      returnedMemoryIds: [],
+      returnedMemories: [],
     });
   },
   // ADR 0079: 積み直した `embed` ジョブを、運搬役が実際に claim できるところまで見る。

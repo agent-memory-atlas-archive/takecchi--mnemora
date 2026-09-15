@@ -38,9 +38,16 @@ describeMemoryStoreConformance({
   },
   prepareRecallId: async (ctx: Ctx) => {
     const { db } = await getTestClient();
+    // Issue #298 / ADR 0155: `returned_memories` は NOT NULL・DEFAULT 無し
+    // （意図的——「決定」節「DEFAULT を置かない」参照）。このフィクスチャは
+    // `recall_usages.recall_id` の外部キーの相手が要るだけで内訳の中身は問わないため、
+    // 「内訳ありの新規行」の最小形 `{ breakdownCaptured: true, memories: [] }` を渡す。
     const result = await db.execute(sql`
-      INSERT INTO recalls (id, tenant_id, query, usage, index_band)
-      VALUES (gen_random_uuid(), ${ctx.tenantId}, '{}'::jsonb, '{}'::jsonb, '{}'::jsonb)
+      INSERT INTO recalls (id, tenant_id, query, usage, index_band, returned_memories)
+      VALUES (
+        gen_random_uuid(), ${ctx.tenantId}, '{}'::jsonb, '{}'::jsonb, '{}'::jsonb,
+        '{"breakdownCaptured":true,"memories":[]}'::jsonb
+      )
       RETURNING id
     `);
     return (result.rows[0] as unknown as { id: string }).id;

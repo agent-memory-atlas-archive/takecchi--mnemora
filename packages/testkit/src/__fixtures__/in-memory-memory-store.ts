@@ -33,6 +33,7 @@ import type {
   PurgeExpiredEventsOptions,
   PurgeExpiredEventsResult,
   RecallId,
+  RecallRecord,
   RecallScope,
   RequeueEmbedJobsOptions,
   RequeueEmbedJobsResult,
@@ -65,8 +66,15 @@ export class InMemoryMemoryStore implements MemoryStore {
   private readonly extractionIndex = new Map<string, MemoryId>();
   /** `(tenant_id, recall_id, memory_id)` の使用報告の冪等キー。 */
   private readonly usages = new Set<string>();
-  /** roadmap.md 段階4/5: recall 段6（記録）が書き込む `recalls` 相当のインメモリ表。 */
-  readonly recalls = new Map<string, NewRecallRecord & { tenantId: string }>();
+  /**
+   * roadmap.md 段階4/5: recall 段6（記録）が書き込む `recalls` 相当のインメモリ表。
+   * Issue #298 / ADR 0155: `createdAt` を足した——`getRecall`（`RecallRecord`）が
+   * 返す形と1対1にするため。この in-memory 実装が保持する行は常に
+   * `createRecall` 経由で新規に書かれたものであり、マイグレーション以前の
+   * 「内訳を持たない」行という状態は存在しない（`breakdownCaptured` は
+   * `getRecall` で常に `true` に組み立てる）。
+   */
+  readonly recalls = new Map<string, NewRecallRecord & { tenantId: string; createdAt: Date }>();
   /** `InMemoryEventStore` と共有する memory_events 相当の配列（ADR 0031、同一プロセス内の参照共有）。 */
   readonly events: MemoryEvent[] = [];
   /** `InMemoryOutboxStore` と共有する outbox ジョブの配列（同一プロセス内の参照共有）。 */
@@ -801,8 +809,36 @@ export class InMemoryMemoryStore implements MemoryStore {
 
   async createRecall(ctx: Ctx, record: NewRecallRecord): Promise<RecallId> {
     const id = nextId("rcl");
-    this.recalls.set(id, { ...record, tenantId: ctx.tenantId });
+    this.recalls.set(id, { ...record, tenantId: ctx.tenantId, createdAt: new Date() });
     return id;
+  }
+
+  /**
+   * Issue #298 / [ADR 0155](../../../../docs/decisions/0155-recall-score-breakdown-persisted.md):
+   * `createRecall` が書いた行を `recallId` から読み戻す。`PostgresMemoryStore.getRecall` と
+   * 同じ契約——テナントが一致しない、または見つからなければ `null`。
+   */
+  async getRecall(ctx: Ctx, id: RecallId): Promise<RecallRecord | null> {
+    const row = this.recalls.get(id);
+    if (!row || row.tenantId !== ctx.tenantId) {
+      return null;
+    }
+    return {
+      recallId: id,
+      tenantId: row.tenantId,
+      subjectId: row.subjectId ?? null,
+      query: row.query,
+      budget: row.budget ?? null,
+      omitted: row.omitted,
+      usage: row.usage,
+      indexBand: row.indexBand,
+      explain: row.explain,
+      // この in-memory 実装が保持する行は常に `createRecall` 経由で新規に書かれたものなので
+      // `breakdownCaptured: true` で固定してよい（マイグレーション以前の行を模す必要が
+      // 無い——それは postgres の適合スイート側の検査になる）。
+      returnedMemories: { breakdownCaptured: true, memories: row.returnedMemories },
+      createdAt: row.createdAt,
+    };
   }
 
   /**

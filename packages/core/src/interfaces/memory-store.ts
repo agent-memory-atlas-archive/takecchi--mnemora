@@ -4,7 +4,13 @@ import type { MemoryId, ObservationId, RecallId } from "../ids.js";
 import type { EmbeddingStatus, Memory, MemoryStatus, NewMemory } from "../memory.js";
 import type { NewObservation, Observation } from "../observation.js";
 import type { OutboxJobRecord } from "../outbox.js";
-import type { NewRecallRecord, NotIndexedReason, RecallScope, ScopeAggregate } from "../recall.js";
+import type {
+  NewRecallRecord,
+  NotIndexedReason,
+  RecallRecord,
+  RecallScope,
+  ScopeAggregate,
+} from "../recall.js";
 import type { OutboxJobKind } from "./scheduler.js";
 
 /**
@@ -503,6 +509,38 @@ export interface MemoryStore {
   ): Promise<ScopeAggregate>;
   /** roadmap.md 段階4/5: recall 段6（記録）。`recalls` へ1行書き込み、発行した recallId を返す。 */
   createRecall(ctx: Ctx, record: NewRecallRecord): Promise<RecallId>;
+  /**
+   * Issue #298 / [ADR 0155](../../../../docs/decisions/0155-recall-score-breakdown-persisted.md):
+   * `createRecall` が書いた `recalls` 行1件を、`recallId` から読み戻す。
+   *
+   * **`recallId` だけを持って戻ってきた呼び出し側が、`recall()` の戻り値を捨てた後でも
+   * 「どの記憶が・どの内訳で・どの経路で選ばれたか」を引ける**ようにするための、
+   * 書く側（`createRecall`）と対になる読む口（Issue #298 の受け入れ条件1）。
+   *
+   * 🔴 **必須メソッドである。**[ADR 0122](../../../../docs/decisions/0122-restore-archived-memory.md)
+   * の規律（「既存の必須メソッドの呼び方を1つ固定するだけで済むなら、新しい任意メソッドを
+   * 足さない」）を先に問うたが、`recalls` を読む形は `MemoryStore` のどの既存メソッドにも
+   * 無い——`restoreArchived` が `updateStatusWithEvent` にそのまま収まったのとは違い、
+   * ここには収まる先が無い（`get`/`getObservation`/`getMany` はそれぞれ `memories`/
+   * `observations` 専用であり `recalls` を読まない）。⟹ **新しいメソッドを足さずに済む
+   * 形ではない。**そのうえで必須（任意ではない）にした理由は、`get`/`getMany`/
+   * `getObservation`/`listBySourceObservation` と同じ「単純な1行読み出し」の族に属し、
+   * `archiveDecayed?`/`purgeMemory?`/`markContestedPair?` のような「adapter に新しい
+   * 書き込み形状を要求する」族（未実装でも既定の recall の振る舞いを壊さない）とは違う
+   * ——`getRecall` を実装しない adapter は、この issue が問う「後から」を一切満たせない。
+   * 詳細な検討は ADR 0155 を参照。
+   *
+   * 契約:
+   * - 対象の行が存在しない、または `tenant_id` が `ctx.tenantId` と一致しない場合は
+   *   `null` を返す（例外にしない。`get`/`getObservation` と同じ規律）。`id` が adapter の
+   *   期待する形式でない場合も同じく `null`（`packages/postgres/src/mapping.ts` の
+   *   `isUuidLike` の doc コメント参照）。
+   * - `returnedMemories.breakdownCaptured` は、マイグレーション以前に書かれた行では
+   *   `false` になる（`RecallRecordReturnedMemories`（`../recall.js`）の doc コメント
+   *   参照）。呼び出し側はこれを見て「内訳を記録しそこねた」行と「記録したが0件だった」
+   *   行を区別すること。
+   */
+  getRecall(ctx: Ctx, id: RecallId): Promise<RecallRecord | null>;
   /**
    * ADR 0079: 索引に載っていない Memory を**列挙して、同時に `embed` ジョブを積み直す**。
    *

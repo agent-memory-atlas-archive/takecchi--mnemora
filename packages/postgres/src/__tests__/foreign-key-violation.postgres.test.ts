@@ -95,7 +95,7 @@ describe("PostgresMemoryStore.recordUsage — 外部キー違反（ADR 0047 の�
       },
       indexBand: { groups: [], totalInScope: 0, countKind: "exact" },
       explain: { stages: [] },
-      returnedMemoryIds: [],
+      returnedMemories: [],
     });
     const result = await store.recordUsage(ctx, recallId, [memory.id]);
     expect(result.insertedMemoryIds).toEqual([memory.id]);

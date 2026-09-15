@@ -1259,13 +1259,53 @@ export const RecallResultSchema = z.object({
 }) satisfies z.ZodType<RecallResult>;
 
 // ---------------------------------------------------------------------------
-// 段6（記録）の書き込み口（docs/recall.md §2 段6、ADR 0008）
+// 段6（記録）の書き込み口（docs/recall.md §2 段6、ADR 0008、ADR 0155）
 // ---------------------------------------------------------------------------
+
+/**
+ * `recalls` へ永続化する、返した記憶1件ぶんの内訳（Issue #298、[ADR 0155](../../../docs/decisions/0155-recall-score-breakdown-persisted.md)）。
+ *
+ * `RecalledMemory` が持つ欄のうち**「後から再現できないもの」だけ**を持つ。
+ * `digest` と `provenanceKind` は `MemoryStore.get(ctx, memoryId)` を引けば
+ * 再現できるため、ここには持たない（同じことを言う道を2つ作らない。ADR 0155 決定1）。
+ * `score`（`ScoreBreakdown` 全項）・`retrievedVia`・`companionOf?`・`associationOf?` は
+ * クエリ時点の索引の状態・`now`・矛盾関係の解決状況に依存し、後から同じ値を
+ * 計算し直せないため持つ。
+ */
+export interface RecallRecordMemory {
+  memoryId: MemoryId;
+  score: ScoreBreakdown;
+  retrievedVia: RecalledMemory["retrievedVia"];
+  companionOf?: MemoryId;
+  associationOf?: MemoryId;
+}
+
+/**
+ * `MemoryStore.getRecall` が返す `returnedMemories` の形
+ * （[ADR 0155](../../../docs/decisions/0155-recall-score-breakdown-persisted.md)）。
+ *
+ * **`breakdownCaptured` で「無い」と「空」を区別する**（ADR 0008 の「無い」の分類の族、
+ * Issue #298 受け入れ条件5）。マイグレーション以前に書かれた行は内訳を一度も
+ * 持ったことが無い——`breakdownCaptured: false` になり、`memories` は
+ * `memoryId` だけを持つ（旧 `returned_memory_ids` 列から移した値）。マイグレーション後に
+ * 書かれた行は常に `breakdownCaptured: true` になり、`memories` が空配列なのは
+ * 「その recall が実際に0件しか返さなかった」ことを表す。**この2つを同じ `[]` の顔に
+ * しない**——さもないと「内訳を記録しそこねた」と「記録したが0件だった」が呼び出し側から
+ * 区別できなくなる。
+ */
+export type RecallRecordReturnedMemories =
+  | { breakdownCaptured: true; memories: RecallRecordMemory[] }
+  | { breakdownCaptured: false; memories: Array<{ memoryId: MemoryId }> };
 
 /**
  * `MemoryStore.createRecall` への入力。`recalls` テーブル1行分のスナップショット
  * （docs/memory-model.md §10）。段6が必須である理由（`recallId` が無いと
  * `observe({kind:'memory_usage'})` が紐付け先を持たない）は docs/recall.md §2・§4 を参照。
+ *
+ * `returnedMemories` は書き込み時点で常に内訳を持つ（`recall-runtime.ts` は
+ * `finalMemories` から `score`/`retrievedVia`/`companionOf`/`associationOf` を毎回
+ * 計算している）。「内訳が無い」状態は新規の書き込みには存在しない——それは
+ * マイグレーション以前の行にだけ起きる、{@link RecallRecordReturnedMemories} 側の話である。
  */
 export interface NewRecallRecord {
   tenantId: string;
@@ -1277,7 +1317,26 @@ export interface NewRecallRecord {
   usage: RecallUsage;
   indexBand: IndexBand;
   explain: { stages: StageTrace[] };
-  returnedMemoryIds: MemoryId[];
+  returnedMemories: RecallRecordMemory[];
+}
+
+/**
+ * `MemoryStore.getRecall` の戻り値。`recalls` 行1件ぶん全部
+ * （Issue #298、[ADR 0155](../../../docs/decisions/0155-recall-score-breakdown-persisted.md)）。
+ * 見つからなければ `null`（例外にしない——`MemoryStore.get`/`getObservation` と同じ規律）。
+ */
+export interface RecallRecord {
+  recallId: RecallId;
+  tenantId: string;
+  subjectId: string | null;
+  query: unknown;
+  budget: RecallBudget | null;
+  omitted: Omission[];
+  usage: RecallUsage;
+  indexBand: IndexBand;
+  explain: { stages: StageTrace[] };
+  returnedMemories: RecallRecordReturnedMemories;
+  createdAt: Date;
 }
 
 /** `not_indexed` の理由の全列挙（`recall()` が理由ごとに Omission を1件ずつ返すのに使う）。 */

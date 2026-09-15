@@ -115,7 +115,10 @@ export const recalls = pgTable("recalls", {
   usage: jsonb("usage").notNull(),
   indexBand: jsonb("index_band").notNull(),
   explain: jsonb("explain").notNull(),
-  returnedMemoryIds: uuid("returned_memory_ids").array().notNull(),
+  // Issue #298 / ADR 0155: 旧 `returned_memory_ids uuid[]`（memoryId だけ）を置き換えた。
+  // 内訳（score/retrievedVia/companionOf/associationOf）を含む jsonb。
+  // `migrations/0013_recall_returned_memories_jsonb.sql` 参照。
+  returnedMemories: jsonb("returned_memories").notNull(),
   createdAt: timestamp("created_at", { withTimezone: true, mode: "date" }).notNull(),
 });
 

@@ -30,6 +30,8 @@ import type {
   PurgeExpiredEventsOptions,
   PurgeExpiredEventsResult,
   RecallId,
+  RecallRecord,
+  RecallRecordReturnedMemories,
   RecallScope,
   RequeueEmbedJobsOptions,
   RequeueEmbedJobsResult,
@@ -43,10 +45,12 @@ import {
   rowToMemoryEvent,
   rowToObservation,
   rowToOutboxJob,
+  rowToRecallRecord,
   type MemoryEventRow,
   type MemoryRow,
   type ObservationRow,
   type OutboxJobRow,
+  type RecallRow,
 } from "./mapping.js";
 
 /**
@@ -1082,10 +1086,16 @@ export class PostgresMemoryStore implements MemoryStore {
   }
 
   async createRecall(ctx: Ctx, record: NewRecallRecord): Promise<RecallId> {
+    // Issue #298 / ADR 0155: 新しく書く行は常に breakdownCaptured: true。「内訳を持たない
+    // 新規行」は無い（recall-runtime.ts が finalMemories から毎回内訳を計算しているため）。
+    const returnedMemories: RecallRecordReturnedMemories = {
+      breakdownCaptured: true,
+      memories: record.returnedMemories,
+    };
     const result = await this.db.execute(sql`
       INSERT INTO recalls (
         id, tenant_id, subject_id, query, budget, omitted, usage, index_band, explain,
-        returned_memory_ids, created_at
+        returned_memories, created_at
       ) VALUES (
         gen_random_uuid(), ${ctx.tenantId}, ${record.subjectId ?? null},
         ${JSON.stringify(record.query)}::jsonb,
@@ -1094,12 +1104,31 @@ export class PostgresMemoryStore implements MemoryStore {
         ${JSON.stringify(record.usage)}::jsonb,
         ${JSON.stringify(record.indexBand)}::jsonb,
         ${JSON.stringify(record.explain)}::jsonb,
-        ${sql.param(record.returnedMemoryIds)}::uuid[],
+        ${JSON.stringify(returnedMemories)}::jsonb,
         now()
       )
       RETURNING id
     `);
     return (result.rows[0] as unknown as { id: string }).id;
+  }
+
+  /**
+   * Issue #298 / [ADR 0155](../../../docs/decisions/0155-recall-score-breakdown-persisted.md):
+   * `createRecall` が書いた `recalls` 行1件を、`recallId` から読み戻す。
+   * 契約は `get`/`getObservation` と同じ——見つからなければ `null`（例外にしない）。
+   */
+  async getRecall(ctx: Ctx, id: RecallId): Promise<RecallRecord | null> {
+    // id 列は uuid 型。形式が壊れた入力も「無い」と同じ扱いにする
+    // （`get`/`getObservation` と同じ規律。mapping.ts の isUuidLike の doc参照）。
+    if (!isUuidLike(id)) {
+      return null;
+    }
+    const result = await this.db.execute(sql`
+      SELECT * FROM recalls WHERE tenant_id = ${ctx.tenantId} AND id = ${id} LIMIT 1
+    `);
+    return result.rows.length > 0
+      ? rowToRecallRecord(result.rows[0] as unknown as RecallRow)
+      : null;
   }
 
   /**

@@ -33,7 +33,7 @@ import type {
   RequeueEmbedJobsOptions,
   RequeueEmbedJobsResult,
 } from "../interfaces/memory-store.js";
-import type { NewRecallRecord, RecallScope, ScopeAggregate } from "../recall.js";
+import type { NewRecallRecord, RecallRecord, RecallScope, ScopeAggregate } from "../recall.js";
 import type { EmbeddingSpaceId } from "../embedding.js";
 import type { OutboxJobRecord } from "../outbox.js";
 import { defaultDecayStrategy } from "../strategies/decay.js";
@@ -82,7 +82,7 @@ class FakeBackingStore {
   memories = new Map<string, Memory>();
   extractionIndex = new Map<string, MemoryId>();
   usages = new Set<string>();
-  recalls = new Map<string, NewRecallRecord & { tenantId: string }>();
+  recalls = new Map<string, NewRecallRecord & { tenantId: string; createdAt: Date }>();
   outboxJobs: OutboxJobMutable[] = [];
   /**
    * ADR 0031: `FakeMemoryStore.updateStatusWithEvent` と `FakeEventStore` が共有する
@@ -699,8 +699,34 @@ export class FakeMemoryStore implements MemoryStore {
 
   async createRecall(ctx: Ctx, record: NewRecallRecord): Promise<RecallId> {
     const id = nextId("rcl");
-    this.backing.recalls.set(id, { ...record, tenantId: ctx.tenantId });
+    this.backing.recalls.set(id, { ...record, tenantId: ctx.tenantId, createdAt: new Date() });
     return id;
+  }
+
+  /**
+   * Issue #298 / ADR 0155: `createRecall` と対になる読む口。`InMemoryMemoryStore`
+   * （`packages/testkit`）と同じ契約——見つからない、またはテナントが一致しなければ
+   * `null`。このフェイクが保持する行は常に `createRecall` 経由の新規行なので
+   * `breakdownCaptured: true` で固定する。
+   */
+  async getRecall(ctx: Ctx, id: RecallId): Promise<RecallRecord | null> {
+    const row = this.backing.recalls.get(id);
+    if (!row || row.tenantId !== ctx.tenantId) {
+      return null;
+    }
+    return {
+      recallId: id,
+      tenantId: row.tenantId,
+      subjectId: row.subjectId ?? null,
+      query: row.query,
+      budget: row.budget ?? null,
+      omitted: row.omitted,
+      usage: row.usage,
+      indexBand: row.indexBand,
+      explain: row.explain,
+      returnedMemories: { breakdownCaptured: true, memories: row.returnedMemories },
+      createdAt: row.createdAt,
+    };
   }
 
   /**

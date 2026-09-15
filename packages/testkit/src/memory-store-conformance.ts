@@ -4112,10 +4112,145 @@ export function describeMemoryStoreConformance(options: MemoryStoreConformanceOp
         },
         indexBand: { groups: [], totalInScope: 0, countKind: "exact" },
         explain: { stages: [] },
-        returnedMemoryIds: [],
+        returnedMemories: [],
       });
       expect(typeof recallId).toBe("string");
       expect(recallId.length).toBeGreaterThan(0);
+    });
+
+    // -------------------------------------------------------------------
+    // getRecall（Issue #298 / ADR 0155: createRecall と対になる読む口）
+    // -------------------------------------------------------------------
+
+    it("getRecall は createRecall が書いた行を、内訳つきで読み戻す", async () => {
+      const store = await createStore();
+      const ctx: Ctx = { tenantId: "tenant-1" };
+      const memory = await store.createMemory(
+        ctx,
+        buildNewMemoryFixture({ tenantId: "tenant-1", contentHash: "hash-get-recall-1" }),
+      );
+      const companion = await store.createMemory(
+        ctx,
+        buildNewMemoryFixture({ tenantId: "tenant-1", contentHash: "hash-get-recall-2" }),
+      );
+
+      const recallId = await store.createRecall(ctx, {
+        tenantId: "tenant-1",
+        subjectId: "subject-1",
+        query: { text: "hello" },
+        budget: { maxMemoryChars: 1000 },
+        omitted: [],
+        usage: {
+          chars: 12,
+          estimatedTokens: 3,
+          counter: "heuristic",
+          byTier: { full: 1, digest: 0, index: 0 },
+          indexChars: 0,
+        },
+        indexBand: { groups: [], totalInScope: 1, countKind: "exact" },
+        explain: { stages: [] },
+        returnedMemories: [
+          {
+            memoryId: memory.id,
+            score: {
+              similarity: 0.9,
+              decay: 1,
+              tagMatch: 0,
+              freshness: 1,
+              strength: 1,
+              total: 0.9,
+            },
+            retrievedVia: "ann",
+          },
+          {
+            memoryId: companion.id,
+            score: {
+              decay: 1,
+              tagMatch: 0,
+              freshness: 1,
+              strength: 1,
+              total: 0,
+            },
+            retrievedVia: "mandatory_companion",
+            companionOf: memory.id,
+          },
+        ],
+      });
+
+      const recall = await store.getRecall(ctx, recallId);
+      expect(recall).not.toBeNull();
+      expect(recall?.recallId).toBe(recallId);
+      expect(recall?.tenantId).toBe("tenant-1");
+      expect(recall?.subjectId).toBe("subject-1");
+      expect(recall?.returnedMemories.breakdownCaptured).toBe(true);
+      expect(recall?.returnedMemories.memories).toEqual([
+        {
+          memoryId: memory.id,
+          score: { similarity: 0.9, decay: 1, tagMatch: 0, freshness: 1, strength: 1, total: 0.9 },
+          retrievedVia: "ann",
+        },
+        {
+          memoryId: companion.id,
+          score: { decay: 1, tagMatch: 0, freshness: 1, strength: 1, total: 0 },
+          retrievedVia: "mandatory_companion",
+          companionOf: memory.id,
+        },
+      ]);
+      expect(recall?.createdAt).toBeInstanceOf(Date);
+    });
+
+    it("getRecall は存在しない recallId に対して null を返す（例外にしない）", async () => {
+      const store = await createStore();
+      const ctx: Ctx = { tenantId: "tenant-1" };
+      await expect(store.getRecall(ctx, randomUUID())).resolves.toBeNull();
+    });
+
+    it("getRecall は別テナントの recallId に対して null を返す（tenant scoping、ADR 0007）", async () => {
+      const store = await createStore();
+      const ctxA: Ctx = { tenantId: "tenant-a" };
+      const ctxB: Ctx = { tenantId: "tenant-b" };
+      const recallId = await store.createRecall(ctxA, {
+        tenantId: "tenant-a",
+        subjectId: null,
+        query: { text: "hello" },
+        budget: null,
+        omitted: [],
+        usage: {
+          chars: 0,
+          estimatedTokens: 0,
+          counter: "heuristic",
+          byTier: { full: 0, digest: 0, index: 0 },
+          indexChars: 0,
+        },
+        indexBand: { groups: [], totalInScope: 0, countKind: "exact" },
+        explain: { stages: [] },
+        returnedMemories: [],
+      });
+      await expect(store.getRecall(ctxB, recallId)).resolves.toBeNull();
+    });
+
+    it("getRecall は0件しか返さなかった recall を { breakdownCaptured: true, memories: [] } として読み戻す（ADR 0008 の族: 「無い」と「空」を同じ顔にしない）", async () => {
+      const store = await createStore();
+      const ctx: Ctx = { tenantId: "tenant-1" };
+      const recallId = await store.createRecall(ctx, {
+        tenantId: "tenant-1",
+        subjectId: null,
+        query: { text: "hello" },
+        budget: null,
+        omitted: [],
+        usage: {
+          chars: 0,
+          estimatedTokens: 0,
+          counter: "heuristic",
+          byTier: { full: 0, digest: 0, index: 0 },
+          indexChars: 0,
+        },
+        indexBand: { groups: [], totalInScope: 0, countKind: "exact" },
+        explain: { stages: [] },
+        returnedMemories: [],
+      });
+      const recall = await store.getRecall(ctx, recallId);
+      expect(recall?.returnedMemories).toEqual({ breakdownCaptured: true, memories: [] });
     });
 
     // -------------------------------------------------------------------
