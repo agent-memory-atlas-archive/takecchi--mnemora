@@ -552,3 +552,70 @@ export async function runMigrations(
     await releaseMigrationLock(lockClient, lockKey);
   }
 }
+
+export interface AnalyzeMemoriesOptions {
+  /**
+   * `memories` テーブルを置くスキーマ。`RunMigrationsOptions.schema` と同じ意味・同じ検証
+   * （{@link assertSafeSchemaName}）。省略時は接続の `search_path` 任せ（今日どおり、
+   * 識別子を一切修飾しない）。
+   */
+  schema?: string;
+}
+
+export interface AnalyzeMemoriesResult {
+  /** 実際に `ANALYZE` を発行した対象（`schema` を指定した場合はスキーマ修飾済み）。 */
+  table: string;
+}
+
+/**
+ * `memories` に対して `ANALYZE memories;`
+ * （`packages/postgres/migrations/0005_analyze_memories.sql` と同じ1文）を、
+ * マイグレーションのライフサイクルから独立に、いつでも呼べる形で実行する
+ * （Issue #234 / ADR 0143）。
+ *
+ * ## なぜ `runMigrations` の中身にしないか（構造的な理由であり、設計の好みではない）
+ *
+ * `0005_analyze_memories.sql` は既に `ANALYZE memories;` を持つが、**新規インストールでは
+ * 効果が無い**——マイグレーションは、アプリケーションが最初の行を書き込む**前**に
+ * 適用されるため、`0005` が走る時点で `memories` はまだ空であり、`ANALYZE` はサンプルする
+ * 行を持たない（ADR 0062 (d)(ii) が実測済み: 「新規インストール順」で段1の ANN クエリは
+ * **37.4 / 33.2 / 32.9 ms**——本修正が何も無い場合と統計的に同じ遅さ）。
+ *
+ * **⟹ `runMigrations` 自身が最後に `ANALYZE` を打つ形にしても、この構造的な事実は
+ * 変わらない。** 移行が実行されるタイミングそのものが「データがまだ無い」タイミングだから
+ * である。これは実測ではなく、`migrate.ts` の実行順（マイグレーション→アプリケーション
+ * 起動→データ投入）と `0005` 自身が既に記録している実測から導ける論理である。
+ * ⟹ 本関数は意図的に `runMigrations` からも CLI の既定経路からも独立させ、**データを
+ * 投入した後に、運用側（デプロイの手順書・cron・オペレータ操作）が明示的に呼ぶ**設計に
+ * した。CLI からは `mnemora-postgres-migrate --analyze-memories`
+ * （`./bin/migrate.ts` / `./bin/cli-options.ts`）で呼べる。**何度呼んでも安全**
+ * （`ANALYZE` は冪等——空テーブルに対しても成功し、行が増えるたびに再実行すれば
+ * 統計は最新化される）。
+ *
+ * ## 副作用について（この環境では測っていない。PostgreSQL の公式文書から引いた）
+ *
+ * **この作業環境には Postgres も docker も無く、実測はできない**（Issue #247 /
+ * alteroid #965 / alteroid #1015 の族）。PostgreSQL の公式文書によれば、単体の
+ * `ANALYZE`（`VACUUM` を伴わない）は対象テーブルに `SHARE UPDATE EXCLUSIVE` ロックを
+ * 取る——このロックは通常の `SELECT`/`INSERT`/`UPDATE`/`DELETE` と競合しない（競合するのは
+ * 他の `VACUUM`/`ANALYZE`・一部の DDL のみ）。また `ANALYZE` はテーブル全体を舐めず、
+ * `default_statistics_target` に基づく固定サイズのサンプル行だけを読む。
+ * ⟹ 素の `CREATE INDEX`（`ACCESS EXCLUSIVE` を取り書き込みを止める——ADR 0062 (c)）とは
+ * 性質が異なり、書き込みを止めない設計だと**文書からは読める**。
+ * **ただし「文書から読める」は「この環境で測った」ではない**——大きなテーブルで
+ * サンプリング自体にどれだけ壁時計時間がかかるか、統計情報以外の副作用
+ * （プランキャッシュの無効化等）が実運用でどう効くかは未計測。本 ADR の
+ * 「確かめていないこと」に明記する。
+ */
+export async function runAnalyzeMemories(
+  pool: Pool,
+  options: AnalyzeMemoriesOptions = {},
+): Promise<AnalyzeMemoriesResult> {
+  const { schema } = options;
+  if (schema !== undefined) {
+    assertSafeSchemaName(schema);
+  }
+  const table = qualify(schema, "memories");
+  await pool.query(`ANALYZE ${table}`);
+  return { table };
+}

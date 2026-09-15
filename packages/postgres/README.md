@@ -47,6 +47,40 @@ DATABASE_URL=postgresql://user:pass@localhost:5432/mydb npx mnemora-postgres-mig
 - 適用したファイル名を一覧で出す。
 - 複数プロセスが同時に実行しても安全（advisory lock で直列化する）。
 
+### ⚠ 新規インストール後、最初のデータ投入が終わったら `--analyze-memories` を実行すること
+
+**新規インストールの直後は、ANN（近似最近傍）検索が「索引が無いのと同じ遅さ」で動く。**
+`migrations/0005_analyze_memories.sql` は `memories` の統計情報を更新する `ANALYZE` を
+含むが、このファイルは**他のすべてのマイグレーションと同じく、アプリケーションが最初の
+行を書き込む前に**適用される——つまり `0005` が走る時点で `memories` はまだ空であり、
+`ANALYZE` は集めるべき行を持たない（詳細と実測は `migrations/0005_analyze_memories.sql`
+本文のコメントと [ADR 0062](../../docs/decisions/0062-contested-with-id-fk-index.md) (d) を
+参照。実測: 新規インストール順のまま100,000行投入した状態での ANN クエリは
+**37.4 / 33.2 / 32.9 ms**——`ANALYZE` 未実行の場合と統計的に同じ遅さ。対して
+`ANALYZE` 実行後は **4.6 / 4.5 / 5.6 ms**）。
+
+**⟹ 初回のデータ投入（シード・移行元からの一括インポート等）が終わったタイミングで、
+一度だけ次を実行すること**（`mnemora-postgres-migrate` と同じバイナリの1オプション、
+[ADR 0143](../../docs/decisions/0143-analyze-memories-after-seed.md)）:
+
+```bash
+DATABASE_URL=postgresql://user:pass@localhost:5432/mydb npx mnemora-postgres-migrate --analyze-memories
+```
+
+- 保留中のマイグレーションを適用したうえで、続けて `ANALYZE memories;` を実行する
+  （マイグレーションの適用対象が無くても、`--analyze-memories` 単体で実行される）。
+- **何度実行しても安全**（冪等）——デプロイの手順書やデプロイ後フックに組み込んでおいて
+  差し支えない。`--schema` を指定している場合はそのスキーマの `memories` に対して実行する。
+- `MNEMORA_ANALYZE_MEMORIES=1`（空文字・`"0"`・`"false"` 以外の値）でも同じ効果。
+- **これは完全な自動化ではない**——`runMigrations`／このマイグレーション自体には
+  「データが投入された後」を検知する手段が無いため、実行するタイミングは運用側が
+  判断する必要がある。`ANALYZE`（`VACUUM` を伴わない単体の `ANALYZE`）は PostgreSQL の
+  公式文書によれば通常の読み書きをブロックしないため、デプロイパイプラインの
+  最後や、cron で定期的に呼んでも安全側に倒れる設計だが、**この副作用はこの
+  リポジトリでは実測していない**（作業環境に Postgres が無いため）。詳細・
+  採らなかった案・確かめていないことは
+  [ADR 0143](../../docs/decisions/0143-analyze-memories-after-seed.md) 参照。
+
 ### 専用スキーマを指定する（`--schema` / `--extension-schema`）
 
 共有 DB に他システム（例: Prisma が管理する `public`）が同居していて、mnemora の

@@ -26,6 +26,7 @@ function expectOk(result: MigrateCliParseResult): asserts result is {
     schema?: string;
     extensionSchema?: string;
     extensionMode?: ExtensionMode;
+    analyzeMemories?: boolean;
   };
 } {
   expect(result.ok).toBe(true);
@@ -45,6 +46,59 @@ describe("parseMigrateCliOptions: 未指定時の既定", () => {
     expect(result.options.schema).toBeUndefined();
     expect(result.options.extensionSchema).toBeUndefined();
     expect(result.options.extensionMode).toBeUndefined();
+    expect(result.options.analyzeMemories, "既定は false（ANALYZE を実行しない）").toBe(false);
+  });
+});
+
+describe("parseMigrateCliOptions: --analyze-memories（Issue #234 / ADR 0143）", () => {
+  it("--analyze-memories を渡すと true になる", () => {
+    const result = parseMigrateCliOptions(["--analyze-memories"], {});
+    expectOk(result);
+    expect(result.options.analyzeMemories).toBe(true);
+  });
+
+  it("--schema と併用できる（互いに独立）", () => {
+    const result = parseMigrateCliOptions(["--schema", "s", "--analyze-memories"], {});
+    expectOk(result);
+    expect(result.options.schema).toBe("s");
+    expect(result.options.analyzeMemories).toBe(true);
+  });
+
+  it("MNEMORA_ANALYZE_MEMORIES=1 でも true になる", () => {
+    const result = parseMigrateCliOptions([], { MNEMORA_ANALYZE_MEMORIES: "1" });
+    expectOk(result);
+    expect(result.options.analyzeMemories).toBe(true);
+  });
+
+  it.each(["", "0", "false", "FALSE", "False"])(
+    "MNEMORA_ANALYZE_MEMORIES=%s は偽として扱う",
+    (value) => {
+      const result = parseMigrateCliOptions([], { MNEMORA_ANALYZE_MEMORIES: value });
+      expectOk(result);
+      expect(result.options.analyzeMemories).toBe(false);
+    },
+  );
+
+  it("MNEMORA_ANALYZE_MEMORIES=true や任意の非空文字列は真として扱う", () => {
+    const result = parseMigrateCliOptions([], { MNEMORA_ANALYZE_MEMORIES: "yes" });
+    expectOk(result);
+    expect(result.options.analyzeMemories).toBe(true);
+  });
+
+  it("フラグと環境変数のどちらか片方だけでも true になる（OR）", () => {
+    const result = parseMigrateCliOptions(["--analyze-memories"], {
+      MNEMORA_ANALYZE_MEMORIES: "false",
+    });
+    expectOk(result);
+    expect(result.options.analyzeMemories, "フラグ側が true なら env が false でも true").toBe(
+      true,
+    );
+  });
+
+  it("--analyze-memories=true のような = 区切りは受け付けず未知のオプションになる（値を取らない真偽フラグのため）", () => {
+    const result = parseMigrateCliOptions(["--analyze-memories=true"], {});
+    expectErr(result);
+    expect(result.error.message).toMatch(/unknown option/i);
   });
 });
 
@@ -238,6 +292,7 @@ describe("parseMigrateCliOptions: --help", () => {
       MNEMORA_SCHEMA: "should_be_ignored",
       MNEMORA_EXTENSION_SCHEMA: "should_be_ignored_ext",
       MNEMORA_EXTENSION_MODE: "verify",
+      MNEMORA_ANALYZE_MEMORIES: "1",
     });
     expectOk(result);
     // ⭐ 「help だけを返す」ことを**丸ごと**固定する。`schema` / `extensionSchema` /
@@ -276,9 +331,11 @@ describe("formatMigrateCliUsage", () => {
     expect(usage).toMatch(/--schema/);
     expect(usage).toMatch(/--extension-schema/);
     expect(usage).toMatch(/--extension-mode/);
+    expect(usage).toMatch(/--analyze-memories/);
     expect(usage).toMatch(/MNEMORA_SCHEMA/);
     expect(usage).toMatch(/MNEMORA_EXTENSION_SCHEMA/);
     expect(usage).toMatch(/MNEMORA_EXTENSION_MODE/);
+    expect(usage).toMatch(/MNEMORA_ANALYZE_MEMORIES/);
     expect(usage).toMatch(/優先/);
   });
 });

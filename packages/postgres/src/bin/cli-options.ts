@@ -68,6 +68,17 @@ export interface ParsedMigrateCliOptions {
    * 既定値をここで決め打ちしない（`../migrate.ts` が唯一の既定値の置き場所）。
    */
   extensionMode?: ExtensionMode;
+  /**
+   * マイグレーション適用後に `runAnalyzeMemories`（`../migrate.ts`）を呼ぶかどうか
+   * （Issue #234 / ADR 0143）。`--analyze-memories` の指定、または `MNEMORA_ANALYZE_MEMORIES`
+   * が truthy な値（空文字・`"0"`・`"false"`（大文字小文字を区別しない）以外）のとき `true`。
+   * **`help: true` の経路（下記）を除き、この欄は常に `boolean`（`true`/`false`）に解決され、
+   * `undefined` にはならない**——型を `schema`/`extensionSchema` と同じく optional に
+   * してあるのは、`help` 早期 return（`{ help: true }` のみを返す。下記の doc・
+   * `../__tests__/cli-options.test.ts` の `toEqual({ help: true })` 参照）と型を揃えるため
+   * であって、「指定なし」を表すためではない。
+   */
+  analyzeMemories?: boolean;
 }
 
 /** 解釈に失敗したことを表す。`message` はそのまま `console.error` に渡せる説明文。 */
@@ -81,7 +92,25 @@ export type MigrateCliParseResult =
 const SCHEMA_FLAG = "--schema";
 const EXTENSION_SCHEMA_FLAG = "--extension-schema";
 const EXTENSION_MODE_FLAG = "--extension-mode";
+const ANALYZE_MEMORIES_FLAG = "--analyze-memories";
 const EXTENSION_MODES: readonly ExtensionMode[] = ["create", "verify"];
+
+/**
+ * `MNEMORA_ANALYZE_MEMORIES` の値が truthy かどうかを判定する（Issue #234 / ADR 0143）。
+ *
+ * `--schema` 等の値を持つフラグと違い、`--analyze-memories` は値を取らない真偽フラグである
+ * ため、環境変数側も「値の中身」で意味を持たせる必要がある。空文字・`"0"`・`"false"`
+ * （大文字小文字を区別しない、前後の空白は無視する）を偽とし、それ以外の非 `undefined` な
+ * 値はすべて真とする——`MNEMORA_SCHEMA` 等の「値がそのまま識別子になる」変数とは扱いが
+ * 異なることに注意。
+ */
+function isTruthyEnvFlag(value: string | undefined): boolean {
+  if (value === undefined) {
+    return false;
+  }
+  const normalized = value.trim().toLowerCase();
+  return normalized !== "" && normalized !== "0" && normalized !== "false";
+}
 
 /**
  * `argv`（`process.argv.slice(2)` を渡す想定。`node` 本体・スクリプトパスは含めない）と
@@ -91,6 +120,7 @@ const EXTENSION_MODES: readonly ExtensionMode[] = ["create", "verify"];
  * - `--schema <name>` / `--schema=<name>`
  * - `--extension-schema <name>` / `--extension-schema=<name>`
  * - `--extension-mode <create|verify>` / `--extension-mode=<create|verify>`（ADR 0093）
+ * - `--analyze-memories`（値を取らない真偽フラグ、Issue #234 / ADR 0143）
  * - `--help` / `-h`
  *
  * 弾く形（`ok: false` を返す）:
@@ -100,10 +130,16 @@ const EXTENSION_MODES: readonly ExtensionMode[] = ["create", "verify"];
  * - `--schema`（`MNEMORA_SCHEMA` も含め）を伴わない `--extension-schema`
  *   （`MNEMORA_EXTENSION_SCHEMA` も含め）
  * - `--extension-mode`（`MNEMORA_EXTENSION_MODE` も含め）に `"create"` / `"verify"` 以外の値
+ * - `--analyze-memories=<値>`（`=` 区切りでの値の指定。真偽フラグなので値を取らない——
+ *   `--analyze-memories` は既知の flag 文字列と完全一致した場合だけ扱われ、
+ *   `--analyze-memories=true` はその完全一致に当たらず「未知のオプション」として弾かれる）
  *
  * ⚠ `--extension-mode` は `--schema` の有無に関わらず指定できる（`--extension-schema` とは
  * 独立）。`extensionMode: "verify"` は経路2（`migrations/*.sql` 本文の `CREATE EXTENSION`）
  * にも効くため、`schema` 未指定でも意味を持つ（`../migrate.ts` の doc 参照）。
+ *
+ * ⚠ `--analyze-memories` も `--schema` の有無に関わらず指定できる（`runAnalyzeMemories` に
+ * そのまま `schema` を渡すだけで、独立した機能である）。
  */
 export function parseMigrateCliOptions(
   argv: readonly string[],
@@ -112,6 +148,7 @@ export function parseMigrateCliOptions(
   let schemaArg: string | undefined;
   let extensionSchemaArg: string | undefined;
   let extensionModeArg: string | undefined;
+  let analyzeMemoriesArg = false;
   let help = false;
 
   for (let i = 0; i < argv.length; i += 1) {
@@ -119,6 +156,11 @@ export function parseMigrateCliOptions(
 
     if (arg === "--help" || arg === "-h") {
       help = true;
+      continue;
+    }
+
+    if (arg === ANALYZE_MEMORIES_FLAG) {
+      analyzeMemoriesArg = true;
       continue;
     }
 
@@ -185,6 +227,7 @@ export function parseMigrateCliOptions(
     };
   }
   const extensionMode = extensionModeRaw as ExtensionMode | undefined;
+  const analyzeMemories = analyzeMemoriesArg || isTruthyEnvFlag(env.MNEMORA_ANALYZE_MEMORIES);
 
   try {
     if (schema !== undefined) {
@@ -197,7 +240,10 @@ export function parseMigrateCliOptions(
     return { ok: false, error: { message: (err as Error).message } };
   }
 
-  return { ok: true, options: { help: false, schema, extensionSchema, extensionMode } };
+  return {
+    ok: true,
+    options: { help: false, schema, extensionSchema, extensionMode, analyzeMemories },
+  };
 }
 
 /**
@@ -206,7 +252,7 @@ export function parseMigrateCliOptions(
  * README を読めない状況でも使えることに意味があるため、意図的に持たせてある）。
  */
 export function formatMigrateCliUsage(): string {
-  return `使い方: mnemora-postgres-migrate [--schema <name>] [--extension-schema <name>] [--extension-mode <create|verify>]
+  return `使い方: mnemora-postgres-migrate [--schema <name>] [--extension-schema <name>] [--extension-mode <create|verify>] [--analyze-memories]
 
 保留中の migrations/*.sql をファイル名の昇順で適用する。DATABASE_URL は必須（環境変数）。
 
@@ -224,12 +270,20 @@ export function formatMigrateCliUsage(): string {
                               既に在ることだけを確認する。無ければ足りない拡張名と
                               実行すべき SQL を示して失敗する
                               （CREATE EXTENSION 権限を持たないロール向け）。
+  --analyze-memories          マイグレーション適用後に ANALYZE memories; を実行する
+                              （Issue #234 / ADR 0143）。新規インストールでは
+                              0005_analyze_memories.sql 自身の ANALYZE はテーブルが
+                              空の時点で走るため効果が無い——初回データ投入後、または
+                              統計を更新したい任意のタイミングでこのフラグを付けて
+                              再実行すること。何度呼んでも安全（冪等）。
   -h, --help                  このヘルプを表示して終了する（終了コード 0）。
 
 環境変数:
   MNEMORA_SCHEMA              --schema の環境変数版。
   MNEMORA_EXTENSION_SCHEMA     --extension-schema の環境変数版。
   MNEMORA_EXTENSION_MODE       --extension-mode の環境変数版。
+  MNEMORA_ANALYZE_MEMORIES     --analyze-memories の環境変数版。空文字・"0"・"false"
+                                （大文字小文字を区別しない）以外の値は true として扱う。
 
 優先順位: コマンドライン引数 > 環境変数 > 未指定。
 どれも指定しなければ、今日と1バイトも変わらない振る舞いになる。

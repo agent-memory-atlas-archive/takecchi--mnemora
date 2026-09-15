@@ -154,5 +154,6 @@ alteroid (github.com/takecchi/alteroid) を根拠として引く箇所は、確�
 | [0140](./0140-contested-write-side-companion-required.md) | `MemoryStore` の書き込み側で、対向（`contestedWithId`）の無い単独 `contested` を拒否する — ADR 0136 決定3の実装（生成経路も含む） | 採用 (2026-09) |
 | [0141](./0141-local-embedding-load-retry.md) | `@mnemora/local-embedding` の読み込みに、種類の分かっていない失敗のリトライを足す — キャッシュが hit してもネットワークは0回にならない（Issue #261） | 採用 (2026-09) |
 | [0142](./0142-outbox-complete-fail-compare-and-swap.md) | `OutboxStore.complete`/`fail` を compare-and-swap にする — `attempts` をフェンシングトークンに使う（Issue #233、ADR 0032 が残した named debt の実装） | 採用 (2026-09) |
+| [0143](./0143-analyze-memories-after-seed.md) | 新規インストール後に `ANALYZE memories;` を明示的に実行できるようにする — `runMigrations`/migrate CLI 末尾での自動実行は構造的に効かないため、独立コマンドにする | 採用 (2026-09) |
 
 <!-- ADR-INDEX:GENERATED:END -->

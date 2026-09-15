@@ -72,14 +72,16 @@ async function runCli(
 }
 
 describe("mnemora-postgres-migrate（子プロセス起動、DB 無し）", () => {
-  it("--help: 終了コード0で、--schema / --extension-schema / MNEMORA_SCHEMA / 優先順位の説明が出る", async () => {
+  it("--help: 終了コード0で、--schema / --extension-schema / --analyze-memories / MNEMORA_SCHEMA / 優先順位の説明が出る", async () => {
     const result = await runCli(["--help"], {});
 
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain("--schema");
     expect(result.stdout).toContain("--extension-schema");
+    expect(result.stdout).toContain("--analyze-memories");
     expect(result.stdout).toContain("MNEMORA_SCHEMA");
     expect(result.stdout).toContain("MNEMORA_EXTENSION_SCHEMA");
+    expect(result.stdout).toContain("MNEMORA_ANALYZE_MEMORIES");
     expect(result.stdout, "優先順位の説明が出ること").toContain(
       "優先順位: コマンドライン引数 > 環境変数 > 未指定。",
     );
@@ -90,6 +92,24 @@ describe("mnemora-postgres-migrate（子プロセス起動、DB 無し）", () =
 
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain("DATABASE_URL");
+  });
+
+  it(
+    "--analyze-memories だけを渡し DATABASE_URL が無い: 引数解釈は通るが、接続する前に" +
+      "終了コード1で DATABASE_URL 欠如を報告する（ANALYZE を試みる前に決着する）",
+    async () => {
+      const result = await runCli(["--analyze-memories"], {});
+
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain("DATABASE_URL");
+    },
+  );
+
+  it("--analyze-memories=true（= 区切り）: 値を取らない真偽フラグなので未知のオプションとしてエラーになる", async () => {
+    const result = await runCli(["--analyze-memories=true"], {});
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("--analyze-memories=true");
   });
 
   it(
