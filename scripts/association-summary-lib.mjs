@@ -6,9 +6,13 @@
  *
  * `examples/chat` の `association-probes` サブコマンド(`MNEMORA_ASSOCIATION_JSON` が
  * 吐く JSON)を Markdown へ変換する。`recall()` の連想枠(`RecallQuery.association`、
- * ADR 0151 / Issue #200)が想起の質を動かすかを、3本の arm
+ * ADR 0151 / Issue #200)が想起の質を動かすかを、4本の arm
  * (`off: 連想枠なし（既定の recall）` / `on: 連想枠あり（maxCount=3）` /
- * `on: 連想枠あり（maxCount=5）`)で比べる(Issue #291)。
+ * `on: 連想枠あり（maxCount=5）` / `on: 連想枠あり（maxCount=10）`)で比べる(Issue #291。
+ * `maxCount=10` は、CI 実測(commit `4362333`)で `returnedCount` が全 probe で
+ * 「10 + maxCount」ちょうど(枠が常に満杯)だった一方 gold は12件中5件しか居なかった
+ * ことを受けたフォローアップ——「gold は枠のすぐ下に居るのか、届いていないのか」を
+ * `maxCount` を伸ばして切り分ける)。
  *
  * ## ⛔ 門にしない。非0になるのは入力そのものが壊れているときだけ
  *
@@ -62,9 +66,9 @@
  */
 
 /** 現在の仕様(Issue #291)で固定されている arm の本数。 */
-const ARM_COUNT = 3;
+const ARM_COUNT = 4;
 /** 現在の仕様で固定されている delta の本数(いずれも baseline=off との対比)。 */
-const DELTA_COUNT = 2;
+const DELTA_COUNT = 3;
 /** probe のカテゴリ(ブリッジ語の字種)。3種×4件。 */
 const CATEGORIES = ["ascii-id", "proper-noun", "common-noun"];
 
@@ -89,6 +93,16 @@ const ARM_BOOLEAN_FIELDS = ["associationEnabled"];
 const PROBE_STRING_FIELDS = ["probeId"];
 const PROBE_NUMBER_FIELDS = ["returnedCount", "memoryChars", "associationChars", "reciprocalRank"];
 const PROBE_BOOLEAN_FIELDS = ["hit1", "hit10", "goldReturned", "goldAnchoredOnProbeAnchor"];
+
+/** `AssociationFrameEntry.role`(`examples/chat/src/association-arm.ts`)の既知の値。 */
+const ASSOCIATION_FRAME_ROLE_VALUES = [
+  "own-gold",
+  "own-anchor",
+  "own-distractor",
+  "other-probe",
+  "haystack",
+  "unknown",
+];
 
 const DELTA_STRING_FIELDS = ["baselineArmLabel", "againstArmLabel"];
 const DELTA_NUMBER_FIELDS = [
@@ -154,6 +168,38 @@ function isNumberOrNull(value) {
 const PROBE_CATEGORY_VALUES = CATEGORIES;
 
 /**
+ * 1件の `associationFrame` エントリ(`{ externalId, rank, role, anchorExternalId }`)の
+ * 形を検査する。⚠ ここも門にはしない(呼び出し側の `validateMeasured` と同じ姿勢)
+ * ——形が壊れていなければ ok、内容(role が期待通りか等)は問わない。
+ *
+ * @param {unknown} entry
+ * @param {string} path
+ * @returns {string[]}
+ */
+function findAssociationFrameEntryProblems(entry, path) {
+  if (typeof entry !== "object" || entry === null) {
+    return [`${path} がオブジェクトでない`];
+  }
+  const problems = [];
+  if (typeof entry.externalId !== "string" || entry.externalId === "") {
+    problems.push(`${path}.externalId が文字列でない、または空`);
+  }
+  if (typeof entry.rank !== "number" || Number.isNaN(entry.rank)) {
+    problems.push(`${path}.rank が数値でない`);
+  }
+  if (!ASSOCIATION_FRAME_ROLE_VALUES.includes(entry.role)) {
+    problems.push(
+      `${path}.role が ${ASSOCIATION_FRAME_ROLE_VALUES.join("/")} のいずれでもない` +
+        `(実際: ${JSON.stringify(entry.role)})`,
+    );
+  }
+  if (!isStringOrNull(entry.anchorExternalId)) {
+    problems.push(`${path}.anchorExternalId が文字列でも null でもない`);
+  }
+  return problems;
+}
+
+/**
  * @param {unknown} probe
  * @param {string} path
  * @returns {string[]}
@@ -191,6 +237,13 @@ function findProbeFieldProblems(probe, path) {
   if (!isStringOrNull(probe.stageSkipped)) {
     problems.push(`${path}.stageSkipped が文字列でも null でもない`);
   }
+  if (!Array.isArray(probe.associationFrame)) {
+    problems.push(`${path}.associationFrame が配列でない`);
+  } else {
+    probe.associationFrame.forEach((entry, i) => {
+      problems.push(...findAssociationFrameEntryProblems(entry, `${path}.associationFrame[${i}]`));
+    });
+  }
   return problems;
 }
 
@@ -224,6 +277,19 @@ function findArmFieldProblems(arm, path, topProbeCount) {
     for (const [reason, count] of Object.entries(arm.stageSkippedReasons)) {
       if (typeof count !== "number" || Number.isNaN(count)) {
         problems.push(`${path}.stageSkippedReasons.${reason} が数値でない`);
+      }
+    }
+  }
+  if (
+    typeof arm.associationFrameRoles !== "object" ||
+    arm.associationFrameRoles === null ||
+    Array.isArray(arm.associationFrameRoles)
+  ) {
+    problems.push(`${path}.associationFrameRoles がオブジェクトでない`);
+  } else {
+    for (const [role, count] of Object.entries(arm.associationFrameRoles)) {
+      if (typeof count !== "number" || Number.isNaN(count)) {
+        problems.push(`${path}.associationFrameRoles.${role} が数値でない`);
       }
     }
   }
@@ -679,6 +745,85 @@ function buildStageSkippedSection(measured) {
 }
 
 /**
+ * ⭐ **arm 別の `associationFrameRoles` の内訳**(「連想枠には何が入ったか」、
+ * 北極星の問い3)。role の列は実測に現れたものだけを出す(`ASSOCIATION_FRAME_ROLE_VALUES`
+ * を決め打ちで並べない——現れなかった role の列を毎回出すと、role が増減したときに
+ * この関数を書き換え忘れても気づけない)。
+ */
+function buildAssociationFrameRolesTable(measured) {
+  const roles = new Set();
+  for (const arm of measured.arms) {
+    for (const role of Object.keys(arm.associationFrameRoles ?? {})) {
+      roles.add(role);
+    }
+  }
+  const roleList = [...roles].sort();
+  if (roleList.length === 0) {
+    return "(どの arm の連想枠にも候補が入らなかった)";
+  }
+  const header = `| armLabel | ${roleList.join(" | ")} |`;
+  const divider = `|---|${roleList.map(() => "---").join("|")}|`;
+  const lines = [header, divider];
+  for (const arm of measured.arms) {
+    const cells = roleList.map((role) => String(arm.associationFrameRoles?.[role] ?? 0));
+    lines.push(`| ${arm.armLabel} | ${cells.join(" | ")} |`);
+  }
+  return lines.join("\n");
+}
+
+/** `associationMaxCount` が最大の(連想枠が on の)arm を返す。無ければ undefined。 */
+function findMaxAssociationCountArm(measured) {
+  let best;
+  for (const arm of measured.arms) {
+    if (!arm.associationEnabled) {
+      continue;
+    }
+    if (!best || (arm.associationMaxCount ?? -1) > (best.associationMaxCount ?? -1)) {
+      best = arm;
+    }
+  }
+  return best;
+}
+
+/** `associationFrame` の1件を「順位:role(externalId)」の短い文字列にする。 */
+function formatAssociationFrameEntry(entry) {
+  return `${entry.rank}:${entry.role}(${entry.externalId})`;
+}
+
+/**
+ * ⭐ **`maxCount` 最大の arm について、gold が返らなかった probe の `associationFrame`
+ * を probe ごとに列挙する。**「その枠には代わりに何が入っていたか」を読めるようにする
+ * ことが目的(北極星の問い3)——1 probe につき枠の全件を1行にまとめる(長くなりすぎない
+ * ように)。連想枠が on の arm が無ければ節ごと出さない(`off` しか無い実測はここでは
+ * 起こらないはずだが、`validateMeasured` は「非0にする門」ではないため、壊れていない
+ * 範囲で寛容に振る舞う)。
+ */
+function buildMissedGoldFrameSection(measured) {
+  const arm = findMaxAssociationCountArm(measured);
+  if (!arm) {
+    return undefined;
+  }
+  const missed = arm.probes.filter((probe) => !probe.goldReturned);
+  const lines = [
+    `## maxCount 最大の arm(${arm.armLabel})で gold が返らなかった probe の連想枠`,
+    "",
+  ];
+  if (missed.length === 0) {
+    lines.push("(この arm では、gold が返らなかった probe は無い)");
+    return lines.join("\n");
+  }
+  lines.push("| probeId | 連想枠の中身(順位:role(externalId)、返った順) |", "|---|---|");
+  for (const probe of missed) {
+    const frame =
+      probe.associationFrame.length > 0
+        ? probe.associationFrame.map(formatAssociationFrameEntry).join(", ")
+        : "(連想枠に候補が1件も入らなかった)";
+    lines.push(`| ${probe.probeId} | ${frame} |`);
+  }
+  return lines.join("\n");
+}
+
+/**
  * `validateMeasured`/`validateBaseline` を通した値から Markdown を組み立てる。
  * **呼び出し側は必ず validate 済みの値を渡すこと**
  * (`identifier-probe-summary-lib.mjs` と同じ分担)。
@@ -709,7 +854,16 @@ export function buildSummaryMarkdown({ measured, baseline }) {
     "## probe 別の明細",
     "",
     buildProbeDetailTable(measured),
+    "",
+    "## 連想枠の中身(role 別。北極星の問い3「なぜそれを思い出したのかを説明できるか」)",
+    "",
+    buildAssociationFrameRolesTable(measured),
   );
+
+  const missedGoldFrameSection = buildMissedGoldFrameSection(measured);
+  if (missedGoldFrameSection) {
+    lines.push("", missedGoldFrameSection);
+  }
 
   const stageSkippedSection = buildStageSkippedSection(measured);
   if (stageSkippedSection) {

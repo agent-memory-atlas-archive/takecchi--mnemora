@@ -382,6 +382,7 @@ describe("ci.yml の association-probes ジョブの配線(Issue #291)", () => {
       goldReturned: false,
       reciprocalRank: 0,
       stageSkipped: null,
+      associationFrame: [],
     });
     const makeArm = (armLabel, associationEnabled, associationMaxCount) => ({
       armLabel,
@@ -398,11 +399,13 @@ describe("ci.yml の association-probes ジョブの配線(Issue #291)", () => {
       memoryCharsTotal: 4321,
       associationCharsTotal: 0,
       stageSkippedReasons: {},
+      associationFrameRoles: {},
       probes: PROBE_IDS.map(makeProbe),
     });
     const offArm = makeArm("off: 連想枠なし（既定の recall）", false, null);
     const on3Arm = makeArm("on: 連想枠あり（maxCount=3）", true, 3);
     const on5Arm = makeArm("on: 連想枠あり（maxCount=5）", true, 5);
+    const on10Arm = makeArm("on: 連想枠あり（maxCount=10）", true, 10);
     return {
       schemaVersion: 1,
       measuredAt: "2026-09-16T00:00:00.000Z",
@@ -413,7 +416,7 @@ describe("ci.yml の association-probes ジョブの配線(Issue #291)", () => {
       haystackSize: 60,
       recallLimit: 10,
       warmup: { ok: true, detail: null },
-      arms: [offArm, on3Arm, on5Arm],
+      arms: [offArm, on3Arm, on5Arm, on10Arm],
       deltas: [
         {
           baselineArmLabel: offArm.armLabel,
@@ -428,6 +431,16 @@ describe("ci.yml の association-probes ジョブの配線(Issue #291)", () => {
         {
           baselineArmLabel: offArm.armLabel,
           againstArmLabel: on5Arm.armLabel,
+          goldReturnedCount: 0,
+          goldViaAssociationCount: 0,
+          mrr: 0,
+          hit10Count: 0,
+          memoryCharsTotal: 0,
+          charsPerAdditionalGold: null,
+        },
+        {
+          baselineArmLabel: offArm.armLabel,
+          againstArmLabel: on10Arm.armLabel,
           goldReturnedCount: 0,
           goldViaAssociationCount: 0,
           mrr: 0,

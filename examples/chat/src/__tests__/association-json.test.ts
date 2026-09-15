@@ -25,6 +25,7 @@ function minimalArmReport(overrides: Partial<AssociationArmReport> = {}): Associ
     memoryCharsTotal: 2000,
     associationCharsTotal: 0,
     stageSkippedReasons: {},
+    associationFrameRoles: {},
     probes: [],
     ...overrides,
   };
@@ -36,6 +37,7 @@ describe("buildAssociationProbeRunJson", () => {
       offReport: minimalArmReport(),
       on3Report: minimalArmReport({ armLabel: "on3" }),
       on5Report: minimalArmReport({ armLabel: "on5" }),
+      on10Report: minimalArmReport({ armLabel: "on10" }),
       embeddingSpace: { provider: "local", model: "ruri-v3-30m/sym", dimensions: 256 },
       recallLimit: 10,
       warmup: { ok: true, detail: "モデルの読み込みに成功した(warmup() 完了)" },
@@ -61,6 +63,7 @@ describe("buildAssociationProbeRunJson", () => {
       offReport: minimalArmReport(),
       on3Report: minimalArmReport({ armLabel: "on3" }),
       on5Report: minimalArmReport({ armLabel: "on5" }),
+      on10Report: minimalArmReport({ armLabel: "on10" }),
       embeddingSpace: { provider: "local", model: "ruri-v3-30m/sym", dimensions: 256 },
       recallLimit: 10,
       warmup: { ok: true, detail: "モデルの読み込みに成功した(warmup() 完了)" },
@@ -70,24 +73,26 @@ describe("buildAssociationProbeRunJson", () => {
     expect(json.warmup).toEqual({ ok: true, detail: null });
   });
 
-  it("arms は3件、渡した順(off/on3/on5)のまま", () => {
+  it("arms は4件、渡した順(off/on3/on5/on10)のまま", () => {
     const off = minimalArmReport({ armLabel: "off" });
     const on3 = minimalArmReport({ armLabel: "on3" });
     const on5 = minimalArmReport({ armLabel: "on5" });
+    const on10 = minimalArmReport({ armLabel: "on10" });
     const json = buildAssociationProbeRunJson({
       offReport: off,
       on3Report: on3,
       on5Report: on5,
+      on10Report: on10,
       embeddingSpace: { provider: "local", model: "ruri-v3-30m/sym", dimensions: 256 },
       recallLimit: 10,
       warmup: { ok: true, detail: "ok" },
       measuredAt: new Date("2026-09-16T00:00:00.000Z"),
       commit: null,
     });
-    expect(json.arms).toEqual([off, on3, on5]);
+    expect(json.arms).toEqual([off, on3, on5, on10]);
   });
 
-  it("deltas: on(3)/on(5) それぞれの対 off。charsPerAdditionalGold は goldReturnedCount<=0 なら null", () => {
+  it("deltas: on(3)/on(5)/on(10) それぞれの対 off。charsPerAdditionalGold は goldReturnedCount<=0 なら null", () => {
     const off = minimalArmReport({
       armLabel: "off",
       goldReturnedCount: 2,
@@ -111,19 +116,29 @@ describe("buildAssociationProbeRunJson", () => {
       hit10Count: 1,
       memoryCharsTotal: 1000,
     });
+    const on10 = minimalArmReport({
+      armLabel: "on10",
+      goldReturnedCount: 5,
+      goldViaAssociationCount: 3,
+      mrr: 0.2,
+      hit10Count: 1,
+      memoryCharsTotal: 1300,
+    });
     const json = buildAssociationProbeRunJson({
       offReport: off,
       on3Report: on3,
       on5Report: on5,
+      on10Report: on10,
       embeddingSpace: { provider: "local", model: "ruri-v3-30m/sym", dimensions: 256 },
       recallLimit: 10,
       warmup: { ok: true, detail: "ok" },
       measuredAt: new Date("2026-09-16T00:00:00.000Z"),
       commit: null,
     });
-    expect(json.deltas).toHaveLength(2);
+    expect(json.deltas).toHaveLength(3);
     const deltaOn3 = json.deltas[0]!;
     const deltaOn5 = json.deltas[1]!;
+    const deltaOn10 = json.deltas[2]!;
     expect(deltaOn3.mrr).toBeCloseTo(0.2, 10);
     expect({ ...deltaOn3, mrr: 0 }).toEqual({
       baselineArmLabel: "off",
@@ -145,6 +160,17 @@ describe("buildAssociationProbeRunJson", () => {
       hit10Count: 0,
       memoryCharsTotal: 0,
       charsPerAdditionalGold: null,
+    });
+    expect(deltaOn10.mrr).toBeCloseTo(0.1, 10);
+    expect({ ...deltaOn10, mrr: 0 }).toEqual({
+      baselineArmLabel: "off",
+      againstArmLabel: "on10",
+      goldReturnedCount: 3,
+      goldViaAssociationCount: 3,
+      mrr: 0,
+      hit10Count: 0,
+      memoryCharsTotal: 300,
+      charsPerAdditionalGold: 100,
     });
   });
 });

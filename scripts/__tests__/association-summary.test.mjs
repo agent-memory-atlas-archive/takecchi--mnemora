@@ -56,6 +56,7 @@ function makeProbe(overrides = {}) {
     goldReturned: false,
     reciprocalRank: 0,
     stageSkipped: null,
+    associationFrame: [],
     ...overrides,
   };
 }
@@ -77,10 +78,39 @@ function makeOnProbes(goldCount) {
         goldReturned: true,
         associationChars: 90,
         reciprocalRank: 1 / (11 + i),
+        associationFrame: [
+          {
+            externalId: `assoc-gold-${probeId}`,
+            rank: 11,
+            role: "own-gold",
+            anchorExternalId: `assoc-anchor-${probeId}`,
+          },
+        ],
       });
     }
-    return makeProbe({ probeId, category });
+    return makeProbe({
+      probeId,
+      category,
+      associationFrame: [
+        {
+          externalId: `assoc-filler-000${i}`,
+          rank: 11,
+          role: "haystack",
+          anchorExternalId: `assoc-anchor-${probeId}`,
+        },
+      ],
+    });
   });
+}
+
+function associationFrameRolesOf(probes) {
+  const roles = {};
+  for (const probe of probes) {
+    for (const entry of probe.associationFrame) {
+      roles[entry.role] = (roles[entry.role] ?? 0) + 1;
+    }
+  }
+  return roles;
 }
 
 function makeArm(overrides = {}) {
@@ -99,6 +129,7 @@ function makeArm(overrides = {}) {
     memoryCharsTotal: 4321,
     associationCharsTotal: 0,
     stageSkippedReasons: {},
+    associationFrameRoles: {},
     probes: makeOffProbes(),
     ...overrides,
   };
@@ -116,6 +147,7 @@ function makeOnArm(maxCount, goldCount, extra = {}) {
     mrr,
     memoryCharsTotal: 4321 + goldCount * 90,
     associationCharsTotal: goldCount * 90,
+    associationFrameRoles: associationFrameRolesOf(probes),
     probes,
     ...extra,
   });
@@ -125,6 +157,7 @@ function makeMeasured(overrides = {}) {
   const offArm = makeArm();
   const on3Arm = makeOnArm(3, 9);
   const on5Arm = makeOnArm(5, 9);
+  const on10Arm = makeOnArm(10, 9);
   const buildDelta = (againstArm) => ({
     baselineArmLabel: offArm.armLabel,
     againstArmLabel: againstArm.armLabel,
@@ -147,8 +180,8 @@ function makeMeasured(overrides = {}) {
     haystackSize: 60,
     recallLimit: 10,
     warmup: { ok: true, detail: null },
-    arms: [offArm, on3Arm, on5Arm],
-    deltas: [buildDelta(on3Arm), buildDelta(on5Arm)],
+    arms: [offArm, on3Arm, on5Arm, on10Arm],
+    deltas: [buildDelta(on3Arm), buildDelta(on5Arm), buildDelta(on10Arm)],
     ...overrides,
   };
 }
@@ -263,7 +296,7 @@ describe("association-summary.mjs（子プロセスで起動）", () => {
     expect(result.stderr).toContain("hit1Count");
   });
 
-  it("--measured の arms が3本でないと非0", () => {
+  it("--measured の arms が4本でないと非0", () => {
     const measured = makeMeasured();
     measured.arms.pop();
     const result = run(["--measured", writeJson("bad-arms.json", measured)]);

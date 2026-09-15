@@ -59,9 +59,9 @@ export interface AssociationProbeRunJson {
   haystackSize: number;
   recallLimit: number;
   warmup: AssociationWarmupJson;
-  /** 3 arm(off / on(maxCount=3) / on(maxCount=5))。 */
+  /** 4 arm(off / on(maxCount=3) / on(maxCount=5) / on(maxCount=10))。 */
   arms: AssociationArmReport[];
-  /** 2件(on(3) と on(5) のそれぞれ対 off)。 */
+  /** 3件(on(3) / on(5) / on(10) のそれぞれ対 off)。 */
   deltas: AssociationDeltaJson[];
 }
 
@@ -88,6 +88,7 @@ export interface BuildAssociationProbeRunJsonOptions {
   offReport: AssociationArmReport;
   on3Report: AssociationArmReport;
   on5Report: AssociationArmReport;
+  on10Report: AssociationArmReport;
   embeddingSpace: AssociationEmbeddingSpaceJson;
   recallLimit: number;
   warmup: { ok: boolean; detail: string };
@@ -124,10 +125,11 @@ export function buildAssociationProbeRunJson(
       ok: options.warmup.ok,
       detail: options.warmup.ok ? null : options.warmup.detail,
     },
-    arms: [options.offReport, options.on3Report, options.on5Report],
+    arms: [options.offReport, options.on3Report, options.on5Report, options.on10Report],
     deltas: [
       buildAssociationDelta(options.offReport, options.on3Report),
       buildAssociationDelta(options.offReport, options.on5Report),
+      buildAssociationDelta(options.offReport, options.on10Report),
     ],
   };
 }

@@ -1008,13 +1008,17 @@ async function runIdentifierProbes(): Promise<void> {
  * **`identifier-probes` と同じ provider の組み合わせ**(`deterministic` LLM +
  * `local` 埋め込み。鍵・カセット不要)——差は probe set と arm(`./association-arm.js`)。
  *
- * **同じ会話を、別テナントへ3回 ingest する**(`off` / `on(maxCount=3)` /
- * `on(maxCount=5)`)。arm 間の汚染を断つため、テナントは `buildArmTenantId` で
+ * **同じ会話を、別テナントへ4回 ingest する**(`off` / `on(maxCount=3)` /
+ * `on(maxCount=5)` / `on(maxCount=10)`)。`maxCount=10` は、CI 実測(commit `4362333`)で
+ * `returnedCount` が全 probe で「10 + maxCount」ちょうどになっていた
+ * (連想枠が常に満杯)ことを受け、「gold は枠のすぐ下に居て `maxCount` を増やせば
+ * 届くのか、それとも枠を広げても届かないのか」を切り分けるために足した(Issue #291
+ * フォローアップ)。arm 間の汚染を断つため、テナントは `buildArmTenantId` で
  * 必ず別々にする(`retrieval-quality.ts` の先例と同じ理由)。
  *
  * **`warmup()` を明示的に呼び、失敗を区別する**(`identifier-probes` と同じ理由)。
  * `ok: false` なら、メトリクスを1つも出さずに打ち切る——この bench の
- * `AssociationProbeRunJson`(`./association-json.js`)は3 arm・2 delta を持つ形で
+ * `AssociationProbeRunJson`(`./association-json.js`)は4 arm・3 delta を持つ形で
  * 確定しており、「一部だけ測れた」を表す枠が無い。⟹ 失敗時は JSON も書かない
  * (打ち切ったことは標準エラー出力と `process.exitCode` で伝える)。
  */
@@ -1089,10 +1093,23 @@ async function runAssociationProbes(): Promise<void> {
       `  goldReturned=${on5Report.goldReturnedCount}/${on5Report.probeCount} MRR=${on5Report.mrr.toFixed(3)}`,
     );
 
+    console.log("\n=== arm: on(連想枠あり、maxCount=10) ===");
+    const on10Report = await runAssociationArm({
+      armLabel: `on: 連想枠あり（maxCount=10）(llm=${handle.llmMode}, embedding=${handle.embeddingMode}/${embeddingSpace.model}/${embeddingSpace.dimensions}次元)`,
+      tenantId: buildArmTenantId("assoc-on10", runToken),
+      runtime: handle.runtime,
+      memoryStore: handle.memoryStore,
+      association: { maxCount: 10 },
+    });
+    console.log(
+      `  goldReturned=${on10Report.goldReturnedCount}/${on10Report.probeCount} MRR=${on10Report.mrr.toFixed(3)}`,
+    );
+
     const json = buildAssociationProbeRunJson({
       offReport,
       on3Report,
       on5Report,
+      on10Report,
       embeddingSpace,
       recallLimit: DEFAULT_RECALL_LIMIT,
       warmup,

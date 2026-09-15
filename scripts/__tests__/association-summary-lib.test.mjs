@@ -50,6 +50,7 @@ function makeProbe(overrides = {}) {
     goldReturned: false,
     reciprocalRank: 0,
     stageSkipped: null,
+    associationFrame: [],
     ...overrides,
   };
 }
@@ -71,10 +72,39 @@ function makeOnProbes(goldCount) {
         goldReturned: true,
         associationChars: 90,
         reciprocalRank: 1 / (11 + i),
+        associationFrame: [
+          {
+            externalId: `assoc-gold-${probeId}`,
+            rank: 11,
+            role: "own-gold",
+            anchorExternalId: `assoc-anchor-${probeId}`,
+          },
+        ],
       });
     }
-    return makeProbe({ probeId, category });
+    return makeProbe({
+      probeId,
+      category,
+      associationFrame: [
+        {
+          externalId: `assoc-filler-000${i}`,
+          rank: 11,
+          role: "haystack",
+          anchorExternalId: `assoc-anchor-${probeId}`,
+        },
+      ],
+    });
   });
+}
+
+function associationFrameRolesOf(probes) {
+  const roles = {};
+  for (const probe of probes) {
+    for (const entry of probe.associationFrame) {
+      roles[entry.role] = (roles[entry.role] ?? 0) + 1;
+    }
+  }
+  return roles;
 }
 
 function makeArm(overrides = {}) {
@@ -93,6 +123,7 @@ function makeArm(overrides = {}) {
     memoryCharsTotal: 4321,
     associationCharsTotal: 0,
     stageSkippedReasons: {},
+    associationFrameRoles: {},
     probes: makeOffProbes(),
     ...overrides,
   };
@@ -110,6 +141,7 @@ function makeOnArm(maxCount, goldCount, extra = {}) {
     mrr,
     memoryCharsTotal: 4321 + goldCount * 90,
     associationCharsTotal: goldCount * 90,
+    associationFrameRoles: associationFrameRolesOf(probes),
     probes,
     ...extra,
   });
@@ -119,6 +151,7 @@ function makeMeasured(overrides = {}) {
   const offArm = makeArm();
   const on3Arm = makeOnArm(3, 9);
   const on5Arm = makeOnArm(5, 9);
+  const on10Arm = makeOnArm(10, 9);
   const buildDelta = (againstArm) => ({
     baselineArmLabel: offArm.armLabel,
     againstArmLabel: againstArm.armLabel,
@@ -141,8 +174,8 @@ function makeMeasured(overrides = {}) {
     haystackSize: 60,
     recallLimit: 10,
     warmup: { ok: true, detail: null },
-    arms: [offArm, on3Arm, on5Arm],
-    deltas: [buildDelta(on3Arm), buildDelta(on5Arm)],
+    arms: [offArm, on3Arm, on5Arm, on10Arm],
+    deltas: [buildDelta(on3Arm), buildDelta(on5Arm), buildDelta(on10Arm)],
     ...overrides,
   };
 }
@@ -224,7 +257,7 @@ describe("validateMeasured", () => {
     expect(result.ok, result.ok ? "" : result.error).toBe(true);
   });
 
-  it("arms が3本でなければ落ちる", () => {
+  it("arms が4本でなければ落ちる", () => {
     const broken = makeMeasured();
     broken.arms = broken.arms.slice(0, 2);
     const result = validateMeasured(broken);
@@ -232,7 +265,7 @@ describe("validateMeasured", () => {
     expect(result.error).toContain("arms の本数");
   });
 
-  it("deltas が2本でなければ落ちる", () => {
+  it("deltas が3本でなければ落ちる", () => {
     const broken = makeMeasured();
     broken.deltas = broken.deltas.slice(0, 1);
     const result = validateMeasured(broken);
@@ -286,6 +319,55 @@ describe("validateMeasured", () => {
     const result = validateMeasured(broken);
     expect(result.ok).toBe(false);
     expect(result.error).toContain("stageSkippedReasons");
+  });
+
+  it("⭐ probe.associationFrame が配列でなければ落ちる", () => {
+    const broken = makeMeasured();
+    broken.arms[1].probes[0].associationFrame = "not an array";
+    const result = validateMeasured(broken);
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain("associationFrame が配列でない");
+  });
+
+  it("⭐ associationFrame エントリの role が既知の6値以外なら落ちる", () => {
+    const broken = makeMeasured();
+    broken.arms[1].probes[0].associationFrame = [
+      {
+        externalId: "assoc-gold-ascii-project",
+        rank: 11,
+        role: "typo-role",
+        anchorExternalId: null,
+      },
+    ];
+    const result = validateMeasured(broken);
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain("role");
+  });
+
+  it("⭐ associationFrame エントリの anchorExternalId が数値なら落ちる(文字列でも null でもない)", () => {
+    const broken = makeMeasured();
+    broken.arms[1].probes[0].associationFrame = [
+      { externalId: "assoc-gold-ascii-project", rank: 11, role: "own-gold", anchorExternalId: 42 },
+    ];
+    const result = validateMeasured(broken);
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain("anchorExternalId");
+  });
+
+  it("⭐ arm.associationFrameRoles が配列なら落ちる(オブジェクトでない)", () => {
+    const broken = makeMeasured();
+    broken.arms[1].associationFrameRoles = ["own-gold"];
+    const result = validateMeasured(broken);
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain("associationFrameRoles");
+  });
+
+  it("⭐ arm.associationFrameRoles の値が数値でなければ落ちる", () => {
+    const broken = makeMeasured();
+    broken.arms[1].associationFrameRoles = { "own-gold": "9" };
+    const result = validateMeasured(broken);
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain("associationFrameRoles.own-gold");
   });
 });
 
@@ -341,6 +423,7 @@ describe("buildSummaryMarkdown", () => {
     expect(markdown).toContain(measured.arms[0].armLabel);
     expect(markdown).toContain(measured.arms[1].armLabel);
     expect(markdown).toContain(measured.arms[2].armLabel);
+    expect(markdown).toContain(measured.arms[3].armLabel);
     expect(markdown).toContain("ascii-id");
     expect(markdown).toContain("proper-noun");
     expect(markdown).toContain("common-noun");
@@ -436,5 +519,32 @@ describe("buildSummaryMarkdown", () => {
     const result = validateMeasured(measured);
     expect(result.ok).toBe(false);
     expect(result.error).toContain("associationEnabled/associationMaxCount");
+  });
+
+  it("⭐ 連想枠の中身(role別)の節が出て、各 arm の associationFrameRoles の件数を含む", () => {
+    const markdown = buildSummaryMarkdown({ measured: makeMeasured() });
+    expect(markdown).toContain("連想枠の中身");
+    expect(markdown).toContain("own-gold");
+    expect(markdown).toContain("haystack");
+  });
+
+  it("⭐ maxCount 最大の arm(on10)で gold が返らなかった probe の連想枠が列挙される", () => {
+    const measured = makeMeasured();
+    const markdown = buildSummaryMarkdown({ measured });
+    expect(markdown).toContain("maxCount 最大の arm");
+    // on10 arm(9件 gold) では 9〜11番目の probeId(gold が無い側)が「haystack」枠として
+    // 列挙されるはず。
+    const missedProbeId = PROBE_IDS[9][0];
+    expect(markdown).toContain(missedProbeId);
+    expect(markdown).toContain("haystack");
+  });
+
+  it("連想枠が全て off(associationEnabled が無い)なら、maxCount 最大の arm の節は出さない", () => {
+    const measured = makeMeasured();
+    for (const arm of measured.arms) {
+      arm.associationEnabled = false;
+    }
+    const markdown = buildSummaryMarkdown({ measured });
+    expect(markdown).not.toContain("maxCount 最大の arm");
   });
 });

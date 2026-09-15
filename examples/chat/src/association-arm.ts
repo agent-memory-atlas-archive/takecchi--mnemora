@@ -59,6 +59,71 @@ export interface AssociationProbeOutcome {
   reciprocalRank: number;
   /** この probe の `omitted` に出た `stage_skipped{stage:"association"}` の reason。無ければ null。 */
   stageSkipped: string | null;
+  /**
+   * この probe の recall() が返した「連想由来」（`retrievedVia === "association"`）の
+   * 候補を、返った順に並べたもの。⭐ **「なぜ gold が入らなかったか」を、後から
+   * 説明できるようにするために記録する**（北極星の問い3）。
+   */
+  associationFrame: AssociationFrameEntry[];
+}
+
+export interface AssociationFrameEntry {
+  /** `resolveExternalId` で解決した externalId。解決できなければ memoryId のまま。 */
+  externalId: string;
+  /** 返り値全体での順位（1始まり）。 */
+  rank: number;
+  /**
+   * この externalId が、probe 体系の中で何だったか。
+   * - `"own-gold"` … この probe の gold
+   * - `"own-anchor"` … この probe の anchor（⚠ ADR 0151 は「アンカー自身は除く」と
+   *   決めているので、本来ここには現れない。現れたら実装か理解のどちらかが間違っている）
+   * - `"own-distractor"` … この probe の distractor
+   * - `"other-probe"` … 別 probe の anchor/gold/distractor（どれかは `externalId` で分かる）
+   * - `"haystack"` … 共有 haystack の filler
+   * - `"unknown"` … 上のどれでもない（externalId を解決できなかった等）
+   */
+  role: "own-gold" | "own-anchor" | "own-distractor" | "other-probe" | "haystack" | "unknown";
+  /** 連想の起点になったアンカー（`associationOf` を externalId へ解決したもの）。無ければ null。 */
+  anchorExternalId: string | null;
+}
+
+/**
+ * `AssociationProbeOutcome.associationFrame` の1件が、この probe(`currentProbeId`)
+ * にとって何であるかを判定する(機械的。文字列を手で書かない——`ASSOCIATION_PROBES`
+ * と `associationGoldExternalId`/`associationAnchorExternalId`/
+ * `associationDistractorExternalId` の規約関数、そして `haystackExternalIds`
+ * (この会話で実際に積んだ haystack の externalId 集合)とだけ突き合わせる)。
+ */
+function classifyAssociationFrameRole(
+  currentProbeId: string,
+  externalId: string,
+  haystackExternalIds: ReadonlySet<string>,
+): AssociationFrameEntry["role"] {
+  if (externalId === associationGoldExternalId(currentProbeId)) {
+    return "own-gold";
+  }
+  if (externalId === associationAnchorExternalId(currentProbeId)) {
+    return "own-anchor";
+  }
+  if (externalId === associationDistractorExternalId(currentProbeId)) {
+    return "own-distractor";
+  }
+  for (const probe of ASSOCIATION_PROBES) {
+    if (probe.id === currentProbeId) {
+      continue;
+    }
+    if (
+      externalId === associationGoldExternalId(probe.id) ||
+      externalId === associationAnchorExternalId(probe.id) ||
+      externalId === associationDistractorExternalId(probe.id)
+    ) {
+      return "other-probe";
+    }
+  }
+  if (haystackExternalIds.has(externalId)) {
+    return "haystack";
+  }
+  return "unknown";
 }
 
 export interface AssociationArmReport {
@@ -81,6 +146,8 @@ export interface AssociationArmReport {
   associationCharsTotal: number;
   /** stage_skipped(stage:"association") の reason → 件数。 */
   stageSkippedReasons: Record<string, number>;
+  /** 連想枠に入ったものの `role` 別の件数(全 probe の合計)。 */
+  associationFrameRoles: Record<string, number>;
   probes: AssociationProbeOutcome[];
 }
 
@@ -121,6 +188,13 @@ export async function runAssociationArm(
   const association: RecallAssociationQuery | undefined = options.association
     ? { maxCount: options.association.maxCount }
     : undefined;
+
+  // ⭐ 枠の中身を判定するための「共有 haystack の externalId 一覧」。この会話に
+  // 実際に積んだ utterances(`buildAssociationProbeSetConversation` の戻り値)自身から
+  // 導く——`kind: "haystack"` を機械的に見るだけであり、文字列を手で書かない。
+  const haystackExternalIds = new Set(
+    utterances.filter((u) => u.kind === "haystack").map((u) => u.externalId),
+  );
 
   const probes: AssociationProbeOutcome[] = [];
   for (const probe of ASSOCIATION_PROBES) {
@@ -165,6 +239,33 @@ export async function runAssociationArm(
         ? stageSkippedEntry.reason
         : null;
 
+    // ⭐ 連想枠の中身(「gold ではない何かが枠に入っていたとき、それが何だったか」を
+    // 後から説明できるようにする、北極星の問い3)。`retrievedVia === "association"` の
+    // 候補だけを、返った順のまま拾う。
+    const associationFrame: AssociationFrameEntry[] = [];
+    for (let i = 0; i < result.memories.length; i += 1) {
+      const memory = result.memories[i]!;
+      if (memory.retrievedVia !== "association") {
+        continue;
+      }
+      const externalId = resolvedExternalIds[i] ?? memory.memoryId;
+      let anchorExternalId: string | null = null;
+      if (memory.associationOf !== undefined) {
+        const resolvedAnchor = await resolveExternalId(
+          options.memoryStore,
+          ctx,
+          memory.associationOf,
+        );
+        anchorExternalId = resolvedAnchor ?? memory.associationOf;
+      }
+      associationFrame.push({
+        externalId,
+        rank: i + 1,
+        role: classifyAssociationFrameRole(probe.id, externalId, haystackExternalIds),
+        anchorExternalId,
+      });
+    }
+
     probes.push({
       probeId: probe.id,
       category: probe.category,
@@ -182,13 +283,18 @@ export async function runAssociationArm(
       goldReturned: goldRank !== null,
       reciprocalRank: goldRank !== null ? 1 / goldRank : 0,
       stageSkipped,
+      associationFrame,
     });
   }
 
   const stageSkippedReasons: Record<string, number> = {};
+  const associationFrameRoles: Record<string, number> = {};
   for (const p of probes) {
     if (p.stageSkipped !== null) {
       stageSkippedReasons[p.stageSkipped] = (stageSkippedReasons[p.stageSkipped] ?? 0) + 1;
+    }
+    for (const entry of p.associationFrame) {
+      associationFrameRoles[entry.role] = (associationFrameRoles[entry.role] ?? 0) + 1;
     }
   }
 
@@ -207,6 +313,7 @@ export async function runAssociationArm(
     memoryCharsTotal: probes.reduce((sum, p) => sum + p.memoryChars, 0),
     associationCharsTotal: probes.reduce((sum, p) => sum + p.associationChars, 0),
     stageSkippedReasons,
+    associationFrameRoles,
     probes,
   };
 }
