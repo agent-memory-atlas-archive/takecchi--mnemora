@@ -522,17 +522,59 @@ export interface ConsolidationResult {
 }
 
 /**
- * `runtime.reflect` の対象（Issue #104）。`consolidate` の {@link ConsolidateTarget} と
- * **意図的に同じ形**——`reflect` に「何を見るか」を決めさせない。`target` を必須にしたのは、
- * これを省略できると `reflect` 自身が対象を選ぶことになり、それは Background Cognition の
- * *実運用*（Phase 1 の範囲外、docs/roadmap.md §1.3）の決定を先取りしてしまうためである。
+ * `runtime.reflect` の対象（Issue #104。`{ seedMemoryId }` は Issue #204、ADR 0154）。
+ * `consolidate` の {@link ConsolidateTarget} と**意図的に同じ形**——`reflect` に「何を見るか」を
+ * 決めさせない。`target` を必須にしたのは、これを省略できると `reflect` 自身が対象を選ぶことに
+ * なり、それは Background Cognition の*実運用*（Phase 1 の範囲外、docs/roadmap.md §1.3）の決定を
+ * 先取りしてしまうためである。
  *
  * `{ memoryIds }` は正規化せず、**重複も入力順もそのまま保つ**。`{ query, maxCandidates }` は
  * `recall(ctx, query)` を1回呼んで得られた `memories` の id を順に採る（`maxCandidates` が
  * あれば先頭からその件数で切る）。
+ *
+ * `{ seedMemoryId }` は `ConsolidateTarget` の `{ seedMemoryId }`（ADR 0152）と**同じ土台選定**
+ * を使う——種の `digest` を `RecallQuery.text` にして `recall()` を1回呼び、`computeAffinity`
+ * （`strategies/consolidate.ts`、`max(similarity, lexicalMatch)`）が `minAffinity` 未満の
+ * 候補を落とす。**新しい「似ている」は発明しない。**種そのものは判定を受けず、必ず先頭に
+ * 含める（種の embedding がまだ `pending` で `recall()` に現れない窓があるため、
+ * `ConsolidateTarget` の doc コメントと同じ理由）。
+ *
+ * ⚠ **`minAffinity` の既定値は `consolidate` と別の定数である**
+ * （{@link DEFAULT_REFLECT_MIN_AFFINITY}、`consolidate` は {@link DEFAULT_CONSOLIDATE_MIN_AFFINITY}）。
+ * `consolidate` と `reflect` は同じ道具に**逆向きの帯**を要求する——`consolidate` が欲しいのは
+ * 「同じ事実の言い換え」（近いほどよい）、`reflect` が欲しいのは「関連するが同じではない
+ * 複数の事実」（近すぎると導けるものが無い。同じ事実の写しを5枚並べて内省させても、
+ * 新しい知識は出てこない）。低い閾値でよいもう1つの根拠: `reflect()` は既存行の `status` を
+ * 1つも動かさない（ADR 0091 決定4）⟹ 取り違えたときの damage が `consolidate`（統合元が
+ * `superseded` へ動く）より小さい⟹ 保守側へ倒す理由が `consolidate` ほど強くない。
+ *
+ * ⛔ **上限（近すぎるものを除く帯）は無い。**上限を入れると `reflect` が「何が重複か」を
+ * 判断することになり、それは `consolidate` の仕事である（責務の二重化、Issue #103 が
+ * 訴えたのと同じ形）。代わりに「`consolidate` が先に走っていれば重複は既に畳まれている」
+ * という前提に乗る——**この前提は負債である**（ADR 0154「引き受けた負債」）。
+ *
+ * `seedMemoryId` が指す Memory が無い場合、`recall()` は呼ばない——対象は `[seedMemoryId]` の
+ * 1件のみとなり、後続の `getMany` が既存の分類（`not_found`）にそのまま落とす（新しい
+ * `nothingReason`/`ReflectBasisOutcome` は発明しない）。
+ *
+ * この形も `target` を呼び手が必須で渡す点は変わらない——`reflect` 自身が「何を見るか」を
+ * 決めているわけではなく、ADR 0091 決定3（`target` 必須）に反しない（ADR 0154）。
  */
 export type ReflectTarget =
-  { memoryIds: MemoryId[] } | { query: RecallQuery; maxCandidates?: number };
+  | { memoryIds: MemoryId[] }
+  | { query: RecallQuery; maxCandidates?: number }
+  | { seedMemoryId: MemoryId; maxCandidates?: number; minAffinity?: number };
+
+/**
+ * `{ seedMemoryId }` 形（Issue #204、ADR 0154）が使う `minAffinity` の既定値。
+ *
+ * 🔴 **この値は実測していない。**根拠は向きの議論だけであり、数字の根拠ではない
+ * （`DEFAULT_CONSOLIDATE_MIN_AFFINITY` の JSDoc と同じ書き方）。`consolidate` の 0.8 より
+ * 低くしてあるのは、`reflect` が「近すぎない」複数の事実を欲しがるためである
+ * （{@link ReflectTarget} の doc コメント参照）。緩める/締めるのは、`reflect` 側の実測
+ * （`consolidation-cost` に相当する reflect 側の計測）が入ってから判断する。
+ */
+export const DEFAULT_REFLECT_MIN_AFFINITY = 0.4;
 
 /**
  * `runtime.reflect` の任意オプション（Issue #104）。
@@ -1538,6 +1580,15 @@ export interface Runtime {
    *    store に一切触れず `outcome: 'not_examined'`。`{ query, maxCandidates }` は
    *    `recall(ctx, query)` を1回呼び、返った `memories` の id を順に採る
    *    （`maxCandidates` があれば先頭からその件数で切る）。0件も `not_examined`。
+   *    `{ seedMemoryId, maxCandidates?, minAffinity? }`（Issue #204、ADR 0154）は
+   *    `consolidate` の `{ seedMemoryId }`（ADR 0152）と同じ土台選定——種の Memory を
+   *    `get` し、その `digest` を `text` にして `recall()` を1回呼ぶ（`{ query }` と
+   *    まったく同じ経路）。`recall()` が返した候補のうち、`RecalledMemory.score` から
+   *    `computeAffinity`（`max(similarity, lexicalMatch)`、`strategies/consolidate.ts`）が
+   *    `minAffinity`（既定 {@link DEFAULT_REFLECT_MIN_AFFINITY}）未満のものは落とす。
+   *    **種そのものはこの判定を受けず、必ず先頭に含める**（種の embedding がまだ無いと
+   *    ANN に載らないため）。`maxCandidates` は結果の配列全体（種＋近傍）を先頭から切る。
+   *    種が見つからなければ `recall()` を呼ばず、対象は種の id 1件のみになる。
    * 2. `getMany` で一括読み。**この優先順で**分類する: 無ければ `not_found`、
    *    `status !== 'active'` なら `status_not_active`、`active` かつ
    *    `provenance.kind === 'reflected'` なら `basis_is_reflected`（reflect の産物を
@@ -3198,6 +3249,30 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
     let ids: MemoryId[];
     if ("memoryIds" in target) {
       ids = target.memoryIds;
+    } else if ("seedMemoryId" in target) {
+      // Issue #204（ADR 0154）: `consolidate` の { seedMemoryId }（ADR 0152）と同じ土台選定。
+      // ReflectTarget の doc コメント参照。
+      const seed = await deps.memoryStore.get(ctx, target.seedMemoryId);
+      if (seed === null) {
+        // 種が無い——recall を呼ばない。対象は種の id 1件のみとなり、後続の getMany が
+        // not_found に分類する（新しい nothingReason は発明しない）。
+        ids = [target.seedMemoryId];
+      } else {
+        // 種の digest を text にして recall() を1回呼ぶ——{ query } 形とまったく同じ
+        // 経路を通す（新しい「似ている」の判定を作らない）。
+        const recallResult = await recall(ctx, { text: seed.digest });
+        const minAffinity = target.minAffinity ?? DEFAULT_REFLECT_MIN_AFFINITY;
+        const neighborIds = recallResult.memories
+          .filter((m) => m.memoryId !== target.seedMemoryId)
+          .filter((m) => computeAffinity(m.score) >= minAffinity)
+          .map((m) => m.memoryId);
+        // 種は minAffinity の判定を受けず、必ず先頭に置く（種の embedding がまだ無いと
+        // recall() の結果に現れないため——ReflectTarget の doc コメント参照）。
+        ids = [target.seedMemoryId, ...neighborIds];
+        if (target.maxCandidates !== undefined) {
+          ids = ids.slice(0, target.maxCandidates);
+        }
+      }
     } else {
       const recallResult = await recall(ctx, target.query);
       const recalledIds = recallResult.memories.map((m) => m.memoryId);

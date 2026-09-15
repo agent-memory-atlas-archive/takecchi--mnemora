@@ -166,5 +166,6 @@ alteroid (github.com/takecchi/alteroid) を根拠として引く箇所は、確�
 | [0151](./0151-recall-association-unprompted.md) | 「聞かれていないことを、自分から思い出す」を recall の連想枠として実装する — mnemora の側から話しかける形は採らない（Issue #200） | 採用 (2026-09) |
 | [0152](./0152-consolidate-seed-neighborhood.md) | `ConsolidateTarget` に `{ seedMemoryId }` を足す — 「似ている」は recall の `affinity` を流用し、対象の列挙はしない | 採用 (2026-09) |
 | [0153](./0153-recall-decay-floor-gate.md) | recall の段1に忘却ゲート（`decay_floor_at`）を既定で通す — opt-in ではなく opt-out、黙って減らさない | 採用 (2026-09) |
+| [0154](./0154-reflect-seed-neighborhood.md) | `ReflectTarget` に `{ seedMemoryId }` を足す — `consolidate` と対称の土台選定、ただし帯は逆向き | 採用 (2026-09) |
 
 <!-- ADR-INDEX:GENERATED:END -->

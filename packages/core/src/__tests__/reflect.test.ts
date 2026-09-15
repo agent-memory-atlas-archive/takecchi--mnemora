@@ -7,7 +7,11 @@ import { defaultDecayStrategy } from "../strategies/decay.js";
 import { ConsolidationLLMResultSchema } from "../strategies/consolidate.js";
 import { ReflectionLLMResultSchema } from "../strategies/reflect.js";
 import type { NewMemory } from "../memory.js";
-import { createRuntime } from "../runtime.js";
+import {
+  createRuntime,
+  DEFAULT_CONSOLIDATE_MIN_AFFINITY,
+  DEFAULT_REFLECT_MIN_AFFINITY,
+} from "../runtime.js";
 import { createFakeRuntimeStores } from "./runtime-fakes.js";
 
 /**
@@ -530,6 +534,173 @@ describe("runtime.reflect — target の空・not_examined", () => {
       llmCalls: 0,
       llmFailure: null,
     });
+  });
+});
+
+describe("runtime.reflect — target の { seedMemoryId } の形（Issue #204、ADR 0154）", () => {
+  it("既定の minAffinity（0.4）は consolidate（0.8）とは別の定数であり、値そのものも違う", () => {
+    expect(DEFAULT_REFLECT_MIN_AFFINITY).toBe(0.4);
+    expect(DEFAULT_REFLECT_MIN_AFFINITY).not.toBe(DEFAULT_CONSOLIDATE_MIN_AFFINITY);
+  });
+
+  it("種は必ず先頭に含まれ、既定の minAffinity 以上の近傍だけが土台に加わる", async () => {
+    const { runtime, stores } = buildRuntime(llmReflectingTo({ content: "気づき" }));
+    // FakeEmbeddingProvider は文字列長・'a' の数からベクトルを作る（決定的）。
+    // "seed" → [4, 0]。recall({ text: seed.digest }) はこのベクトルで ANN する。
+    const seed = await stores.memoryStore.createMemory(
+      ctx,
+      newMemory({ content: "seed content", digest: "seed", embeddingStatus: "ready" }),
+    );
+    await stores.vectorStore.upsert(ctx, stores.embeddingProvider.space, seed.id, [4, 0]);
+    // [8, 0] は [4, 0] と同じ向き ⟹ cosine similarity = 1.0（≥ 0.4）。
+    const high = await stores.memoryStore.createMemory(
+      ctx,
+      newMemory({ content: "high affinity neighbor", digest: "hn", embeddingStatus: "ready" }),
+    );
+    await stores.vectorStore.upsert(ctx, stores.embeddingProvider.space, high.id, [8, 0]);
+    // [1, 3] は [4, 0] との cosine similarity ≈ 0.316（< 0.4）。
+    const low = await stores.memoryStore.createMemory(
+      ctx,
+      newMemory({ content: "low affinity neighbor", digest: "ln", embeddingStatus: "ready" }),
+    );
+    await stores.vectorStore.upsert(ctx, stores.embeddingProvider.space, low.id, [1, 3]);
+
+    const result = await runtime.reflect(ctx, { target: { seedMemoryId: seed.id } });
+
+    expect(result.outcome).toBe("reflected");
+    // low は候補にすら入らない——ids に無いので basis にも現れない。
+    expect(result.basis).toEqual([
+      { memoryId: seed.id, kind: "used" },
+      { memoryId: high.id, kind: "used" },
+    ]);
+    const lowStored = await stores.memoryStore.get(ctx, low.id);
+    expect(lowStored?.status).toBe("active");
+  });
+
+  it("minAffinity を渡すと既定を上書きでき、低い閾値なら弱い近傍も含められる", async () => {
+    const { runtime, stores } = buildRuntime(llmReflectingTo({ content: "気づき" }));
+    const seed = await stores.memoryStore.createMemory(
+      ctx,
+      newMemory({ content: "seed content", digest: "seed", embeddingStatus: "ready" }),
+    );
+    await stores.vectorStore.upsert(ctx, stores.embeddingProvider.space, seed.id, [4, 0]);
+    // 前のテストと同じ ≈0.316 の近傍——既定 (0.4) なら落ちるが、minAffinity: 0.2 なら通る。
+    const weak = await stores.memoryStore.createMemory(
+      ctx,
+      newMemory({ content: "weak affinity neighbor", digest: "wn", embeddingStatus: "ready" }),
+    );
+    await stores.vectorStore.upsert(ctx, stores.embeddingProvider.space, weak.id, [1, 3]);
+
+    const result = await runtime.reflect(ctx, {
+      target: { seedMemoryId: seed.id, minAffinity: 0.2 },
+    });
+
+    expect(result.outcome).toBe("reflected");
+    expect(result.basis).toEqual([
+      { memoryId: seed.id, kind: "used" },
+      { memoryId: weak.id, kind: "used" },
+    ]);
+  });
+
+  it("種の embedding がまだ無く recall() の結果に現れなくても、種は先頭に足される", async () => {
+    const { runtime, stores } = buildRuntime(llmReflectingTo({ content: "気づき" }));
+    // 種の embeddingStatus は既定の 'pending'——vectorStore には一切 upsert しない。
+    const seed = await stores.memoryStore.createMemory(
+      ctx,
+      newMemory({ content: "seed content", digest: "seed" }),
+    );
+    const neighbor = await stores.memoryStore.createMemory(
+      ctx,
+      newMemory({ content: "neighbor", digest: "n", embeddingStatus: "ready" }),
+    );
+    await stores.vectorStore.upsert(ctx, stores.embeddingProvider.space, neighbor.id, [4, 0]);
+
+    const result = await runtime.reflect(ctx, { target: { seedMemoryId: seed.id } });
+
+    expect(result.outcome).toBe("reflected");
+    expect(result.basis).toEqual([
+      { memoryId: seed.id, kind: "used" },
+      { memoryId: neighbor.id, kind: "used" },
+    ]);
+  });
+
+  it("maxCandidates は種を残したまま [種, ...近傍] を先頭から切る", async () => {
+    const { runtime, stores } = buildRuntime(llmReflectingTo({ content: "気づき" }));
+    const seed = await stores.memoryStore.createMemory(
+      ctx,
+      newMemory({ content: "seed content", digest: "seed", embeddingStatus: "ready" }),
+    );
+    await stores.vectorStore.upsert(ctx, stores.embeddingProvider.space, seed.id, [4, 0]);
+    // similarity ≈ 1.0（[4,0] と同じ向き）。
+    const first = await stores.memoryStore.createMemory(
+      ctx,
+      newMemory({ content: "first neighbor", digest: "f1", embeddingStatus: "ready" }),
+    );
+    await stores.vectorStore.upsert(ctx, stores.embeddingProvider.space, first.id, [8, 0]);
+    // similarity ≈ 0.970（[8,0] と [4,0] の間、first よりわずかに離れている）。
+    const second = await stores.memoryStore.createMemory(
+      ctx,
+      newMemory({ content: "second neighbor", digest: "f2", embeddingStatus: "ready" }),
+    );
+    await stores.vectorStore.upsert(ctx, stores.embeddingProvider.space, second.id, [8, 2]);
+
+    const result = await runtime.reflect(ctx, {
+      target: { seedMemoryId: seed.id, maxCandidates: 2 },
+    });
+
+    expect(result.outcome).toBe("reflected");
+    expect(result.basis).toEqual([
+      { memoryId: seed.id, kind: "used" },
+      { memoryId: first.id, kind: "used" },
+    ]);
+    const secondStored = await stores.memoryStore.get(ctx, second.id);
+    expect(secondStored?.status).toBe("active");
+  });
+
+  it("種が見つからなければ recall を呼ばず、not_found・no_eligible_basis・LLM を呼ばない", async () => {
+    const { runtime } = buildRuntime(notUsedLlm);
+
+    const result = await runtime.reflect(ctx, {
+      target: { seedMemoryId: "does-not-exist" },
+    });
+
+    expect(result).toEqual({
+      outcome: "nothing_to_reflect",
+      nothingReason: "no_eligible_basis",
+      reflectedMemoryId: null,
+      basis: [{ memoryId: "does-not-exist", kind: "not_found" }],
+      llmCalls: 0,
+      llmFailure: null,
+    });
+  });
+
+  it("dryRun と組み合わせると、LLM を呼ばず1件も書かずに種+近傍を eligible として返す", async () => {
+    const { runtime, stores } = buildRuntime(notUsedLlm);
+    const seed = await stores.memoryStore.createMemory(
+      ctx,
+      newMemory({ content: "seed content", digest: "seed", embeddingStatus: "ready" }),
+    );
+    await stores.vectorStore.upsert(ctx, stores.embeddingProvider.space, seed.id, [4, 0]);
+    const high = await stores.memoryStore.createMemory(
+      ctx,
+      newMemory({ content: "high affinity neighbor", digest: "hn", embeddingStatus: "ready" }),
+    );
+    await stores.vectorStore.upsert(ctx, stores.embeddingProvider.space, high.id, [8, 0]);
+    const eventCountBefore = stores.eventStore.events.length;
+
+    const result = await runtime.reflect(ctx, {
+      target: { seedMemoryId: seed.id },
+      dryRun: true,
+    });
+
+    expect(result.outcome).toBe("dry_run");
+    expect(result.llmCalls).toBe(0);
+    expect(result.reflectedMemoryId).toBeNull();
+    expect(result.basis).toEqual([
+      { memoryId: seed.id, kind: "eligible" },
+      { memoryId: high.id, kind: "eligible" },
+    ]);
+    expect(stores.eventStore.events.length).toBe(eventCountBefore);
   });
 });
 
