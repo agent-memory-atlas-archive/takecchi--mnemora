@@ -17,6 +17,30 @@
  * 🔴 **この PR では `examples/chat/archive-sweep-baseline.json` を作らない**
  * (この作業環境に DB が無く、捏造した数値を基準値として残さないため。初回 CI の
  * artifact を後続 PR で基準値にする)。⟹ `--baseline` は省略可能でなければならない。
+ *
+ * ## 🔴 `before` 段の `usageChars`/`usageEstimatedTokens`/`usageIndexChars` は厳密等価では比べない(ADR 0123 / Issue #223)
+ *
+ * `before`(掃引前)段の active な母集合は、この bench では74件(このリポジトリの実測時点)を
+ * decay 込みで順位付けする。壁時計時間のわずかな差で順位境界の記憶が入れ替わり、
+ * carry される内容の文字数・トークン数(`usageChars`/`usageEstimatedTokens`/
+ * `usageIndexChars`)が run 間で **0.2648%〜1.2671%** 動く(Issue #223、既存 CI artifact
+ * 7 run の実測)。一方 `goldRank`/`carriedCount`/`omittedArchivedCount` などは同じ7 runで
+ * 1バイトも動かず、`after`(掃引後、母集合14件)の全欄も1バイトも動かない。
+ *
+ * この bench が捕まえたいのは「掃引が『載る量』を減らしたか」「掃引で想起の質が
+ * 落ちていないか」であり、どちらも `usageChars` が 4302→665(約85%減)・`goldRank` が
+ * 1.29→1.29(不変)という2桁大きい効果として出る。0.2648%〜1.2671%の揺れはその2桁下であり、
+ * 厳密等価で相違を出し続けても、この揺れを「回帰」と区別する情報を何も足さない
+ * ——`time-term-summary-lib.mjs` が `freshnessRatio`/`decayRatio`/`totalRatio` について
+ * 既に採っている規律(壁時計時間に依存する連続値は比較から除外する)と同じ理由で、
+ * `before` 段の `usage*` 3欄を **比較(mismatch のカウント)からは外す**。
+ *
+ * ただし `time-term` とは1点だけ違う形にする——`before.usageChars` は Issue #209 の
+ * 受け入れ条件そのもの(掃引で載る量が減ったか)に使う中心的な値であり、
+ * `freshnessRatio` のように「artifact にだけ残せばよい」脇役の値ではない。
+ * ⟹ 比較(件数)からは外すが、**summary には基準値と実測を並べた表として残す**
+ * (`buildBeforeUsageInfoSection`)——回帰が起きても人が表を読めば気づける形にする。
+ * `after` 段の `usage*` は除外しない(7 run で不動という前提が崩れたら、まずここが動く)。
  */
 
 const REQUIRED_STORE_FIELDS = [
@@ -246,6 +270,20 @@ const SWEEP_DIFF_FIELDS = ["supported", "limit", "archivedCount", "reachedLimit"
 const STORE_DIFF_FIELDS = REQUIRED_STORE_FIELDS.map((f) => `store.${f}`);
 const MEAN_DIFF_FIELDS = [...REQUIRED_MEAN_FIELDS, "goldRank", "goldRankExcludedCount"];
 
+/**
+ * `before` 段でだけ、壁時計時間に依存して run 間で揺れる連続値(ADR 0123 / Issue #223)。
+ * `after` 段では除外しない——7 run で不動という前提が崩れたら、まずここで検知したい。
+ */
+const NOISY_BEFORE_ONLY_USAGE_FIELDS = ["usageChars", "usageEstimatedTokens", "usageIndexChars"];
+
+/** `label`("before"/"after")に応じて、実際に厳密等価で比較する mean の欄を返す。 */
+function meanDiffFieldsForLabel(label) {
+  if (label === "before") {
+    return MEAN_DIFF_FIELDS.filter((field) => !NOISY_BEFORE_ONLY_USAGE_FIELDS.includes(field));
+  }
+  return MEAN_DIFF_FIELDS;
+}
+
 function readPath(obj, path) {
   return path
     .split(".")
@@ -263,6 +301,7 @@ export function diffPhase(measuredPhase, baselinePhase, label) {
   if (!baselinePhase) {
     return { label, matches: false, missingBaseline: true, fieldDiffs: [] };
   }
+  const meanDiffFields = meanDiffFieldsForLabel(label);
   const fieldDiffs = [];
   for (const field of STORE_DIFF_FIELDS) {
     const baseline = readPath(baselinePhase, field);
@@ -271,7 +310,7 @@ export function diffPhase(measuredPhase, baselinePhase, label) {
       fieldDiffs.push({ field, baseline, measured });
     }
   }
-  for (const field of MEAN_DIFF_FIELDS) {
+  for (const field of meanDiffFields) {
     const path = `recall.unbudgeted.mean.${field}`;
     const baseline = readPath(baselinePhase, path);
     const measured = readPath(measuredPhase, path);
@@ -293,7 +332,7 @@ export function diffPhase(measuredPhase, baselinePhase, label) {
       });
       continue;
     }
-    for (const field of MEAN_DIFF_FIELDS) {
+    for (const field of meanDiffFields) {
       const baseline = readPath(baselineRung.mean, field);
       const measured = readPath(rung.mean, field);
       if (baseline !== measured) {
@@ -376,6 +415,84 @@ function buildDiffSection(measured, baseline) {
     lines.push("", "| 項目 | 基準値 | 実測 |", "|---|---|---|");
     for (const fieldDiff of diff.fieldDiffs) {
       lines.push(`| ${fieldDiff.field} | ${fieldDiff.baseline} | ${fieldDiff.measured} |`);
+    }
+  }
+  return lines.join("\n");
+}
+
+// ---------------------------------------------------------------------------
+// `before` 段の usage* — 比較(mismatch のカウント)からは外すが、表示はする(ADR 0123)
+// ---------------------------------------------------------------------------
+
+/**
+ * `before` 段の `usageChars`/`usageEstimatedTokens`/`usageIndexChars` を、unbudgeted +
+ * 全 budget 段について集める。`baselinePhase` が無ければ `baseline` は常に `undefined`
+ * ——このセクションは基準値の有無に関わらず表示する。
+ *
+ * @param {Record<string, any> | undefined} measuredBefore
+ * @param {Record<string, any> | undefined} baselineBefore
+ */
+export function collectBeforeUsageInfoRows(measuredBefore, baselineBefore) {
+  const rows = [];
+  const pushRows = (label, measuredMean, baselineMean) => {
+    for (const field of NOISY_BEFORE_ONLY_USAGE_FIELDS) {
+      rows.push({
+        label,
+        field,
+        baseline: baselineMean ? baselineMean[field] : undefined,
+        measured: measuredMean ? measuredMean[field] : undefined,
+      });
+    }
+  };
+  pushRows(
+    "unbudgeted",
+    measuredBefore?.recall?.unbudgeted?.mean,
+    baselineBefore?.recall?.unbudgeted?.mean,
+  );
+  const baselineRungsByTokens = new Map(
+    (baselineBefore?.recall?.budgeted ?? []).map((r) => [r.budgetTokens, r]),
+  );
+  for (const rung of measuredBefore?.recall?.budgeted ?? []) {
+    const baselineRung = baselineRungsByTokens.get(rung.budgetTokens);
+    pushRows(`budgeted[budgetTokens=${rung.budgetTokens}]`, rung.mean, baselineRung?.mean);
+  }
+  return rows;
+}
+
+/**
+ * `before` 段の usage* を、基準値と実測を並べた表として出す。**mismatch には数えない**
+ * ——`buildDiffSection` の一致/不一致判定はこの欄を見ない(`meanDiffFieldsForLabel` 参照)。
+ *
+ * @param {Record<string, any>} measured
+ * @param {Record<string, any> | undefined} baseline
+ */
+export function buildBeforeUsageInfoSection(measured, baseline) {
+  const rows = collectBeforeUsageInfoRows(measured.before, baseline?.before);
+  const lines = [
+    "## before 段の usageChars 系(参考表示・基準値との厳密等価では比較していない)",
+    "",
+    "⚠ `before.recall.*.usageChars`/`usageEstimatedTokens`/`usageIndexChars` は、掃引前の" +
+      " active な母集合(この bench では数十件)を decay込みで順位付けする際、壁時計時間の" +
+      "わずかな差で順位境界の記憶が入れ替わり、run 間で 0.2648%〜1.2671% 動く連続値である" +
+      "(Issue #223、既存 CI artifact 7 run の実測)。`goldRank`/`carriedCount` や `after`" +
+      "(掃引後)段の全欄はこの7 runで1バイトも動いていない——動いているのは carry された" +
+      "内容の文字数・トークン数だけである。ADR 0123 の判断により、この3欄は基準値との" +
+      "厳密等価の比較・相違件数のカウントからは外す(`time-term-summary-lib.mjs` の" +
+      "`freshnessRatio` 等と同じ規律)。**ただし値はここに残す**——回帰は表を読んで" +
+      "人が気づく。",
+    "",
+  ];
+  if (baseline) {
+    lines.push("| 段 | 項目 | 基準値 | 実測 |", "|---|---|---|---|");
+    for (const row of rows) {
+      lines.push(
+        `| ${row.label} | ${row.field} | ${row.baseline ?? "-"} | ${row.measured ?? "-"} |`,
+      );
+    }
+  } else {
+    lines.push("| 段 | 項目 | 実測 |", "|---|---|---|");
+    for (const row of rows) {
+      lines.push(`| ${row.label} | ${row.field} | ${row.measured ?? "-"} |`);
     }
   }
   return lines.join("\n");
@@ -503,6 +620,7 @@ export function buildSummaryMarkdown({ measured, baseline }) {
   if (baseline) {
     lines.push(buildDiffSection(measured, baseline), "");
   }
+  lines.push(buildBeforeUsageInfoSection(measured, baseline), "");
   lines.push(buildDegenerateShareSection(measured), "");
   lines.push(buildCautionSection());
   return lines.join("\n");

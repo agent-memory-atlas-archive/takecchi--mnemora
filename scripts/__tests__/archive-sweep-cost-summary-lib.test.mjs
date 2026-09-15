@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
+  buildBeforeUsageInfoSection,
   buildDegenerateShareSection,
   buildSummaryMarkdown,
+  collectBeforeUsageInfoRows,
   diffPhase,
   findDegenerateRecalledActiveShareRows,
   validateBaseline,
@@ -357,6 +359,113 @@ describe("diffPhase", () => {
       result.fieldDiffs.find((d) => d.field === "recall.budgeted[budgetTokens=999]"),
     ).toBeDefined();
   });
+
+  describe("ADR 0123 / Issue #223: before 段の usage* は比較から除外する", () => {
+    for (const field of ["usageChars", "usageEstimatedTokens", "usageIndexChars"]) {
+      it(`before 段では unbudgeted.mean.${field} が違っても matches:true のまま(除外対象)`, () => {
+        const baseline = makePhase();
+        const measured = makePhase();
+        measured.recall.unbudgeted.mean[field] = baseline.recall.unbudgeted.mean[field] + 999;
+        const result = diffPhase(measured, baseline, "before");
+        expect(result.matches).toBe(true);
+        expect(
+          result.fieldDiffs.find((d) => d.field === `recall.unbudgeted.mean.${field}`),
+        ).toBeUndefined();
+      });
+
+      it(`before 段では budgeted[].mean.${field} が違っても matches:true のまま(除外対象)`, () => {
+        const baseline = makePhase();
+        const measured = makePhase();
+        measured.recall.budgeted[0].mean[field] = baseline.recall.budgeted[0].mean[field] + 999;
+        const result = diffPhase(measured, baseline, "before");
+        expect(result.matches).toBe(true);
+      });
+
+      it(`⭐ after 段では ${field} が違えば matches:false になる(除外は before 限定)`, () => {
+        const baseline = makePhase();
+        const measured = makePhase();
+        measured.recall.unbudgeted.mean[field] = baseline.recall.unbudgeted.mean[field] + 999;
+        const result = diffPhase(measured, baseline, "after");
+        expect(result.matches).toBe(false);
+        expect(
+          result.fieldDiffs.find((d) => d.field === `recall.unbudgeted.mean.${field}`),
+        ).toBeDefined();
+      });
+    }
+
+    it("before 段でも usage* 以外の mean 欄(carriedCount 等)が違えば matches:false のまま(歯が全滅していない)", () => {
+      const baseline = makePhase();
+      const measured = makePhase();
+      measured.recall.unbudgeted.mean.carriedCount =
+        baseline.recall.unbudgeted.mean.carriedCount + 1;
+      const result = diffPhase(measured, baseline, "before");
+      expect(result.matches).toBe(false);
+      expect(
+        result.fieldDiffs.find((d) => d.field === "recall.unbudgeted.mean.carriedCount"),
+      ).toBeDefined();
+    });
+
+    it("before 段でも goldRank が違えば matches:false のまま", () => {
+      const baseline = makePhase();
+      const measured = makePhase();
+      measured.recall.unbudgeted.mean.goldRank = 2;
+      const result = diffPhase(measured, baseline, "before");
+      expect(result.matches).toBe(false);
+    });
+  });
+});
+
+describe("collectBeforeUsageInfoRows / buildBeforeUsageInfoSection", () => {
+  it("unbudgeted + 各 budget 段の usage* を、基準値と実測を並べて集める", () => {
+    const measuredBefore = makePhase();
+    const baselineBefore = makeBaselinePhase();
+    const rows = collectBeforeUsageInfoRows(measuredBefore, baselineBefore);
+    expect(rows).toContainEqual({
+      label: "unbudgeted",
+      field: "usageChars",
+      baseline: 100,
+      measured: 100,
+    });
+    expect(rows).toContainEqual({
+      label: "budgeted[budgetTokens=32]",
+      field: "usageChars",
+      baseline: 100,
+      measured: 100,
+    });
+  });
+
+  it("baseline が無くても measured だけで rows を返す(baseline は undefined)", () => {
+    const measuredBefore = makePhase();
+    const rows = collectBeforeUsageInfoRows(measuredBefore, undefined);
+    expect(rows.find((r) => r.field === "usageChars" && r.label === "unbudgeted")).toEqual({
+      label: "unbudgeted",
+      field: "usageChars",
+      baseline: undefined,
+      measured: 100,
+    });
+  });
+
+  it("buildBeforeUsageInfoSection は baseline 有無に関わらず見出しと表を出す", () => {
+    const measured = makeMeasured();
+    const withBaseline = buildBeforeUsageInfoSection(measured, makeBaseline());
+    expect(withBaseline).toContain("before 段の usageChars 系");
+    expect(withBaseline).toContain("| 段 | 項目 | 基準値 | 実測 |");
+
+    const withoutBaseline = buildBeforeUsageInfoSection(measured, undefined);
+    expect(withoutBaseline).toContain("before 段の usageChars 系");
+    expect(withoutBaseline).toContain("| 段 | 項目 | 実測 |");
+  });
+
+  it("⭐ before.usageChars が基準値と違っても、この節には基準値・実測の両方の値が表示される", () => {
+    const measured = makeMeasured();
+    measured.before.recall.unbudgeted.mean.usageChars = 12345;
+    const baseline = makeBaseline();
+    const markdown = buildSummaryMarkdown({ measured, baseline });
+    expect(markdown).toContain("before 段の usageChars 系");
+    expect(markdown).toContain("12345");
+    // 差分節(比較・カウント対象)は一致のまま黙る側であることも確認する。
+    expect(markdown).toContain("✅ 一致(差分なし)。");
+  });
 });
 
 describe("findDegenerateRecalledActiveShareRows / buildDegenerateShareSection", () => {
@@ -410,7 +519,10 @@ describe("buildSummaryMarkdown", () => {
     const markdown = buildSummaryMarkdown({ measured, baseline: makeBaseline() });
     expect(markdown).toContain("基準値との差分");
     expect(markdown).toContain("✅ 一致(差分なし)。");
-    expect(markdown).not.toContain("| 項目 | 基準値 | 実測 |");
+    // 「基準値との差分」節そのものは表を展開しない(この節に限って検査する——
+    // 「before 段の usageChars 系」節はこの一致/不一致とは独立に常に表を出す。ADR 0123)。
+    const diffSection = markdown.split("## 基準値との差分")[1].split("## before 段の")[0];
+    expect(diffSection).not.toContain("| 項目 | 基準値 | 実測 |");
   });
 
   it("baseline と相違すれば表として展開する", () => {

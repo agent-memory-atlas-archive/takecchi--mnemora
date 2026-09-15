@@ -1,5 +1,5 @@
 {
-  "_readme": "掃引(Runtime.sweepArchive)が「載る量」/hit@k に効くかの基準値（Issue #209 / ADR 0119 / ADR 0121）。\n⛔ これは門ではない。基準値と違っても CI は落ちない（ADR 0088 §2.1 と同じ判断）。\n⚠ LLM は deterministic（擬似）である。統合結果ではなく掃引（status を書き換えるだけ）を測っているため、LLM 品質の主張はしていない。\n⚠ 標本は probe 7件である。ここから失敗率も成功率も主張しない（ADR 0033 §3）。\n⚠ この値は CI（本作業者がアクセスできない環境）が実測したものであり、この基準値ファイルを作った作業者自身は一度もこの bench を実行していない（下記 provenance.how）。\n⚠ recalledActiveShare が 1.0 に張り付いた段は「全部載せる」に退化しており、比較が成立しない。",
+  "_readme": "掃引(Runtime.sweepArchive)が「載る量」/hit@k に効くかの基準値（Issue #209 / ADR 0119 / ADR 0121）。\n⛔ これは門ではない。基準値と違っても CI は落ちない（ADR 0088 §2.1 と同じ判断）。\n⚠ LLM は deterministic（擬似）である。統合結果ではなく掃引（status を書き換えるだけ）を測っているため、LLM 品質の主張はしていない。\n⚠ 標本は probe 7件である。ここから失敗率も成功率も主張しない（ADR 0033 §3）。\n⚠ この値は CI（本作業者がアクセスできない環境）が実測したものであり、この基準値ファイルを作った作業者自身は一度もこの bench を実行していない（下記 provenance.how）。\n⚠ recalledActiveShare が 1.0 に張り付いた段は「全部載せる」に退化しており、比較が成立しない。\n⚠ before.recall.*.usageChars/usageEstimatedTokens/usageIndexChars は、掃引前の母集合の壁時計時間依存の順位境界の揺れにより run 間で 0.2648%〜1.2671% 動く（Issue #223、7 run の実測）。scripts/archive-sweep-cost-summary-lib.mjs はこの3欄を before 段に限り厳密等価の比較・相違件数のカウントから除外する（time-term の freshnessRatio 等と同じ規律、ADR 0123）。値そのものはここに残したまま・削っていない——summary にも基準値/実測を並べて表示する。",
   "provenance": {
     "runId": "34911117399",
     "headSha": "fd6ee53296f63c053fedf3706d2ba831b6d8e655",
@@ -8,7 +8,7 @@
     "ciJob": "archive-sweep-cost（pgvector/pgvector:pg17 の service container 上、本作業者はアクセスしていない）",
     "providers": "LLM=deterministic（擬似）/ Embedding=local（@mnemora/local-embedding, ruri-v3-30m/sym, 256次元）。cli.ts の runArchiveSweepCostCommand が明示的に固定している。",
     "repeatRuns": "1回のみ（CI のこの1 run）。⚠ 他の run と比較しておらず、run 間の揺れ幅は測っていない（consolidation-baseline.json / identifier-probe-baseline.json / retrieval-baseline.json の repeatRuns=2 とは異なり、この基準値は複数回の一致を確認していない。ADR 0121「引き受けた負債」参照）。",
-    "note": "probes 配列は基準値に持たない（診断表は基準値と比べないため。consolidation-baseline.json と同じ規律。scripts/archive-sweep-cost-summary-lib.mjs の validateBaseline は before/after で probes を要求しない設計になっている）。mean だけを残す。"
+    "note": "probes 配列は基準値に持たない（診断表は基準値と比べないため。consolidation-baseline.json と同じ規律。scripts/archive-sweep-cost-summary-lib.mjs の validateBaseline は before/after で probes を要求しない設計になっている）。mean だけを残す。before.recall.*.usageChars/usageEstimatedTokens/usageIndexChars は削らずそのまま残している——ADR 0123 により比較(mismatch のカウント)からは外れるが、summary の表示には使われる（time-term-baseline.json が freshnessRatio 等をそのまま残しているのと同じ規律）。"
   },
   "schemaVersion": 1,
   "status": "measured",

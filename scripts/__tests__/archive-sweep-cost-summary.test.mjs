@@ -245,6 +245,29 @@ describe("archive-sweep-cost-summary.mjs(子プロセスで起動)", () => {
     expect(result.status).not.toBe(0);
   });
 
+  it("ADR 0123: before.usageChars だけが基準値と違っても exit 0 で「一致」のまま、値は表示される", () => {
+    const before = makePhase();
+    before.recall.unbudgeted.mean.usageChars = 99999;
+    const measuredPath = writeJson("measured.json", makeMeasured({ before }));
+    const baselinePath = writeJson("baseline.json", makeBaseline());
+    const result = run(["--measured", measuredPath, "--baseline", baselinePath]);
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain("一致(差分なし)。");
+    expect(result.stdout).toContain("before 段の usageChars 系");
+    expect(result.stdout).toContain("99999");
+  });
+
+  it("⭐ ADR 0123: after.usageChars が基準値と違えば「相違した箇所がある」を出す(除外は before 限定)", () => {
+    const after = makePhase();
+    after.recall.unbudgeted.mean.usageChars = 99999;
+    const measuredPath = writeJson("measured.json", makeMeasured({ after }));
+    const baselinePath = writeJson("baseline.json", makeBaseline());
+    const result = run(["--measured", measuredPath, "--baseline", baselinePath]);
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain("相違した箇所がある");
+    expect(result.stdout).toContain("recall.unbudgeted.mean.usageChars");
+  });
+
   it("--baseline の status が measured でないと非0(基準値は常に measured のはず)", () => {
     const measuredPath = writeJson("measured.json", makeMeasured());
     const baselinePath = writeJson("baseline.json", {
