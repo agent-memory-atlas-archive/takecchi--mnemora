@@ -696,10 +696,17 @@ export async function runRecall(
 
   // 🔴 単位を組む繰り返しから候補が漏れたら、黙らない（ADR 0043）。
   //
-  // ⚠ **Phase 1 ではここは一度も通らない。**`Runtime`（observe/tick/recall/reextract）は
-  // `contested` も `contestedWithId` も書かないため、一対一が破れた状態を作れない
-  // （`docs/memory-model.md`「関係グラフ本体は Phase 2」）。
-  // **⟹ これは「いま壊れているもの」ではなく、`contested` を作る主体が入ったときの契約である。**
+  // ⚠ **Issue #197 / ADR 0134（2026-09 追記）で `Runtime.markContested` が入り、
+  // `contested` を書く主体自体は存在するようになった。** ただし `markContested` は
+  // 両側 `status='active'` の CAS を課したうえで相互参照を1トランザクションで書くため、
+  // **`Runtime` 経由で作られた `contested` ペアが一対一を破ることは無い**——鎖
+  // （A→B→C）や片方向（`contestedWithId` が対向を指し返さない）は `markContested` の
+  // 書き込み経路からは構成できない。
+  // ⟹ **今日この分岐が通るとすれば、それは `MemoryStore` を `Runtime` を経由せず直接
+  // 叩いた場合に限る**（`docs/decisions/0046-contested-pair-invariant-tooth.md` が
+  // 実測したとおり、`updateStatus(id, "contested")` 単体は今日も公開 interface から
+  // 呼べる。片側だけの `contested`（`contestedWithId=null`）がここで単独候補になり
+  // うる問題は Issue #243 で追跡している——本 PR ではこの分岐そのものは直していない）。
   //
   // ⚠ 二重計上のときに出さない判断は `unitAssemblyShortfall` が持つ（その doc を参照）。
   const unitsShortfall = unitAssemblyShortfall(units, allCandidates.length);

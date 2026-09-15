@@ -815,6 +815,30 @@ describe("recall() — 段3: 矛盾の解決と必須の同伴取得（docs/reca
   });
 });
 
+describe("recall() — 既知の未修復のギャップ: 片側だけの contested（Issue #243）", () => {
+  it("🔴 contestedWithId が null の contested Memory は、単独で recall に出る（memory-store.ts:175 の契約違反。Issue #197 のこの PR では未修復）", async () => {
+    // ⚠ **これは望ましい振る舞いではない。**Issue #197（ADR 0134）の `Runtime.markContested`
+    // はこの状態を作らない（両側 `status='active'` の CAS を課すため）。しかし
+    // `docs/decisions/0046-contested-pair-invariant-tooth.md` が実測したとおり、
+    // `MemoryStore.updateStatus(id, "contested")` を `Runtime` を経由せず直接呼べば
+    // 今日も作れる——ここではその直接呼び出しを `createMemory` で模して、recall 側に
+    // ガードが無いことを確認する。直す判断は Issue #243 に切り出した（本 PR の範囲外）。
+    const { runtime, stores } = buildRuntime();
+    const lone = await createEmbeddedMemory(stores, [1, 0], {
+      status: "contested",
+      contestedWithId: null,
+      digest: "lone-contested",
+    });
+
+    const result = await runtime.recall(ctx, { vector: [1, 0] });
+    const ids = result.memories.map((m) => m.memoryId);
+    // ⟹ 単独で返ってしまっている。これが Issue #243 の主題そのものである。
+    expect(ids).toContain(lone.id);
+    const returned = result.memories.find((m) => m.memoryId === lone.id);
+    expect(returned?.retrievedVia).not.toBe("mandatory_companion");
+  });
+});
+
 describe("recall() — 段4: トークン予算による切り詰め（Issue #108。maxMemoryChars 以外の経路に歯が無かった）", () => {
   /**
    * `maxMemoryTokens` / `promptBudgetTokens` を実際に行使する経路

@@ -801,6 +801,61 @@ export class FakeMemoryStore implements MemoryStore {
     this.backing.events.push(storedEvent);
     return { memory, event: storedEvent };
   }
+
+  /**
+   * Issue #197 / ADR 0134: 両側とも `status === 'active'` の CAS を課したうえで、
+   * `status='contested'`・`contestedWithId` を相互に設定する。`InMemoryMemoryStore`
+   * （testkit）/ `PostgresMemoryStore` と同じ「事前検証してから書く」作法——
+   * まだ何も書いていないうちに、存在確認と CAS 判定を両方の対象について済ませる
+   * ことで、in-memory の「ロールバック」を模す（`supersedeWithNewMemories` と同じ形）。
+   *
+   * `beforeUpdateStatus` は各対象の CAS 判定の**直前**に発火する——`updateStatus`/
+   * `updateStatusWithEvent`/`supersedeWithNewMemories` と同じ位置。TOCTOU の歯が
+   * この口でも決定的に再現できるようにする。
+   */
+  async markContestedPair(
+    ctx: Ctx,
+    first: { id: MemoryId; event: NewMemoryEvent },
+    second: { id: MemoryId; event: NewMemoryEvent },
+  ): Promise<{ first: Memory; second: Memory; events: [MemoryEvent, MemoryEvent] }> {
+    if (first.id === second.id) {
+      throw new RangeError("FakeMemoryStore: first.id and second.id must differ");
+    }
+
+    // 1. 事前検証——存在確認。まだ何も書いていない。
+    const firstMemory = await this.get(ctx, first.id);
+    if (!firstMemory) {
+      throw new Error(`FakeMemoryStore: memory not found for tenant: ${first.id}`);
+    }
+    const secondMemory = await this.get(ctx, second.id);
+    if (!secondMemory) {
+      throw new Error(`FakeMemoryStore: memory not found for tenant: ${second.id}`);
+    }
+
+    // 2. 事前検証——CAS（両側とも `active` であること）。まだ何も書いていない。
+    this.beforeUpdateStatus?.(first.id);
+    if (firstMemory.status !== "active") {
+      throw new MemoryStatusConflictError(first.id, "active", firstMemory.status);
+    }
+    this.beforeUpdateStatus?.(second.id);
+    if (secondMemory.status !== "active") {
+      throw new MemoryStatusConflictError(second.id, "active", secondMemory.status);
+    }
+
+    // 3. ここから先は両方成功する（in-memory であり、途中失敗の余地が無い）。
+    firstMemory.status = "contested";
+    firstMemory.contestedWithId = second.id;
+    firstMemory.updatedAt = new Date();
+    secondMemory.status = "contested";
+    secondMemory.contestedWithId = first.id;
+    secondMemory.updatedAt = new Date();
+
+    const firstEvent = buildStoredEvent(ctx, first.event);
+    const secondEvent = buildStoredEvent(ctx, second.event);
+    this.backing.events.push(firstEvent, secondEvent);
+
+    return { first: firstMemory, second: secondMemory, events: [firstEvent, secondEvent] };
+  }
 }
 
 export class FakeOutboxStore implements OutboxStore {

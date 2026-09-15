@@ -713,6 +713,65 @@ export interface MemoryStore {
     tombstone: { content: string; digest: string },
     event: NewMemoryEvent,
   ): Promise<{ memory: Memory; event: MemoryEvent }>;
+  /**
+   * Issue #197（ADR 0134）: `docs/memory-model.md` §11 行6「判定できない対向を検出
+   * → 両側の `status='contested'`、`contested_with_id` を相互に設定」を書き込む口。
+   *
+   * [ADR 0046](../../../../docs/decisions/0046-contested-pair-invariant-tooth.md) が数え上げた
+   * とおり、**`contested_with_id` を作成後に書けるメソッドは今日この口が追加されるまで
+   * 存在しなかった**（`updateStatus`/`updateStatusWithEvent` の `SET` 句は `status` と
+   * `superseded_by_id` だけであり、`createMemory` 系は作成時にしか書けない——相互参照は
+   * 「まだ存在しない側」を先に指すことができないため作成時には構成不能）。この口が、
+   * ADR 0046 が「作成後に書く経路が入るとき、表は数え直すこと」と予告していたその経路である。
+   *
+   * 🔴 **任意メソッドである。**必須にすると `MemoryStore` を実装する第三者の adapter を
+   * 壊す破壊的変更になる（`@mnemora/core` は npm に公開済み、`docs/autonomy.md`「してはいけ
+   * ないこと」表の「公開 API の破壊的変更」、ADR 0100 決定1と同じ理由）。
+   *
+   * ⚠ **フォールバック経路を持たない**（`archiveDecayed?`/`purgeMemory?` と同じ判断。
+   * `sweepArchive`/`purge` の doc コメント参照）。`supersedeWithNewMemories?` のように
+   * 「口が無ければ既存メソッドの2段呼び出しで代替する」という擬似フォールバックは、
+   * **意図的に作らない**——既存メソッドは `contestedWithId` を書けないため、
+   * 代替として書けるのは「片方だけ `status='contested'` にして `contestedWithId` は
+   * 空のまま」という状態に限られ、それは ADR 0046 が「単独で返り、機構2（`docs/memory-model.md`
+   * §5）が破れる」と名指しした壊れた状態そのものである。**この口を実装しない adapter に
+   * 対しては、`Runtime.markContested` は「対応していない」とだけ返し、劣化した代替を
+   * 試みない**（`docs/decisions/0134-*.md` 参照）。
+   *
+   * 契約:
+   * - **両側とも呼び出し時点で `status === 'active'` であること**（CAS。この口は
+   *   `active → contested`（lifecycle 行6）専用であり、他の status からの遷移や
+   *   任意の status への更新は今日どおり `updateStatus`/`updateStatusWithEvent` を使う
+   *   こと。`supersedeWithNewMemories` が `status` を `'superseded'` に固定するのと
+   *   同じ形の専用化）。
+   * - 🔴 **`first.id === second.id` は呼び出し前の programmer error として扱う。**
+   *   実装は `RangeError`（メッセージ: `markContestedPair: first.id and second.id must differ`）
+   *   を、書き込みを一切行う前に投げる——`supersedeWithNewMemories` の
+   *   `supersededByIndex out of range` と同じ「開く前に落とす」位置。
+   * - **両側どちらかの id がそのテナントに存在しない場合、`updateStatusWithEvent` と同じ
+   *   「memory not found」の `Error` を投げる。**書き込みは一切行われない（もう一方が
+   *   存在してもロールバックする）。
+   * - **CAS が破れた場合（存在はするが `status !== 'active'`）は
+   *   {@link MemoryStatusConflictError} を投げる。**`expectedStatus` は常に `'active'`。
+   *   `supersedeWithNewMemories` の `conflicted` 配列（部分成功を許す設計）とは違い、
+   *   **この口は全部成功するか全部失敗するかのどちらかである**——対向ペアは本質的に
+   *   結合しており、「片方だけ contested になった」状態を作ること自体が防ぐべき対象
+   *   （ADR 0046）だからである。
+   * - すべての条件を満たす場合のみ、**1トランザクションで**次を行う: 両側の
+   *   `status='contested'`・`contestedWithId` を相手の id に相互設定、`memory_events`
+   *   へそれぞれ1件ずつ追記（`event.kind` は呼び出し側が渡した値をそのまま使う。
+   *   `docs/memory-model.md` §11 行6 が定める形は `kind:'updated'`,
+   *   `meta.reason:'contested'` だが、この口自体は値を強制しない——`updateStatusWithEvent`
+   *   と同じく「渡された event をそのまま積む」規律）。
+   * - 🔴 **原子性の証拠ではない。**`supersedeWithNewMemories` の doc コメントと同じ
+   *   注意——この口が在ることは adapter がこの口を実装したことしか意味しない。
+   *   実際に原子性を測るのは適合テストと `packages/postgres` の並行の歯である。
+   */
+  markContestedPair?(
+    ctx: Ctx,
+    first: { id: MemoryId; event: NewMemoryEvent },
+    second: { id: MemoryId; event: NewMemoryEvent },
+  ): Promise<{ first: Memory; second: Memory; events: [MemoryEvent, MemoryEvent] }>;
 }
 
 /**

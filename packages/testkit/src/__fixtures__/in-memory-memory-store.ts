@@ -888,6 +888,52 @@ export class InMemoryMemoryStore implements MemoryStore {
     return { memory, event: storedEvent };
   }
 
+  /**
+   * Issue #197 / ADR 0134: 両側とも `status === 'active'` の CAS を課したうえで、
+   * `status='contested'`・`contestedWithId` を相互に設定する。**in-memory にトランザクションは
+   * 無い**——「まだ何も書いていない」ことでロールバックを模す
+   * （`supersedeWithNewMemories`/`updateStatusWithEvent` と同じ「まだ何も書いていないうちに
+   * 判定する」作法）。存在確認・CAS 判定の両方を先に済ませ、どちらか一方でも失敗したら
+   * この時点で throw する——`first`/`second` のどちらの Map エントリもまだ書き換えていない。
+   */
+  async markContestedPair(
+    ctx: Ctx,
+    first: { id: MemoryId; event: NewMemoryEvent },
+    second: { id: MemoryId; event: NewMemoryEvent },
+  ): Promise<{ first: Memory; second: Memory; events: [MemoryEvent, MemoryEvent] }> {
+    if (first.id === second.id) {
+      throw new RangeError("InMemoryMemoryStore: first.id and second.id must differ");
+    }
+
+    const firstMemory = await this.get(ctx, first.id);
+    if (!firstMemory) {
+      throw new Error(`InMemoryMemoryStore: memory not found for tenant: ${first.id}`);
+    }
+    const secondMemory = await this.get(ctx, second.id);
+    if (!secondMemory) {
+      throw new Error(`InMemoryMemoryStore: memory not found for tenant: ${second.id}`);
+    }
+    if (firstMemory.status !== "active") {
+      throw new MemoryStatusConflictError(first.id, "active", firstMemory.status);
+    }
+    if (secondMemory.status !== "active") {
+      throw new MemoryStatusConflictError(second.id, "active", secondMemory.status);
+    }
+
+    firstMemory.status = "contested";
+    firstMemory.contestedWithId = second.id;
+    firstMemory.updatedAt = new Date();
+    secondMemory.status = "contested";
+    secondMemory.contestedWithId = first.id;
+    secondMemory.updatedAt = new Date();
+
+    const firstEvent = buildStoredMemoryEvent(ctx, first.event);
+    const secondEvent = buildStoredMemoryEvent(ctx, second.event);
+    this.events.push(firstEvent, secondEvent);
+
+    return { first: firstMemory, second: secondMemory, events: [firstEvent, secondEvent] };
+  }
+
   private extractionKey(
     tenantId: string,
     sourceObservationId: string | null,

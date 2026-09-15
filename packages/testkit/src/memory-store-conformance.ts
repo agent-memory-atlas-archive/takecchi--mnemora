@@ -169,6 +169,20 @@ export interface MemoryStoreConformanceOptions {
    * ——`it.skip` にはしない。
    */
   supportsPurgeMemory: boolean;
+  /**
+   * Issue #197 / ADR 0134: 対象の `MemoryStore` 実装が `markContestedPair`
+   * （任意メソッド）を実装しているかどうか。**必須。**
+   *
+   * `supportsArchiveDecayed`/`supportsPurgeMemory` と同じ判断——省略可にしない。
+   * `true` なら契約の歯（両側 `status='active'` のみを対象にする、成功すると両側が
+   * `contested` になり `contestedWithId` が相互に設定される、片方でも `active` でなければ
+   * {@link MemoryStatusConflictError} で弾かれ両側とも無傷、対象が無ければ
+   * 「memory not found」で両側とも無傷、`first.id === second.id` は `RangeError`、
+   * `memory_events` に両側1件ずつ積まれる、テナント分離）を実行する。`false` なら
+   * `expect(store.markContestedPair).toBeUndefined()` を積極的に assert する
+   * ——`it.skip` にはしない。
+   */
+  supportsMarkContestedPair: boolean;
 }
 
 /**
@@ -202,6 +216,7 @@ export function describeMemoryStoreConformance(options: MemoryStoreConformanceOp
     listPurgedEvents,
     supportsArchiveDecayed,
     supportsPurgeMemory,
+    supportsMarkContestedPair,
   } = options;
 
   describe(`MemoryStore conformance (${name})`, () => {
@@ -2500,6 +2515,223 @@ export function describeMemoryStoreConformance(options: MemoryStoreConformanceOp
       it("purgeMemory は任意メソッドであり、この adapter は実装していない", async () => {
         const store = await createStore();
         expect(store.purgeMemory).toBeUndefined();
+      });
+    }
+
+    // -------------------------------------------------------------------
+    // markContestedPair（Issue #197 / ADR 0134: 矛盾の検出・明示的操作、任意メソッド）
+    // -------------------------------------------------------------------
+
+    if (supportsMarkContestedPair) {
+      it("markContestedPair は両側 active な Memory を contested にし、contestedWithId を相互に設定し、両側に1件ずつイベントを積む", async () => {
+        const store = await createStore();
+        const ctx: Ctx = { tenantId: "tenant-1" };
+        const a = await store.createMemory(
+          ctx,
+          buildNewMemoryFixture({ tenantId: "tenant-1", contentHash: "mark-contested-a" }),
+        );
+        const b = await store.createMemory(
+          ctx,
+          buildNewMemoryFixture({ tenantId: "tenant-1", contentHash: "mark-contested-b" }),
+        );
+
+        const result = await store.markContestedPair!(
+          ctx,
+          {
+            id: a.id,
+            event: {
+              tenantId: "tenant-1",
+              memoryId: a.id,
+              kind: "updated",
+              actor: { type: "system" },
+              digestSnapshot: a.digest,
+              meta: { reason: "contested" },
+            },
+          },
+          {
+            id: b.id,
+            event: {
+              tenantId: "tenant-1",
+              memoryId: b.id,
+              kind: "updated",
+              actor: { type: "system" },
+              digestSnapshot: b.digest,
+              meta: { reason: "contested" },
+            },
+          },
+        );
+
+        const afterA = await store.get(ctx, a.id);
+        const afterB = await store.get(ctx, b.id);
+        const eventsA = await listEventsForMemory(ctx, a.id);
+        const eventsB = await listEventsForMemory(ctx, b.id);
+
+        expect({
+          returnedFirstStatus: result.first.status,
+          returnedFirstContestedWith: result.first.contestedWithId,
+          returnedSecondStatus: result.second.status,
+          returnedSecondContestedWith: result.second.contestedWithId,
+          afterAStatus: afterA?.status,
+          afterAContestedWith: afterA?.contestedWithId,
+          afterBStatus: afterB?.status,
+          afterBContestedWith: afterB?.contestedWithId,
+          eventsAKinds: eventsA.map((e) => e.kind),
+          eventsBKinds: eventsB.map((e) => e.kind),
+        }).toEqual({
+          returnedFirstStatus: "contested",
+          returnedFirstContestedWith: b.id,
+          returnedSecondStatus: "contested",
+          returnedSecondContestedWith: a.id,
+          afterAStatus: "contested",
+          afterAContestedWith: b.id,
+          afterBStatus: "contested",
+          afterBContestedWith: a.id,
+          eventsAKinds: ["updated"],
+          eventsBKinds: ["updated"],
+        });
+      });
+
+      it("markContestedPair は first.id === second.id を RangeError で落とし、何も書き込まない", async () => {
+        const store = await createStore();
+        const ctx: Ctx = { tenantId: "tenant-1" };
+        const a = await store.createMemory(
+          ctx,
+          buildNewMemoryFixture({ tenantId: "tenant-1", contentHash: "mark-contested-same-id" }),
+        );
+        const event: NewMemoryEvent = {
+          tenantId: "tenant-1",
+          memoryId: a.id,
+          kind: "updated",
+          actor: { type: "system" },
+          digestSnapshot: a.digest,
+          meta: {},
+        };
+
+        await expect(
+          store.markContestedPair!(ctx, { id: a.id, event }, { id: a.id, event }),
+        ).rejects.toThrow(RangeError);
+
+        const after = await store.get(ctx, a.id);
+        expect(after?.status).toBe("active");
+        expect(after?.contestedWithId ?? null).toBeNull();
+      });
+
+      it.each(["superseded", "contested", "archived", "forgotten"] as const)(
+        "markContestedPair は片方が status=%s だと対象にせず（MemoryStatusConflictError）、両側とも無傷のまま",
+        async (status) => {
+          const store = await createStore();
+          const ctx: Ctx = { tenantId: "tenant-1" };
+          const a = await store.createMemory(
+            ctx,
+            buildNewMemoryFixture({
+              tenantId: "tenant-1",
+              contentHash: `mark-contested-status-active-${status}`,
+            }),
+          );
+          const b = await store.createMemory(
+            ctx,
+            buildNewMemoryFixture({
+              tenantId: "tenant-1",
+              contentHash: `mark-contested-status-other-${status}`,
+              status,
+            }),
+          );
+          const event = (memoryId: MemoryId): NewMemoryEvent => ({
+            tenantId: "tenant-1",
+            memoryId,
+            kind: "updated",
+            actor: { type: "system" },
+            digestSnapshot: "digest",
+            meta: {},
+          });
+
+          await expect(
+            store.markContestedPair!(
+              ctx,
+              { id: a.id, event: event(a.id) },
+              { id: b.id, event: event(b.id) },
+            ),
+          ).rejects.toThrow(MemoryStatusConflictError);
+
+          const afterA = await store.get(ctx, a.id);
+          const afterB = await store.get(ctx, b.id);
+          expect(afterA?.status).toBe("active");
+          expect(afterA?.contestedWithId ?? null).toBeNull();
+          expect(afterB?.status).toBe(status);
+          const eventsA = await listEventsForMemory(ctx, a.id);
+          const eventsB = await listEventsForMemory(ctx, b.id);
+          expect(eventsA).toHaveLength(0);
+          expect(eventsB).toHaveLength(0);
+        },
+      );
+
+      it("markContestedPair は対象が存在しなければ「memory not found」を投げ、存在する側も無傷のまま", async () => {
+        const store = await createStore();
+        const ctx: Ctx = { tenantId: "tenant-1" };
+        const a = await store.createMemory(
+          ctx,
+          buildNewMemoryFixture({ tenantId: "tenant-1", contentHash: "mark-contested-not-found" }),
+        );
+        const event = (memoryId: MemoryId): NewMemoryEvent => ({
+          tenantId: "tenant-1",
+          memoryId,
+          kind: "updated",
+          actor: { type: "system" },
+          digestSnapshot: "digest",
+          meta: {},
+        });
+
+        await expect(
+          store.markContestedPair!(
+            ctx,
+            { id: a.id, event: event(a.id) },
+            { id: NONEXISTENT_MEMORY_ID, event: event(NONEXISTENT_MEMORY_ID) },
+          ),
+        ).rejects.toThrow(NOT_FOUND_ERROR_MESSAGE);
+
+        const afterA = await store.get(ctx, a.id);
+        expect(afterA?.status).toBe("active");
+        expect(afterA?.contestedWithId ?? null).toBeNull();
+        expect(await listEventsForMemory(ctx, a.id)).toHaveLength(0);
+      });
+
+      it("markContestedPair は他テナントの Memory を対象にしない（memory not found）", async () => {
+        const store = await createStore();
+        const ctxA: Ctx = { tenantId: "tenant-a" };
+        const ctxB: Ctx = { tenantId: "tenant-b" };
+        const memoryA = await store.createMemory(
+          ctxA,
+          buildNewMemoryFixture({ tenantId: "tenant-a", contentHash: "mark-contested-tenant-a" }),
+        );
+        const memoryB = await store.createMemory(
+          ctxB,
+          buildNewMemoryFixture({ tenantId: "tenant-b", contentHash: "mark-contested-tenant-b" }),
+        );
+        const event = (memoryId: MemoryId): NewMemoryEvent => ({
+          tenantId: "tenant-b",
+          memoryId,
+          kind: "updated",
+          actor: { type: "system" },
+          digestSnapshot: "digest",
+          meta: {},
+        });
+
+        await expect(
+          store.markContestedPair!(
+            ctxB,
+            { id: memoryA.id, event: event(memoryA.id) },
+            { id: memoryB.id, event: event(memoryB.id) },
+          ),
+        ).rejects.toThrow(NOT_FOUND_ERROR_MESSAGE);
+
+        const afterA = await store.get(ctxA, memoryA.id);
+        expect(afterA?.status).toBe("active"); // tenant-a 側は無傷
+        expect(afterA?.contestedWithId ?? null).toBeNull();
+      });
+    } else {
+      it("markContestedPair は任意メソッドであり、この adapter は実装していない", async () => {
+        const store = await createStore();
+        expect(store.markContestedPair).toBeUndefined();
       });
     }
 

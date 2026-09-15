@@ -1246,6 +1246,117 @@ export class PostgresMemoryStore implements MemoryStore {
       return { memory, event: storedEvent };
     });
   }
+
+  /**
+   * Issue #197 / ADR 0134: 両側とも `status = 'active'` の CAS を課したうえで、
+   * `status='contested'`・`contested_with_id` を相互に設定する——1トランザクションで
+   * 完結し、`updateStatusWithEvent`/`purgeMemory` と同じ「条件付き UPDATE が0行なら
+   * 読み直して切り分ける」作法を、対象2件それぞれについて行う。**どちらか一方が
+   * 失敗したら、その場で throw してロールバックする**（もう一方が先に成功していても
+   * 巻き戻る）——対向ペアは本質的に結合しており、部分成功を許さない。
+   */
+  async markContestedPair(
+    ctx: Ctx,
+    first: { id: MemoryId; event: NewMemoryEvent },
+    second: { id: MemoryId; event: NewMemoryEvent },
+  ): Promise<{ first: Memory; second: Memory; events: [MemoryEvent, MemoryEvent] }> {
+    if (first.id === second.id) {
+      throw new RangeError("PostgresMemoryStore: first.id and second.id must differ");
+    }
+    if (!isUuidLike(first.id)) {
+      throw new Error(`PostgresMemoryStore: memory not found for tenant: ${first.id}`);
+    }
+    if (!isUuidLike(second.id)) {
+      throw new Error(`PostgresMemoryStore: memory not found for tenant: ${second.id}`);
+    }
+
+    return this.db.transaction(async (tx) => {
+      // 事前検証——存在確認。**両方の UPDATE を撃つ前に済ませる**（先に第1の UPDATE で
+      // `contested_with_id = second.id` を書こうとすると、`second.id` がそもそも
+      // 存在しない場合に外部キー違反という別種の失敗になり、「memory not found」に
+      // 揃わない。`supersedeWithNewMemories` が `supersededByIndex` の範囲検査を
+      // 書き込み前に済ませるのと同じ理由）。
+      const existing = await tx.execute(sql`
+        SELECT id, status FROM memories
+        WHERE tenant_id = ${ctx.tenantId}
+          AND id = ANY(${sql.param([first.id, second.id])}::uuid[])
+      `);
+      const statusById = new Map(
+        existing.rows.map((row) => {
+          const r = row as unknown as { id: string; status: MemoryStatus };
+          return [r.id, r.status] as const;
+        }),
+      );
+      if (!statusById.has(first.id)) {
+        throw new Error(`PostgresMemoryStore: memory not found for tenant: ${first.id}`);
+      }
+      if (!statusById.has(second.id)) {
+        throw new Error(`PostgresMemoryStore: memory not found for tenant: ${second.id}`);
+      }
+      if (statusById.get(first.id) !== "active") {
+        throw new MemoryStatusConflictError(first.id, "active", statusById.get(first.id)!);
+      }
+      if (statusById.get(second.id) !== "active") {
+        throw new MemoryStatusConflictError(second.id, "active", statusById.get(second.id)!);
+      }
+
+      const updateSide = async (id: MemoryId, oppositeId: MemoryId): Promise<Memory> => {
+        const result = await tx.execute(sql`
+          UPDATE memories
+          SET status = 'contested',
+              contested_with_id = ${oppositeId},
+              updated_at = now()
+          WHERE tenant_id = ${ctx.tenantId} AND id = ${id} AND status = 'active'
+          RETURNING *
+        `);
+        if (result.rows.length === 0) {
+          // 事前検証を通った直後にここへ来るとすれば TOCTOU（事前検証と UPDATE の間に
+          // 別の書き込みが割り込んだ）——読み直して切り分ける（`updateStatusWithEvent`
+          // と同じ作法）。
+          const current = await tx.execute(sql`
+            SELECT status FROM memories WHERE tenant_id = ${ctx.tenantId} AND id = ${id} LIMIT 1
+          `);
+          if (current.rows.length === 0) {
+            throw new Error(`PostgresMemoryStore: memory not found for tenant: ${id}`);
+          }
+          const observedStatus = (current.rows[0] as unknown as { status: MemoryStatus }).status;
+          throw new MemoryStatusConflictError(id, "active", observedStatus);
+        }
+        return rowToMemory(result.rows[0] as unknown as MemoryRow);
+      };
+
+      const firstMemory = await updateSide(first.id, second.id);
+      const secondMemory = await updateSide(second.id, first.id);
+
+      const insertEvent = async (event: NewMemoryEvent) => {
+        const eventResult = await tx.execute(sql`
+          INSERT INTO memory_events (id, tenant_id, memory_id, kind, at, actor, digest_snapshot, size_before_bytes, meta)
+          VALUES (
+            gen_random_uuid(),
+            ${ctx.tenantId},
+            ${event.memoryId},
+            ${event.kind},
+            ${event.at ?? new Date()},
+            ${JSON.stringify(event.actor)}::jsonb,
+            ${event.digestSnapshot ?? null},
+            ${event.sizeBeforeBytes ?? null},
+            ${JSON.stringify(event.meta)}::jsonb
+          )
+          RETURNING *
+        `);
+        return rowToMemoryEvent(eventResult.rows[0] as unknown as MemoryEventRow);
+      };
+
+      const firstEvent = await insertEvent(first.event);
+      const secondEvent = await insertEvent(second.event);
+
+      return {
+        first: firstMemory,
+        second: secondMemory,
+        events: [firstEvent, secondEvent] as [MemoryEvent, MemoryEvent],
+      };
+    });
+  }
 }
 
 /**

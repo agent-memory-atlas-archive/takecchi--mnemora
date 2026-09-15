@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { Ctx } from "../ctx.js";
 import type { LLMProvider, StructuredRequest } from "../interfaces/llm-provider.js";
 import type { MemoryId } from "../ids.js";
-import type { Memory, MemoryStatus } from "../memory.js";
+import type { Memory, MemoryStatus, NewMemory } from "../memory.js";
 import { createRuntime } from "../runtime.js";
 import { createFakeRuntimeStores } from "./runtime-fakes.js";
 
@@ -128,6 +128,33 @@ function memoryFixture(overrides: Partial<Memory> & { id: MemoryId }): Memory {
     createdAt: NOW,
     updatedAt: NOW,
     ...overrides,
+  };
+}
+
+/**
+ * `runtime.markContested` の歯のための、まだ何とも対向していない `active` な `NewMemory`。
+ * `store.createMemory` へそのまま渡せる（`memoryFixture` は完成済みの `Memory` を返すため
+ * `createMemory` の入力型 `NewMemory` とは形が違う——ここでは別に用意する）。
+ */
+function newActiveMemory(digest: string): NewMemory {
+  return {
+    tenantId: "tenant-1",
+    subjectId: null,
+    sourceObservationId: null,
+    extractorVersion: null,
+    content: `content-${digest}`,
+    contentHash: `hash-${digest}`,
+    digest,
+    digestSource: "llm",
+    provenance: { kind: "imported", batchId: "fixture" },
+    tags: [],
+    occurredAt: null,
+    recordedAt: NOW,
+    lastReinforcedAt: null,
+    strength: 1,
+    halfLifeHours: 720,
+    decayFloorAt: new Date("2026-06-01T00:00:00.000Z"),
+    embeddingStatus: "pending",
   };
 }
 
@@ -265,12 +292,14 @@ function llmReturning(contents: string[]): LLMProvider {
 describe("contested の一対一（ADR 0046）— Runtime を一巡させても破れない", () => {
   it("🔴 observe → tick → reextract で作られた Memory は、一対一を破らない", async () => {
     // ⚠ **この歯が Phase 1 で見ているのは「破れていないこと」だけであり、**
-    // **「`contested` が作られること」は見ていない。**`Runtime` は今日 `contested` を
-    // 一切書かないので、対向関係の枝は通らない。
+    // **「`contested` が作られること」は見ていない。**`observe`/`tick`/`reextract` は
+    // 今日も `contested` を一切書かないので、対向関係の枝は通らない
+    // （Issue #197 / ADR 0134 で `Runtime.markContested` が追加された後も、この3つの
+    // 経路自体は変わっていない——下の describe を参照）。
     //
     // **⟹ それを「Runtime は contested を書かない」という歯にはしない。**
-    // その前提が変わるのは事故ではなく**予定**（Phase 2 の矛盾検出）であり、
-    // 予定で赤くなる歯は、Phase 2 を実装してはいけないという意味になってしまう。
+    // その前提が変わるのは事故ではなく**予定**（矛盾検出。Issue #197 で実際に変わった）
+    // であり、予定で赤くなる歯は、実装してはいけないという意味になってしまう。
     // ここで固定するのは「`contested` を作る主体が入っても、作られた対向関係は一対一である」
     // という契約のほうである。
     const stores = createFakeRuntimeStores();
@@ -297,6 +326,44 @@ describe("contested の一対一（ADR 0046）— Runtime を一巡させても�
     const memories = await stores.memoryStore.getMany(ctx, [...new Set(ids)]);
     // ⚠ 空振り防止。Runtime が1件も作っていなければ、下の期待は何も見ていない。
     expect(memories.length).toBeGreaterThan(0);
+    expect(findContestedPairViolations(memories)).toEqual([]);
+  });
+});
+
+describe("contested の一対一（ADR 0046）— Issue #197 / ADR 0134: markContested が作る対向は一対一を破らない", () => {
+  it("🔴 runtime.markContested で作った相互ペアは、検査器が『破れていない』側として認める形と一致する", async () => {
+    // ⚠ ADR 0046 の「出たこと2」——「相互ペア A↔B は、公開 interface の組み合わせでは
+    // 構成できない」——を、本 PR がここで初めて覆す。この歯は、`mutualPair()`（この
+    // ファイル冒頭、手作りの fixture）と**同じ形**を、`Runtime` を実際に一巡させて
+    // 作れることを確かめる。手作りの fixture との違いは、これは店を経由した本物の
+    // 書き込みであるという点だけである。
+    const stores = createFakeRuntimeStores();
+    const runtime = createRuntime({
+      memoryStore: stores.memoryStore,
+      outboxStore: stores.outboxStore,
+      vectorStore: stores.vectorStore,
+      eventStore: stores.eventStore,
+      tenantSettingsStore: stores.tenantSettingsStore,
+      llmProvider: llmReturning(["体を動かすのが好き", "水泳が苦手"]),
+      embeddingProvider: stores.embeddingProvider,
+      hashContent: (content: string) => `sha256(${content})`,
+    });
+
+    const a = await stores.memoryStore.createMemory(ctx, newActiveMemory("A"));
+    const b = await stores.memoryStore.createMemory(ctx, newActiveMemory("B"));
+
+    const result = await runtime.markContested(ctx, a.id, b.id);
+    expect(result).toEqual({
+      supported: true,
+      outcome: { kind: "contested", first: expect.anything(), second: expect.anything() },
+    });
+
+    const memories = await stores.memoryStore.getMany(ctx, [a.id, b.id]);
+    expect(memories).toHaveLength(2);
+    expect(memories.every((m) => m.status === "contested")).toBe(true);
+    expect(memories.find((m) => m.id === a.id)?.contestedWithId).toBe(b.id);
+    expect(memories.find((m) => m.id === b.id)?.contestedWithId).toBe(a.id);
+    // ⟹ 検査器そのもの（この PR は変更していない）が、これを「破れていない」と認める。
     expect(findContestedPairViolations(memories)).toEqual([]);
   });
 });
