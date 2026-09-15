@@ -13,6 +13,7 @@
     "scope": "tsx src/cli.ts scope",
     "explain": "tsx src/cli.ts explain",
     "backfill": "tsx src/cli.ts backfill",
+    "correction": "tsx src/cli.ts correction",
     "retrieval": "tsx src/cli.ts retrieval",
     "time-term": "tsx src/cli.ts time-term",
     "identifier-probes": "tsx src/cli.ts identifier-probes",

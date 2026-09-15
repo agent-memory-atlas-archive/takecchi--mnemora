@@ -174,5 +174,6 @@ alteroid (github.com/takecchi/alteroid) を根拠として引く箇所は、確�
 | [0159](./0159-omission-kind-generation-registry.md) | `Omission.kind` の11値に「本番コードが実際に生成する」歯を置く — レジストリ＋駆動、grep でも型だけでもなく | 採用 (2026-09) |
 | [0160](./0160-budget-demo-teeth-and-channel-registry.md) | `examples/chat` の「予算あり/なし」対比デモに歯を足し、`usage.byTier` の新チャンネル漏れを検査する「登録表」の歯を置く（Issue #306） | 採用 (2026-09) |
 | [0161](./0161-runtime-get-recall.md) | `Runtime.getRecall` を足す — `recall()` の戻り値からは分からない「後から」を、`Runtime` だけを持つ採用側にも届かせる | 採用 (2026-09) |
+| [0162](./0162-correction-scenario-example-chat.md) | `examples/chat` に訂正シナリオを足す — `contestedPair` は構造としての宣言、判定はしない | 採用 (2026-09) |
 
 <!-- ADR-INDEX:GENERATED:END -->
