@@ -102,7 +102,11 @@ DATABASE_URL=... pnpm --filter @mnemora/example-chat run scope
 ```
 
 **`OPENAI_API_KEY` が無くても動く**（`@mnemora/testkit` の決定的な擬似 provider。
-`chat`/`compare` と同じ切り替え）。同じテナントの中に `alice`/`bob` という2つの
+`chat` と同じ切り替え）。**`compare` とは切り替えが異なる**——`compare` は
+`examples/chat/cassettes/compare.json` が存在するため、鍵が無いときは擬似 provider
+（`deterministic`）ではなく、記録した実 API 応答の再生（`recorded`）へ倒れる
+（下記「`compare`」節、[ADR 0133](../../docs/decisions/0133-compare-baseline-and-gate.md)）。
+同じテナントの中に `alice`/`bob` という2つの
 subject を作り（ペットの事実——alice は犬「ポチ」、bob は猫「タマ」——を1件ずつ
 observe する。取り違えたら一目で分かるようにしてある）、別テナントも1つ用意して、
 同じ質問文を3通りの `ctx` で `recall()` する。
@@ -359,12 +363,22 @@ Actions run 34006151739、head `e87da3b`）で `compare` を走らせたとこ�
 
 ### ⭐ 削減率だけでは意味を持たない——答えが残っているか
 
-> **⚠⚠ この節の表は擬似 provider の測定である。**下の 322 / 642 ターンの ❌ は、
-> **本物の provider では再現しない**——上の「🔴 2026-09-07 追記」の実測では全行が ✅ になる
-> （[ADR 0052](../../docs/decisions/0052-compare-cassette-and-provenance-survival.md)）。
+> **⚠⚠ この節の表は擬似 provider の測定である（測定当時。下記2026-09-15追記を参照）。**
+> 下の 322 / 642 ターンの ❌ は、**本物の provider では再現しない**——上の「🔴 2026-09-07 追記」
+> の実測では全行が ✅ になる（[ADR 0052](../../docs/decisions/0052-compare-cassette-and-provenance-survival.md)）。
 > **この節の ❌ を mnemora の限界として引用しないこと。**擬似埋め込みは意味的な類似度を
 > 表現しないため、順位付け自体が成立していない（`retrieval` の arm A の MRR は 0.018）。
 > それでもこの節を残すのは、**擬似物で測るとどう見えるかの記録として価値があるため**である。
+>
+> **🔴 2026-09-15 追記（Issue #248）: 下の表はもう `compare` の既定挙動ではない。**
+> `compare` は `OPENAI_API_KEY` が無いとき、いまは擬似 provider（`deterministic`）ではなく
+> `recorded`（`examples/chat/cassettes/compare.json` の再生）で走る
+> （[ADR 0133](../../docs/decisions/0133-compare-baseline-and-gate.md)）。**その `recorded`
+> の実測（`examples/chat/compare-baseline.json`、2026-09-15）では、322・642ターンを含む
+> 12行すべてで `factStatementSurvived: true`（✅）である。**⟹ 下の ❌ は、`compare` が
+> まだカセットを持たず本当に `deterministic` で走っていた時点（2026-09-05/06、CI run
+> `34006151739`）の歴史的な記録であり、**いま `compare` を実行しても再現しない。**
+> 詳しくは「⚠ この結果は 2026-09-15 に古くなった」節（この表の直後）を見ること。
 
 **何も返さなければ削減率は 0% になる。** 削減が意味を持つのは、**呼び出し側が探している
 答えが、削られた後にも残っている**場合だけである。物差し（「会話ログを全部プロンプトへ
@@ -396,6 +410,35 @@ PostgreSQL 17 + pgvector、擬似 provider、GitHub Actions run 34006151739、he
 | 162 | 81 | 81 | 10 | ✅ | ann_truncated, over_limit:30 |
 | 322 | 161 | 161 | 10 | ❌ | ann_truncated, over_limit:30 |
 | 642 | 321 | 321 | 10 | ❌ | ann_truncated, over_limit:30 |
+
+### ⚠ この結果は 2026-09-15 に古くなった——`compare` は今は `recorded` で走り、322/642 は ✅ になる
+
+**この節の「読み方1〜4」は、上の表が測定された時点（2026-09-05/06、CI run
+`34006151739`）の話としては正しい。**しかし、その時点と今とで前提が変わった:
+当時は `compare` に `OPENAI_API_KEY` を渡さなければ本当に擬似 provider
+（`deterministic`）で走っていたが、その後 `examples/chat/cassettes/compare.json`
+（記録した実 API 応答、[ADR 0052](../../docs/decisions/0052-compare-cassette-and-provenance-survival.md)）
+が足され、鍵の有無に関わらずこのカセットが再生されるようになった。**この切り替えの
+存在自体はこれまでも README に書かれていなかった**——[ADR 0133](../../docs/decisions/0133-compare-baseline-and-gate.md)
+が実測でこれを発見し、`examples/chat/compare-baseline.json` として基準値をコミットし、
+CI の退行検知の門にした（Issue #248 がこの節を含む複数箇所の「`compare` は
+`deterministic`」という記述の誤りを指摘し、本追記に至った）。
+
+**⟹ 今 `compare` を実行すると、上の表は再現しない。** `compare-baseline.json`
+（2026-09-15 実測）では、**322ターン・642ターンを含む12行すべてで
+`factStatementSurvived: true`（✅）である**——上の表の ❌ は無くなっている。
+これは、上の「🔴 2026-09-07 追記」（本物の API キーで実測し、全12行が ✅ になった
+[ADR 0052](../../docs/decisions/0052-compare-cassette-and-provenance-survival.md)の結果）と
+一致する。**カセットは記録した実 API の応答の再生であり、擬似物ではないため、
+擬似 embedding に起因していた ❌（下記「読み方4」参照）は `recorded` では起きない。**
+
+**⚠ ただし、以下の「読み方1〜4」で語られる `totalInScope`/`annCandidateCount` の
+具体的な件数（161件・321件など）は、`compare-baseline.json` の値（同じ 322/642 ターンで
+それぞれ 95件・189件）とも一致しない。** 干し草の中身が擬似 LLM と本物(recorded)の
+LLM とで異なるため（本物の LLM は世間話の多くを記憶として抽出しない。上記「🔴
+2026-09-07 追記」参照）だと考えられるが、**この差の原因をここで検算してはいない。**
+**⟹ 以下の「読み方1〜4」は、擬似 provider だった当時の記録として読むこと。
+`compare` の現在の既定挙動を代表する数字ではない。**
 
 **読み方1: [ADR 0021](../../docs/decisions/0021-drain-embed-ticks-in-ingest.md) の修正は
 効いている。** 「ANN の候補になれた件数」列が全行で「スコープ内の Memory」列と**一致**して
@@ -452,33 +495,57 @@ decay/freshness/strength の再スコアは考慮していない）。
 絞り込みが起きていなければ「残った」ことに意味が無く、`limit` が緩んだ瞬間に
 この歯は無意味な緑になるため。
 
-**⚠ この表が主張しないこと**: 擬似 embedding は意味的な類似度を持たないので、これは
-「意味的に関連する記憶が正しく上位に来る」ことの証明では**ない**。北極星の「削っても目的の
-記憶が落ちない」を、この擬似 provider の `compare` で主張することはやめた——擬似 provider の
-`compare` は**量の削減**を測る道具として使い、**想起の質の主張はここには載せない**。
-想起の質の主張は本物の埋め込みを使う `retrieval`（下記、
-[ADR 0019 §7](../../docs/decisions/0019-real-openai-measurement-cost.md)）が担う、という
-判断を [ADR 0022](../../docs/decisions/0022-fake-provider-compare-does-not-claim-recall-quality.md)
+**⚠ この表が主張しないこと（測定当時、2026-09-05/06 時点の話）**: 擬似 embedding は
+意味的な類似度を持たないので、これは「意味的に関連する記憶が正しく上位に来る」ことの
+証明では**ない**。北極星の「削っても目的の記憶が落ちない」を、当時擬似 provider だった
+`compare` で主張することはやめた——擬似 provider の `compare` は**量の削減**を測る道具
+として使い、**想起の質の主張はここには載せない**。想起の質の主張は本物の埋め込みを
+使う `retrieval`（下記、[ADR 0019 §7](../../docs/decisions/0019-real-openai-measurement-cost.md)）
+が担う、という判断を [ADR 0022](../../docs/decisions/0022-fake-provider-compare-does-not-claim-recall-quality.md)
 に記録した。
+
+**⚠⚠ 2026-09-15 追記（Issue #248）: `compare` はもう「擬似 provider」ではない。**
+上の判断は「`compare` は擬似 provider である」という前提の上に立っていたが、その前提は
+今は成立しない（[ADR 0133](../../docs/decisions/0133-compare-baseline-and-gate.md)、
+下記「⚠ ただし `compare` 自身は…」参照）。**この ADR 0022 の決定（想起の質の主張は
+`compare` に載せない）自体を書き換えるべきかは、本追記の範囲では判断していない**——
+それは ADR 0022 の結論を訂正するかどうかという設計判断であり、この README 訂正
+（Issue #248）の作業者はそこまで踏み込まなかった。少なくとも事実として言えるのは、
+**現在の `compare`（`recorded`）は、想起の質について「擬似物だから当てにならない」
+とは言えなくなっている**（`recorded` は記録した実 API 応答の再生であり、
+[ADR 0051](../../docs/decisions/0051-recorded-provider-cassette.md) の性質どおり
+擬似物ではない）ということである。
 
 ### この実測の限界
 
-- **擬似 embedding は意味的な類似度を表現しない。** `DeterministicEmbeddingProvider`
-  は文字コードの合計から機械的にベクトルを作るだけで、実際に「関連する記憶が正しく
-  上位に来ているか」はこの実測では検証していない（`packages/testkit` 自身のコメントに
-  明記されている限界であり、隠していない）。**主に測っているのは「recall がどれだけの量を
-  返すか」である。**「正しいものを返すか」については、上記の通り
-  **322/642ターンでは、この決定的なシナリオでも目的の記憶が実際に落ちた**
-  （「⭐ 削減率だけでは意味を持たない」節・[ADR 0022](../../docs/decisions/0022-fake-provider-compare-does-not-claim-recall-quality.md)
-  参照）。**一般に意味的な関連度で正しく順位付けできるかは確認していない。**この2つを
-  混同しないこと。**⚠ この「確認していない」は 2026-09-10 に改められた**
-  （[ADR 0088](../../docs/decisions/0088-retrieval-quality-measured-in-ci.md)）——
-  後者は `retrieval` が測っており、**それが CI で毎 PR 実測されるようになった。**
+- **（測定当時、2026-09-05/06 時点）擬似 embedding は意味的な類似度を表現しない。**
+  `DeterministicEmbeddingProvider` は文字コードの合計から機械的にベクトルを作るだけで、
+  実際に「関連する記憶が正しく上位に来ているか」はこの実測では検証していない
+  （`packages/testkit` 自身のコメントに明記されている限界であり、隠していない）。
+  **主に測っていたのは「recall がどれだけの量を返すか」である。**「正しいものを返すか」
+  については、上記の通り**322/642ターンでは、当時の擬似 provider の `compare`でも
+  目的の記憶が実際に落ちた**（「⭐ 削減率だけでは意味を持たない」節・
+  [ADR 0022](../../docs/decisions/0022-fake-provider-compare-does-not-claim-recall-quality.md)
+  参照。**⚠ この「322/642 で落ちた」は現在の `compare` では再現しない。下記参照**）。
+  **一般に意味的な関連度で正しく順位付けできるかは確認していない、という限界は
+  2026-09-10 に改められた**（[ADR 0088](../../docs/decisions/0088-retrieval-quality-measured-in-ci.md)）
+  ——`retrieval` が想起の質を測っており、**それが CI で毎 PR 実測されるようになった。**
   実 API キーは要らない（[ADR 0051](../../docs/decisions/0051-recorded-provider-cassette.md)
   のカセットを `MNEMORA_PROVIDER_SOURCE=recorded` で再生する）。
-  **⚠ ただし `compare` 自身は依然として `deterministic` で走る**——
-  この項が言う「この実測では検証していない」は、**`compare` については今も真である。**
-  **⚠ そして `retrieval` の標本は probe 7 件である**（ADR 0033 §3）。
+
+  **⚠⚠ 2026-09-15 追記（Issue #248）: `compare` 自身も、もう `deterministic` では走らない。**
+  ここより上のこの節・「⭐ 削減率だけでは意味を持たない」節は、いずれも
+  `OPENAI_API_KEY` が無い `compare` は `deterministic`（擬似 provider）で走る、という
+  当時の前提の上に書かれていた。**その前提はもう成立しない**——
+  `examples/chat/cassettes/compare.json`（記録した実 API 応答）が存在するため、
+  鍵が無い `compare` は今は `recorded` で走る（[ADR 0133](../../docs/decisions/0133-compare-baseline-and-gate.md)）。
+  **`compare-baseline.json`（2026-09-15 実測）では、322・642ターンを含む全12行が
+  `factStatementSurvived: true`（✅）——「322/642で目的の記憶が落ちる」はもう
+  `compare` の挙動ではない。**⟹ 「compare は検証していない／retrieval が検証する」
+  という以前の役割分担も、この点では前提が変わっている（この変化を ADR 0022 の
+  決定にどう反映するかは、この訂正の範囲では判断していない。上記「⚠⚠ 2026-09-15
+  追記」参照）。
+  **⚠ そして `retrieval` の標本は probe 7 件である**（ADR 0033 §3）——これは変わらない。
 - **naive path はシステムプロンプト・ツール定義を含まない生の transcript だけを測る。**
   実際のアプリケーションはこれらが上乗せされる分、絶対値としての削減幅はさらに
   大きくなりうる（逆に mnemora 側の固定費の比率は相対的に小さくなる）。
@@ -506,9 +573,11 @@ decay/freshness/strength の再スコアは考慮していない）。
 
 ## `retrieval`: 意味的関連性の測定（本 PR で追加）
 
-`compare` の限界として上に明記した通り、擬似 embedding は意味的な類似度を表現しないため、
-「recall がどれだけの量を返すか」は測れても「正しいものを返すか」は測れない。`retrieval`
-サブコマンドはこの後者——**意味的に関連する記憶が正しく上位に来るか**——を、本物の
+`compare` の限界として上に明記した通り（**測定当時**——`compare` は当時、鍵が無ければ
+擬似 embedding で走っていた。**今は違う。**下記「`compare` は今は `recorded`」参照）、
+擬似 embedding は意味的な類似度を表現しないため、「recall がどれだけの量を返すか」は
+測れても「正しいものを返すか」は測れない、という限界があった。`retrieval` サブコマンドは
+この後者——**意味的に関連する記憶が正しく上位に来るか**——を、本物の
 OpenAI（LLM・embedding）を使って測るためのものである。
 
 ```bash
@@ -623,7 +692,7 @@ OPENAI_API_KEY=... pnpm --filter @mnemora/example-chat run verify
 
 | arm | LLM | Embedding | MRR（全体） | MRR（対照群・語彙が重なる1件） | MRR（語彙が重ならない6件） |
 |---|---|---|---|---|---|
-| **A（＝ `compare` と同じ配置）** | 擬似 | 擬似 | **0.018** | **0.000** | 0.021 |
+| **A（＝ 当時の `compare` と同じ配置。⚠ 2026-09-15 現在は違う——下記参照）** | 擬似 | 擬似 | **0.018** | **0.000** | 0.021 |
 | **B** | 擬似 | 本物 | **0.714** | 1.000 | 0.667 |
 | **C（実運用の配置）** | 本物 | 本物 | **0.743** | 1.000 | 0.700 |
 
@@ -658,11 +727,22 @@ arm B → arm C（LLM も本物に）の上積みは 0.714 → 0.743 と小さ�
 
 **⟹ 北極星の物差しに対して: 本物の埋め込みでは hit@10 が 7/7。**
 `limit`=10 は 74件の 13% であり、**87% を削っても目的の記憶は落ちなかった。**
-擬似 provider の `compare`（上記「⭐ 削減率だけでは意味を持たない」節）では、量を
-2桁近く削った322/642ターンで実際に目的の記憶が落ちている（❌）ため、この物差しに
-対する主張は擬似 provider の `compare` からは立てない（[ADR 0022](../../docs/decisions/0022-fake-provider-compare-does-not-claim-recall-quality.md)）。
-**本物では「意味で引いた上で落ちなかった」まで言える**——擬似と本物で答えが割れる
-場面がある以上、この主張の根拠は本物の provider による `retrieval` の実測に置く。
+**（測定当時、2026-09-06〜07）**擬似 provider だった `compare`（上記「⭐ 削減率だけでは
+意味を持たない」節）では、量を2桁近く削った322/642ターンで実際に目的の記憶が落ちている
+（❌）ため、当時この物差しに対する主張は擬似 provider の `compare` からは立てられず
+（[ADR 0022](../../docs/decisions/0022-fake-provider-compare-does-not-claim-recall-quality.md)）、
+本物では「意味で引いた上で落ちなかった」まで言える——擬似と本物で答えが割れる場面が
+あった以上、この主張の根拠は本物の provider による `retrieval` の実測に置いていた。
+
+**⚠⚠ 2026-09-15 追記（Issue #248）: `compare` は今は `recorded` で走り、322/642 の
+❌ はもう出ない。**`compare` は `OPENAI_API_KEY` が無くても、記録した実 API 応答
+（`examples/chat/cassettes/compare.json`）を再生するようになった
+（[ADR 0133](../../docs/decisions/0133-compare-baseline-and-gate.md)）。**その `compare`
+の現在の基準値（`examples/chat/compare-baseline.json`、2026-09-15 実測）では、
+322・642ターンを含む全12行で `factStatementSurvived: true`（✅）——上の「擬似 provider の
+`compare` では ❌」という記述はもう `compare` の挙動を表していない。**「擬似と本物で
+答えが割れる」という対比自体が、`compare` については前提から崩れている——`compare` が
+今使っているのは擬似物ではなく、記録した本物の応答である。
 
 #### 読み方3: ⚠ 悪い結果もそのまま——「話題は合うが、答えが違う」
 
