@@ -142,6 +142,21 @@ Phase 1 で入れた土台が、後続フェーズをどう安くしているか
 
 **⚠ 2026-09 追加訂正（Issue #202、[ADR 0145](./decisions/0145-valid-from-until-storage.md)）: 上の表の「`valid_from` / `valid_until`（時間的妥当性）」も、`Memory` 型と `packages/postgres` の読み書きに限って前倒しで実装済みである。**「4本目・5本目の時計として自然に追加できる」という本文の見立て自体はここで実証された形になるが、**`RecallQuery` からこの区間を問う口・段1（ANN）への索引の押し下げ・`valid_until` を過ぎた記憶を `omitted` で名指しすることは、いずれもまだ実装されておらず Phase 2 のままである**（ADR 0145「射程外」参照）。
 
+**⚠ 2026-09-16 追加訂正（Issue #282、[ADR 0124](./decisions/0124-purge-physical-delete.md)）: 上の表の「`purge()`（物理削除）」も、`Runtime.purge()` として前倒しで実装済みである**（Issue #198、PR #229、2026-09-15。【実測】`packages/core/src/runtime.ts` に `purge(ctx, target, opts?)` の宣言と実装が在る）。`forgotten` からのみ遷移でき、`content`/`digest` を固定のトゥームストーンで上書きし、`memory_events` に `kind: 'purged'` を積む——本文が見立てた「`memory_events` のイベント種別に `purged` を Phase 1 のスキーマから含めてあるため、監査ログのスキーマ変更なしに追加できる」は、ここで実証された形になる。`opts.dryRun` を持つが `tick()`/`observe()` へは配線していない（明示呼び出しのみ。ADR 0124「決定」参照）。**⟹ 下の「⛔ この表の他の項目も前倒しされていない」は、この行についても誤りだった。**
+
+**⚠ 2026-09-16 追加訂正（Issue #282）: 上の表の「忘却の実処理（`decay_floor_at` を使った検索時フィルタとアーカイブ掃引）」は、束ねられた二つの機構のうち片方だけが前倒しされている。**
+
+- **アーカイブ掃引**は前倒しで実装済み（[ADR 0114](./decisions/0114-archive-sweep-for-decayed-memories.md)、PR #214、2026-09-15）。`MemoryStore.archiveDecayed?`（任意メソッド）を `Runtime.sweepArchive` がそのまま素通しし、`decay_floor_at <= now()` の範囲走査で `active`/`contested` を `archived` へ倒す。**ただし `tick()`/`observe()` には配線しておらず、呼び出し側が明示的に呼んだときだけ走る**（`packages/core/src/runtime.ts` の doc コメントが「🔴 この掃引は自動では一度も走らない」と明記している）。
+- **検索時フィルタ**（本文が言う `WHERE decay_floor_at > now()` 側）は**依然として未実装のままである**。`VectorFilter.decayFloorAtAfter` という口自体は在る（`packages/core/src/interfaces/vector-store.ts`）が、`recall-runtime.ts` は「ADR 0011: `decayFloorAtAfter` は Phase 1 では読み取りフィルタに使わない」というコメントのとおり実際には値を渡していない。【実測】2026-09-16、`grep -rn "decayFloorAtAfter:" packages/core/src packages/postgres/src` はテストを除いて0件。
+
+**⟹ この行は「部分的に前倒し」である**（アーカイブ掃引は済み・検索時フィルタは未着手）。
+
+**⚠ 2026-09-16 追記（Issue #282）: 上の「⛔ この表の他の項目も前倒しされていない」の扱いについて。**この PR で Phase 2 / Phase 3 の表の全8行を実装と突き合わせた（内訳は本 PR 本文を見よ）。結果、Phase 2 の5行のうち4行（目次帯の digest 帯側／`purge()`／忘却の実処理のうちアーカイブ掃引側／`valid_from`・`valid_until` の型と保存側）が全部または部分的に前倒しされていた。前倒しされていないままなのは「関係グラフ本体」の1行だけである。**⟹「⛔ この表の他の項目も前倒しされていない」は、もはや一般には成立しない。**
+
+この一文を「前倒しされた行を名指しで列挙する形」に書き換えることも検討した。しかし列挙は、この表に行が増えるたび・既存行の実装が進むたびに追従が要る——**注意力に依存する形であり、`AGENTS.md` が退けている形そのものである。**機械的な歯にできないかも検討したが、各行の説明文（自然言語）と実装コード（識別子・ファイル）の対応付けは、汎用的な静的検査に落とせるものではないと判断した（これは静的な検討から導いた判断であり、実際に検査を書いて試したわけではない）。
+
+**⟹ 採った対応**: 一文そのものは書き換えず、列挙も歯も追加しない。代わりに、**この表の各行のセル本文（「Phase 1 の何が効いているか」列）は Phase 1 完了時点（設計時）の見立てのままであり、実装状況の記録ではないこと**、**実装状況を知りたい読み手は、表の直下に来る日付付きの訂正注記を見るべきこと**を、この段落自体で明示する。訂正注記が無い行は「まだ突き合わせによる訂正が付いていない」という意味であり、それ自体は「未実装である」ことを保証しない——2026-09-16 時点でこの表を全行突き合わせた結果は上記の内訳がすべてである。
+
 
 ### Phase 3
 
@@ -150,6 +165,14 @@ Phase 1 で入れた土台が、後続フェーズをどう安くしているか
 | `packages/bullmq`（Scheduler の実装）と Background Cognition（`reflect()`）の実運用 | Phase 1 で `deferred` 抽出を選んだ場合の transactional outbox パターンを設計に組み込んであれば、Phase 3 は「outbox を運ぶ役」を `InlineScheduler` から BullMQ に差し替えるだけで済む。キューの選択が支配的な決定にならない。 |
 | Redis をキャッシュとして使う用途 | Phase 1〜2 では Redis を要求しない設計（Postgres 必須・Redis 任意）を維持してあるため、Phase 3 で初めて Redis を導入しても既存の保証に影響しない。 |
 | 監査ログの保持期間ポリシーの実運用（テナント単位の設定、期限切れ削除の `purged` イベント化） | `memory_events` のスキーマと `purged` イベント種別が Phase 1〜2 で既にあるため、Phase 3 は削除ジョブの実装だけで済む。 |
+
+**⚠ 2026-09-16 追加訂正（Issue #282）: 上の表の「監査ログの保持期間ポリシーの実運用」の行は、本文が「Phase 3 は削除ジョブの実装だけで済む」と見立てたその削除ジョブ自体が、Phase 3 を待たずに前倒しで実装済みである。**
+
+- **テナント単位の設定**は [ADR 0050](./decisions/0050-tenant-event-retention.md)（PR #57、2026-09-07）で実装済み——`TenantSettingsStore.getEventRetention`/`setEventRetention` が `event_retention_days` の3状態（行が無い／行は在るが `NULL`／日数）を読み書きする（§5.4 参照）。
+- **期限切れ削除の実装**も [ADR 0115](./decisions/0115-event-retention-purge.md)（Issue #210、PR #219、2026-09-15）で実装済み——`MemoryStore.purgeExpiredEvents?`（任意メソッド）と、これを呼ぶ `packages/core` の `purgeExpiredEventsForTenant` が在る。**ただし本文の行が言う `purged` イベントではなく、実際に積まれるのは別の kind である `events_purged`**（`packages/core/src/event.ts`。`purged` は `Runtime.purge()` による Memory 本体の物理削除、ADR 0124 が使う別の kind）——本文の行はこの2つを取り違えている。
+- **⚠ ただし「実運用」（定期実行そのもの）はまだ無い。**`purgeExpiredEventsForTenant` は `tick()`/`observe()` に配線されておらず、**定期実行は運用側のスクリプト・cron の責務のままである**（§5.4 の2026-09-15訂正、および `docs/memory-model.md` §11 行11 が明記）。
+
+**⟹ この行も「部分的に前倒し」である**（削除ジョブ自体は実装済み・定期実行の配線は未着手）。
 
 ### Phase 4
 
