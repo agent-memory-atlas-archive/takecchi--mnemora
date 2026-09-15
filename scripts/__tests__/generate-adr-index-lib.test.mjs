@@ -108,6 +108,41 @@ describe("buildAdrEntries", () => {
     const entries = buildAdrEntries(files);
     expect(entries.map((e) => e.number)).toEqual(["0001", "0002"]);
   });
+
+  it("同じ番号を2本以上のファイルが名乗っていれば、ファイル名を名指しして例外（Issue #315）", () => {
+    const files = [
+      {
+        filename: "0156-delegate-5-grade-judgment-and-breaking-changes.md",
+        content: "# ADR 0156: A\n\n- **状態**: 採用 (2026-09)",
+      },
+      {
+        filename: "0156-tick-drives-consolidate-and-reflect.md",
+        content: "# ADR 0156: B\n\n- **状態**: 採用 (2026-09)",
+      },
+    ];
+    expect(() => buildAdrEntries(files)).toThrow(
+      /ADR 番号 0156 を複数のファイルが名乗っています: 0156-delegate-5-grade-judgment-and-breaking-changes\.md, 0156-tick-drives-consolidate-and-reflect\.md/,
+    );
+  });
+
+  it("3本以上が同じ番号を名乗っていれば、全ファイル名を並べる", () => {
+    const files = [
+      { filename: "0200-a.md", content: "# ADR 0200: A\n\n- **状態**: 採用 (2026-09)" },
+      { filename: "0200-b.md", content: "# ADR 0200: B\n\n- **状態**: 採用 (2026-09)" },
+      { filename: "0200-c.md", content: "# ADR 0200: C\n\n- **状態**: 採用 (2026-09)" },
+    ];
+    expect(() => buildAdrEntries(files)).toThrow(
+      /ADR 番号 0200 を複数のファイルが名乗っています: 0200-a\.md, 0200-b\.md, 0200-c\.md/,
+    );
+  });
+
+  it("番号が重複していなければ通る（陰性対照）", () => {
+    const files = [
+      { filename: "0001-a.md", content: "# ADR 0001: A\n\n- **状態**: 採用 (2026-09)" },
+      { filename: "0002-b.md", content: "# ADR 0002: B\n\n- **状態**: 採用 (2026-09)" },
+    ];
+    expect(() => buildAdrEntries(files)).not.toThrow();
+  });
 });
 
 describe("buildIndexTable", () => {

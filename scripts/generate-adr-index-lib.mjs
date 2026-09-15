@@ -164,14 +164,35 @@ export function parseAdrEntry(filename, content) {
  * `parseAdrEntry` した結果を返す。`README.md` や ADR らしくない名前
  * （テンプレート等）は黙って無視する——ADR 0128 の `parseAdrFilenames` と同じ判断。
  *
+ * 同じ4桁番号を名乗るファイルが2本以上あれば例外を投げる（Issue #315）。
+ * ファイル名が違う別ファイルは git 上では単純追加に見え、衝突するのは
+ * 索引の1行だけ——番号の取り合いは「claim した時点」ではなく「着地した時点」
+ * で確定するため、生成のたびにここで検査する。
+ *
  * @param {{ filename: string, content: string }[]} files
  * @returns {ReturnType<typeof parseAdrEntry>[]}
  */
 export function buildAdrEntries(files) {
-  return files
+  const entries = files
     .filter((f) => isAdrFilename(f.filename))
     .map((f) => parseAdrEntry(f.filename, f.content))
     .sort((a, b) => a.number.localeCompare(b.number));
+
+  const filenamesByNumber = new Map();
+  for (const entry of entries) {
+    const filenames = filenamesByNumber.get(entry.number) ?? [];
+    filenames.push(entry.filename);
+    filenamesByNumber.set(entry.number, filenames);
+  }
+  for (const [number, filenames] of filenamesByNumber) {
+    if (filenames.length > 1) {
+      throw new Error(
+        `ADR 番号 ${number} を複数のファイルが名乗っています: ${filenames.join(", ")}`,
+      );
+    }
+  }
+
+  return entries;
 }
 
 /**
