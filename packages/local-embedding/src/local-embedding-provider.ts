@@ -66,6 +66,52 @@ export const DEFAULT_LOCAL_EMBEDDING_PREFIX = "";
  */
 export const DEFAULT_LOCAL_EMBEDDING_NUM_THREADS = 4;
 
+/**
+ * 既定の合計試行回数（初回を含む）。**Issue #261 / ADR 0141。**
+ *
+ * `createPipeline`（既定は Hugging Face からの取得を含む）が「種類の付いていない」
+ * 失敗（多くはネットワーク）を返したとき、この回数まで試す。
+ * `1` にすると実質リトライ無し（Issue #261 が直す前の挙動）になる。
+ */
+export const DEFAULT_LOCAL_EMBEDDING_RETRY_ATTEMPTS = 3;
+
+/**
+ * 既定のリトライ間隔（指数バックオフ + full jitter）。
+ *
+ * **なぜ jitter を掛けるか**: CI の5ジョブは同じ Hugging Face repo を同じ瞬間に
+ * 取りに行きうる（`ci.yml` が5ジョブとも同じ cache key を共有している——本 ADR の
+ * 「測ったこと」参照）。jitter が無いと、揃って失敗した複数ジョブが**揃って
+ * 同じ瞬間に再試行し**、再び渋滞を起こしうる。`Math.random() * upper` の
+ * full jitter（AWS の backoff の記事で知られる形）でそれをずらす。
+ *
+ * @param attempt 今回失敗した試行の番号（1始まり）。
+ */
+export function defaultLocalEmbeddingRetryDelayMs(attempt: number): number {
+  const baseMs = 200;
+  const capMs = 4_000;
+  const upper = Math.min(baseMs * 2 ** (attempt - 1), capMs);
+  return Math.random() * upper;
+}
+
+/**
+ * モデルの読み込み（`createPipeline`）が失敗したときのリトライ設定。
+ *
+ * ⚠ **`kind` の付いたエラー（`errors.ts`。`input_too_long` / `unknown_input_limit`）は
+ * リトライしない。**それらは入力・設定の問題であり、同じ入力で再試行しても
+ * 結果は変わらない（`#startLoad` の実装を見ること）。リトライするのは
+ * 「種類が分かっていない失敗」——このパッケージの経路では、その大半が
+ * Hugging Face からの取得に伴うネットワークの失敗である。
+ */
+export interface LocalEmbeddingRetryOptions {
+  /** 合計の試行回数（初回を含む）。既定 {@link DEFAULT_LOCAL_EMBEDDING_RETRY_ATTEMPTS}。 */
+  attempts?: number;
+  /**
+   * `attempt` 回目（1始まり、今回失敗した試行の番号）の後、次の試行まで待つ時間(ms)を返す。
+   * 既定 {@link defaultLocalEmbeddingRetryDelayMs}。
+   */
+  delayMs?: (attempt: number) => number;
+}
+
 export interface LocalEmbeddingProviderOptions {
   /** Hugging Face の repo id。既定 `sirasagi62/ruri-v3-30m-ONNX`。 */
   repo?: string;
@@ -105,6 +151,18 @@ export interface LocalEmbeddingProviderOptions {
    * （`packages/openai` の `client` と同じ役目）。未指定なら transformers.js を使う。
    */
   createPipeline?: CreateLocalEmbeddingPipeline;
+  /**
+   * モデルの読み込みが失敗したときのリトライ設定。**Issue #261 / ADR 0141。**
+   * 既定は {@link DEFAULT_LOCAL_EMBEDDING_RETRY_ATTEMPTS} 回・
+   * {@link defaultLocalEmbeddingRetryDelayMs} のバックオフ。
+   */
+  retry?: LocalEmbeddingRetryOptions;
+  /**
+   * リトライの待ち時間を実際に待つ関数。**テスト用の注入点**（`createPipeline` と同じ役目
+   * ——待たずに何度も失敗させるテストが、実時間を消費しないようにする）。
+   * 未指定なら `setTimeout` を使う本物の待ちになる。
+   */
+  sleep?: (ms: number) => Promise<void>;
 }
 
 export class LocalEmbeddingProvider implements EmbeddingProvider {
@@ -125,6 +183,9 @@ export class LocalEmbeddingProvider implements EmbeddingProvider {
   readonly #spec: LocalEmbeddingModelSpec;
   readonly #prefix: string;
   readonly #createPipeline: CreateLocalEmbeddingPipeline;
+  readonly #retryAttempts: number;
+  readonly #retryDelayMs: (attempt: number) => number;
+  readonly #sleep: (ms: number) => Promise<void>;
 
   /**
    * ⭐ **読み込み中／読み込み済みの Promise そのものを握る**（`LocalEmbeddingPipeline` ではなく）。
@@ -149,6 +210,14 @@ export class LocalEmbeddingProvider implements EmbeddingProvider {
     });
     this.#prefix = options.prefix ?? DEFAULT_LOCAL_EMBEDDING_PREFIX;
     this.#createPipeline = options.createPipeline ?? createLocalEmbeddingPipeline;
+    // `Math.max(1, ...)`: 0回以下の指定を「1回（実質リトライ無し）」に丸める。
+    // 「一度も試さない」は #startLoad の for ループの前提を壊すので許さない。
+    this.#retryAttempts = Math.max(
+      1,
+      options.retry?.attempts ?? DEFAULT_LOCAL_EMBEDDING_RETRY_ATTEMPTS,
+    );
+    this.#retryDelayMs = options.retry?.delayMs ?? defaultLocalEmbeddingRetryDelayMs;
+    this.#sleep = options.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
     this.space = Object.freeze({
       provider: LOCAL_EMBEDDING_PROVIDER_ID,
       model: options.modelId ?? DEFAULT_LOCAL_EMBEDDING_MODEL_ID,
@@ -254,27 +323,43 @@ export class LocalEmbeddingProvider implements EmbeddingProvider {
   }
 
   /**
-   * `createPipeline` を呼ぶ薄い層。2つのことをする。
+   * `createPipeline` を呼ぶ薄い層。3つのことをする。
    *
    * 1. **同期の throw を reject に均す**（`async` 関数なのでこれは自動で起きる）。
-   * 2. **失敗を包んで、次に何ができるかを一緒に投げる**（下記）。
+   * 2. **種類の分かっていない失敗を、バックオフを挟んで数回まで再試行する**
+   *    （**Issue #261 / ADR 0141**。下記）。
+   * 3. **リトライを使い切っても失敗したら、包んで、次に何ができるかを一緒に投げる**（下記）。
+   *
+   * ⚠ **ここでのリトライは「1回の `#load()` の中で完結する」。**`#ready` を
+   * 握ったまま数回試す——`#ready` を早々に `null` へ戻して次の `embed()` 呼び出しに
+   * 再試行を委ねる既存の仕組み（クラス doc の `#ready` を参照）とは別の層である。
+   * 両方が要る理由: こちらは「一時的な失敗を、呼び出し側に一度も見せずに吸収する」ため
+   * （Issue #261 が直した対象）。既存の仕組みは「リトライを使い切って本当に失敗したとき、
+   * インスタンスを壊れたままにしない」ためであり、今回変えていない。
    */
   async #startLoad(): Promise<LocalEmbeddingPipeline> {
-    try {
-      return await this.#createPipeline(this.#spec);
-    } catch (error) {
-      // 🔴 **種類の付いた失敗は包まない**（ADR 0090）。
-      //
-      // `describeLoadFailure` が足す文面は「**repo が消えたなら再変換できる**」という
-      // 助言である。**それは `unknown_input_limit` に対しては嘘の助言になる**
-      // ——repo は取得できているし、再変換しても上限は宣言されない。
-      // ⟹ 包むと、原因の種類が「モデルが落ちてこなかった」に潰れる。
-      // **包むのは、種類が分かっていない失敗だけにする。**
-      if (isLocalEmbeddingProviderError(error)) {
-        throw error;
+    let lastError: unknown;
+    for (let attempt = 1; attempt <= this.#retryAttempts; attempt += 1) {
+      try {
+        return await this.#createPipeline(this.#spec);
+      } catch (error) {
+        // 🔴 **種類の付いた失敗はリトライしない・包まない**（ADR 0090 / ADR 0141）。
+        //
+        // `input_too_long` / `unknown_input_limit` は入力・設定の問題であり、
+        // **同じ入力でもう一度試しても結果は変わらない**——リトライは無駄な待ち時間を
+        // 足すだけである。`describeLoadFailure` が足す文面（「repo が消えたなら
+        // 再変換できる」）も `unknown_input_limit` に対しては嘘の助言になるため、
+        // 包まずにそのまま投げる（ここは Issue #261 より前からの決定を変えていない）。
+        if (isLocalEmbeddingProviderError(error)) {
+          throw error;
+        }
+        lastError = error;
+        if (attempt < this.#retryAttempts) {
+          await this.#sleep(this.#retryDelayMs(attempt));
+        }
       }
-      throw new Error(describeLoadFailure(this.#spec), { cause: error });
     }
+    throw new Error(describeLoadFailure(this.#spec, this.#retryAttempts), { cause: lastError });
   }
 }
 
@@ -296,12 +381,15 @@ export class LocalEmbeddingProvider implements EmbeddingProvider {
  * 別の問題であり、包んだ文面だけになると区別が付かなくなる。
  * ここで足しているのは「次に何ができるか」だけで、**何が起きたかは cause の側にある。**
  */
-function describeLoadFailure(spec: LocalEmbeddingModelSpec): string {
+function describeLoadFailure(spec: LocalEmbeddingModelSpec, attempts: number): string {
   const where =
     spec.cacheDir !== undefined ? `cacheDir=${spec.cacheDir}` : "cacheDir=未指定（既定の場所）";
+  // attempts <= 1 のときは「1回試した」と言っても情報が増えないので黙る
+  // （リトライを無効化した呼び出し側・既存のテストの文面と揃える）。
+  const attemptsNote = attempts > 1 ? `${attempts} 回試したが取得できなかった。` : "";
   return (
     `LocalEmbeddingProvider: モデルを読み込めなかった` +
-    `（repo=${spec.repo} / dtype=${spec.dtype} / ${where}）。` +
+    `（repo=${spec.repo} / dtype=${spec.dtype} / ${where}）。${attemptsNote}` +
     `原因は cause を見ること——ネットワーク断・repo の消滅・dtype 名の誤りは別の問題である。` +
     ` repo が取得できなくなっている場合: 元モデルは公式の cl-nagoya/ruri-v3-30m（apache-2.0）` +
     `であり、ONNX への変換は自分でやり直せる。変換したものは options.repo に指すことで使える` +

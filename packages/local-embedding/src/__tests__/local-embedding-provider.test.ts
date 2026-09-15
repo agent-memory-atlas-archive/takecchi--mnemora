@@ -3,14 +3,17 @@ import type { Ctx } from "@mnemora/core";
 import {
   DEFAULT_LOCAL_EMBEDDING_DIMENSIONS,
   DEFAULT_LOCAL_EMBEDDING_MODEL_ID,
+  DEFAULT_LOCAL_EMBEDDING_RETRY_ATTEMPTS,
   LOCAL_EMBEDDING_PROVIDER_ID,
   LocalEmbeddingProvider,
+  defaultLocalEmbeddingRetryDelayMs,
 } from "../local-embedding-provider.js";
 import type {
   CreateLocalEmbeddingPipeline,
   LocalEmbeddingModelSpec,
   LocalEmbeddingPipeline,
 } from "../pipeline.js";
+import { LocalEmbeddingProviderError, isLocalEmbeddingProviderError } from "../errors.js";
 
 /**
  * `LocalEmbeddingProvider` の歯。**本物のモデルは一切落とさない**——
@@ -164,6 +167,12 @@ describe("遅延ロード", () => {
   /**
    * 失敗した Promise を握り続けると、**一度の一時的な失敗が、そのインスタンスを
    * 永久に使えなくする**（ネットワークが落ちていた最初の1回で終わる）。
+   *
+   * ⚠ **`retry: { attempts: 1 }` でこの回の中のリトライ（Issue #261 / ADR 0141）を
+   * 無効化している。**ここで確かめたいのは「1回の `#load()` が使い切って失敗したあと、
+   * 次の `embed()` 呼び出しが新しい `#load()` をやり直せるか」であって、
+   * 1回の `#load()` の中で何度試すかではない——後者は下の
+   * describe("読み込みの再試行 (Issue #261 / ADR 0141)") が見る。
    */
   it("読み込みに失敗しても、次の呼び出しで再試行できる", async () => {
     let attempts = 0;
@@ -172,7 +181,7 @@ describe("遅延ロード", () => {
       if (attempts === 1) throw new Error("ネットワークが落ちていた");
       return async (texts) => texts.map(() => Array.from({ length: 256 }, () => 0.1));
     };
-    const provider = new LocalEmbeddingProvider({ createPipeline });
+    const provider = new LocalEmbeddingProvider({ createPipeline, retry: { attempts: 1 } });
 
     // ⚠ 失敗は包まれる（下の describe を見ること）ので、cause 側で確かめる。
     await expect(provider.embed(ctx, ["1回目"])).rejects.toThrow(/モデルを読み込めなかった/);
@@ -186,7 +195,7 @@ describe("遅延ロード", () => {
     const createPipeline = (() => {
       throw new Error("同期に落ちた");
     }) as unknown as CreateLocalEmbeddingPipeline;
-    const provider = new LocalEmbeddingProvider({ createPipeline });
+    const provider = new LocalEmbeddingProvider({ createPipeline, retry: { attempts: 1 } });
 
     const error = await provider.embed(ctx, ["テキスト"]).then(
       () => undefined,
@@ -196,6 +205,8 @@ describe("遅延ロード", () => {
     expect(((error as Error).cause as Error).message).toBe("同期に落ちた");
   });
 
+  // ⚠ `retry: { attempts: 1 }`——ここで確かめたいのは #ready の並行時の畳み方であって、
+  // 1回の #load() の中のリトライではない。
   it("同時に来た8本が全部失敗しても、読み込みは1回だけで、その後再試行できる", async () => {
     let attempts = 0;
     const createPipeline: CreateLocalEmbeddingPipeline = async (_spec) => {
@@ -204,7 +215,7 @@ describe("遅延ロード", () => {
       if (attempts === 1) throw new Error("落ちた");
       return async (texts) => texts.map(() => Array.from({ length: 256 }, () => 0.1));
     };
-    const provider = new LocalEmbeddingProvider({ createPipeline });
+    const provider = new LocalEmbeddingProvider({ createPipeline, retry: { attempts: 1 } });
 
     const results = await Promise.allSettled(
       Array.from({ length: 8 }, () => provider.embed(ctx, ["テキスト"])),
@@ -214,6 +225,169 @@ describe("遅延ロード", () => {
 
     await expect(provider.embed(ctx, ["テキスト"])).resolves.toHaveLength(1);
     expect(attempts).toBe(2);
+  });
+});
+
+describe("読み込みの再試行 (Issue #261 / ADR 0141)", () => {
+  /**
+   * **Issue #261 の直接の再現**: `actions/cache` が hit しても
+   * （またはそもそもキャッシュに関係なく）、モデルの読み込みが
+   * 「種類の分かっていない失敗」（典型はネットワーク）で1回だけ落ちることがある。
+   * ⟹ **1回の `#load()` の中で、呼び出し側に見せずに吸収できるはずである。**
+   *
+   * `sleep` を注入して実時間を消費しないようにしている——待つこと自体は
+   * `defaultLocalEmbeddingRetryDelayMs` の歯（下）が別に見る。
+   */
+  it("種類の分かっていない失敗は、既定の設定でも同じ embed() 呼び出しの中で吸収される", async () => {
+    let calls = 0;
+    const createPipeline: CreateLocalEmbeddingPipeline = async () => {
+      calls += 1;
+      if (calls < 2) throw new Error("cause: fetch failed");
+      return async (texts) => texts.map(() => Array.from({ length: 256 }, () => 0.1));
+    };
+    // ⭐ retry オプション自体は既定値（DEFAULT_LOCAL_EMBEDDING_RETRY_ATTEMPTS）のまま——
+    // 「CI が何も指定しなくても直る」ことを確かめるのが、この歯の主眼である。
+    const provider = new LocalEmbeddingProvider({ createPipeline, sleep: async () => {} });
+
+    const vectors = await provider.embed(ctx, ["1回だけ失敗しても通る"]);
+
+    expect(vectors).toHaveLength(1);
+    expect(calls).toBe(2);
+  });
+
+  it("既定の試行回数（3回）を使い切ると、それ以上は増やさずに失敗として返す", async () => {
+    let calls = 0;
+    const createPipeline: CreateLocalEmbeddingPipeline = async () => {
+      calls += 1;
+      throw new Error("cause: fetch failed（毎回）");
+    };
+    const provider = new LocalEmbeddingProvider({ createPipeline, sleep: async () => {} });
+
+    await expect(provider.embed(ctx, ["テキスト"])).rejects.toThrow(/モデルを読み込めなかった/);
+    expect(calls).toBe(DEFAULT_LOCAL_EMBEDDING_RETRY_ATTEMPTS);
+  });
+
+  it("試行回数は options.retry.attempts で変えられる", async () => {
+    let calls = 0;
+    const createPipeline: CreateLocalEmbeddingPipeline = async () => {
+      calls += 1;
+      throw new Error("落ちる");
+    };
+    const provider = new LocalEmbeddingProvider({
+      createPipeline,
+      sleep: async () => {},
+      retry: { attempts: 5 },
+    });
+
+    await expect(provider.embed(ctx, ["テキスト"])).rejects.toThrow(/モデルを読み込めなかった/);
+    expect(calls).toBe(5);
+  });
+
+  it("失敗のたびに、指定した delayMs(attempt) の分だけ sleep する", async () => {
+    const waited: number[] = [];
+    const createPipeline: CreateLocalEmbeddingPipeline = async () => {
+      throw new Error("落ちる");
+    };
+    const provider = new LocalEmbeddingProvider({
+      createPipeline,
+      retry: { attempts: 3, delayMs: (attempt) => attempt * 100 },
+      sleep: async (ms) => {
+        waited.push(ms);
+      },
+    });
+
+    await expect(provider.embed(ctx, ["テキスト"])).rejects.toThrow(/モデルを読み込めなかった/);
+    // 3回試行 ⟹ 待つのは attempt 1 と 2 の後だけ（最後の失敗の後には待たない）。
+    expect(waited).toEqual([100, 200]);
+  });
+
+  it("最後まで失敗したときの cause は、最後の試行のエラーである", async () => {
+    let calls = 0;
+    const createPipeline: CreateLocalEmbeddingPipeline = async () => {
+      calls += 1;
+      throw new Error(`失敗 ${calls} 回目`);
+    };
+    const provider = new LocalEmbeddingProvider({ createPipeline, sleep: async () => {} });
+
+    const error = await provider.embed(ctx, ["テキスト"]).then(
+      () => null,
+      (reason: unknown) => reason,
+    );
+    expect((error as Error).cause).toBeInstanceOf(Error);
+    expect(((error as Error).cause as Error).message).toBe(
+      `失敗 ${DEFAULT_LOCAL_EMBEDDING_RETRY_ATTEMPTS} 回目`,
+    );
+  });
+
+  it("メッセージに試行回数が入る（1回試すだけの設定では入らない）", async () => {
+    const createPipeline: CreateLocalEmbeddingPipeline = async () => {
+      throw new Error("落ちる");
+    };
+
+    const retried = await new LocalEmbeddingProvider({
+      createPipeline,
+      sleep: async () => {},
+      retry: { attempts: 3 },
+    })
+      .embed(ctx, ["テキスト"])
+      .then(
+        () => null,
+        (reason: unknown) => reason,
+      );
+    expect((retried as Error).message).toContain("3 回試したが取得できなかった");
+
+    const single = await new LocalEmbeddingProvider({
+      createPipeline,
+      retry: { attempts: 1 },
+    })
+      .embed(ctx, ["テキスト"])
+      .then(
+        () => null,
+        (reason: unknown) => reason,
+      );
+    expect((single as Error).message).not.toContain("回試したが取得できなかった");
+  });
+
+  /**
+   * 🔴 **`kind` の付いた失敗（ADR 0090）はリトライしない。**
+   * 入力・設定の問題であり、同じ入力で再試行しても結果は変わらない
+   * ——リトライは無駄な待ち時間を足すだけである。
+   */
+  it("kind の付いたエラー（unknown_input_limit 等）はリトライせず、1回で即座に投げ直す", async () => {
+    let calls = 0;
+    const createPipeline: CreateLocalEmbeddingPipeline = async () => {
+      calls += 1;
+      throw new LocalEmbeddingProviderError("unknown_input_limit", "モデルが上限を宣言していない");
+    };
+    const provider = new LocalEmbeddingProvider({ createPipeline, sleep: async () => {} });
+
+    const error = await provider.embed(ctx, ["テキスト"]).then(
+      () => null,
+      (reason: unknown) => reason,
+    );
+    expect(calls).toBe(1);
+    expect(isLocalEmbeddingProviderError(error)).toBe(true);
+    expect((error as LocalEmbeddingProviderError).kind).toBe("unknown_input_limit");
+    // ⚠ 包まれていない——「モデルを読み込めなかった」の文面は付かない。
+    expect((error as Error).message).not.toMatch(/モデルを読み込めなかった/);
+  });
+});
+
+describe("defaultLocalEmbeddingRetryDelayMs（既定のバックオフ）", () => {
+  it("attempt が増えるほど、上限が指数的に伸びる（full jitter なので毎回 [0, 上限) を確かめる）", () => {
+    for (let trial = 0; trial < 50; trial += 1) {
+      expect(defaultLocalEmbeddingRetryDelayMs(1)).toBeGreaterThanOrEqual(0);
+      expect(defaultLocalEmbeddingRetryDelayMs(1)).toBeLessThan(200);
+      expect(defaultLocalEmbeddingRetryDelayMs(2)).toBeLessThan(400);
+      expect(defaultLocalEmbeddingRetryDelayMs(3)).toBeLessThan(800);
+    }
+  });
+
+  it("上限は 4000ms で頭打ちになる（試行回数が増えても待たせすぎない）", () => {
+    for (let trial = 0; trial < 20; trial += 1) {
+      expect(defaultLocalEmbeddingRetryDelayMs(10)).toBeLessThan(4_000);
+      expect(defaultLocalEmbeddingRetryDelayMs(20)).toBeLessThan(4_000);
+    }
   });
 });
 
@@ -284,6 +458,8 @@ describe("読み込み失敗のメッセージ", () => {
     expect(error.message).toContain("README");
   });
 
+  // ⚠ `retry: { attempts: 1 }`——ここで確かめたいのは「包むことと握り続けることは別」
+  // （#ready を早期に手放すこと）であって、1回の #load() の中のリトライではない。
   it("包んでも、次の呼び出しで再試行できる（包むことと握り続けることは別）", async () => {
     let attempts = 0;
     const createPipeline: CreateLocalEmbeddingPipeline = async () => {
@@ -291,7 +467,7 @@ describe("読み込み失敗のメッセージ", () => {
       if (attempts === 1) throw new Error("HTTP 404: model not found");
       return async (texts) => texts.map(() => Array.from({ length: 256 }, () => 0.1));
     };
-    const provider = new LocalEmbeddingProvider({ createPipeline });
+    const provider = new LocalEmbeddingProvider({ createPipeline, retry: { attempts: 1 } });
 
     await expect(provider.embed(ctx, ["1回目"])).rejects.toThrow(/モデルを読み込めなかった/);
     await expect(provider.embed(ctx, ["2回目"])).resolves.toHaveLength(1);
