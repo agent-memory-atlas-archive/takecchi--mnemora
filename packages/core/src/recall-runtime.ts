@@ -686,6 +686,15 @@ export async function runRecall(
         members: [candidate, companion],
         rankScore: Math.max(candidate.score.total, companion.score.total),
       });
+    } else if (candidate.memory.status === "contested") {
+      // 🔴 ADR 0136 / Issue #243: 対向が見つからない `contested`（典型は
+      // `contestedWithId=null`。`memory-store.ts:175` 付近の mandatory companion
+      // retrieval 契約——`contested` を単独で返してはならない）は、単位を組まず
+      // consumed のまま落とす。`units` に一切現れないため、下の
+      // `unitAssemblyShortfall` が「候補が単位を覆えていない」件数として自動的に
+      // 検出し、既存の `unit_assembly_dropped`（ADR 0043）を通じて黙らずに報告される
+      // ——争われている主張を、争われていない顔で単独で出すくらいなら、
+      // 何も出さない（docs/recall.md §8 と同じ判断）。
     } else {
       units.push({ members: [candidate], rankScore: candidate.score.total });
     }
@@ -705,8 +714,9 @@ export async function runRecall(
   // ⟹ **今日この分岐が通るとすれば、それは `MemoryStore` を `Runtime` を経由せず直接
   // 叩いた場合に限る**（`docs/decisions/0046-contested-pair-invariant-tooth.md` が
   // 実測したとおり、`updateStatus(id, "contested")` 単体は今日も公開 interface から
-  // 呼べる。片側だけの `contested`（`contestedWithId=null`）がここで単独候補になり
-  // うる問題は Issue #243 で追跡している——本 PR ではこの分岐そのものは直していない）。
+  // 呼べる）。**片側だけの `contested`（`contestedWithId=null`）が単独で返る問題
+  // （Issue #243）は、上の単位を組む繰り返しで ADR 0136 により塞いだ**——単独候補は
+  // 単位を組まず、この shortfall の一部として `unit_assembly_dropped` に計上される。
   //
   // ⚠ 二重計上のときに出さない判断は `unitAssemblyShortfall` が持つ（その doc を参照）。
   const unitsShortfall = unitAssemblyShortfall(units, allCandidates.length);

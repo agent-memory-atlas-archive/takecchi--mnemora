@@ -815,14 +815,14 @@ describe("recall() — 段3: 矛盾の解決と必須の同伴取得（docs/reca
   });
 });
 
-describe("recall() — 既知の未修復のギャップ: 片側だけの contested（Issue #243）", () => {
-  it("🔴 contestedWithId が null の contested Memory は、単独で recall に出る（memory-store.ts:175 の契約違反。Issue #197 のこの PR では未修復）", async () => {
-    // ⚠ **これは望ましい振る舞いではない。**Issue #197（ADR 0134）の `Runtime.markContested`
-    // はこの状態を作らない（両側 `status='active'` の CAS を課すため）。しかし
+describe("recall() — 片側だけの contested は単独で出さない（Issue #243 / ADR 0136）", () => {
+  it("🔴 contestedWithId が null の contested Memory は recall() に単独で出ない。unit_assembly_dropped に計上される", async () => {
+    // `Runtime.markContested`（Issue #197 / ADR 0134）はこの状態を作らない（両側
+    // `status='active'` の CAS を課すため）。しかし
     // `docs/decisions/0046-contested-pair-invariant-tooth.md` が実測したとおり、
     // `MemoryStore.updateStatus(id, "contested")` を `Runtime` を経由せず直接呼べば
-    // 今日も作れる——ここではその直接呼び出しを `createMemory` で模して、recall 側に
-    // ガードが無いことを確認する。直す判断は Issue #243 に切り出した（本 PR の範囲外）。
+    // 今日も作れる——ここではその直接呼び出しを `createMemory` で模して、recall 側の
+    // 防御（ADR 0136）が効くことを確認する。
     const { runtime, stores } = buildRuntime();
     const lone = await createEmbeddedMemory(stores, [1, 0], {
       status: "contested",
@@ -832,10 +832,34 @@ describe("recall() — 既知の未修復のギャップ: 片側だけの contes
 
     const result = await runtime.recall(ctx, { vector: [1, 0] });
     const ids = result.memories.map((m) => m.memoryId);
-    // ⟹ 単独で返ってしまっている。これが Issue #243 の主題そのものである。
-    expect(ids).toContain(lone.id);
-    const returned = result.memories.find((m) => m.memoryId === lone.id);
-    expect(returned?.retrievedVia).not.toBe("mandatory_companion");
+    // ⟹ 争われていない顔で単独に出すくらいなら、何も出さない（docs/recall.md §8）。
+    expect(ids).not.toContain(lone.id);
+    // 黙って消えたのではなく、既存の unit_assembly_dropped（ADR 0043）に計上される。
+    expect(result.omitted).toContainEqual({
+      kind: "unit_assembly_dropped",
+      count: 1,
+      countKind: "lower_bound",
+    });
+  });
+
+  it("⚠ 鳴ってはいけない側: 正しく相互参照が張られた contested ペアは両方とも出る", async () => {
+    // 上の歯が「contested を丸ごと消す」への過剰反応でないことを確かめる対照実験。
+    const { runtime, stores } = buildRuntime();
+    const b = await stores.memoryStore.createMemory(
+      ctx,
+      newMemory({ status: "contested", digest: "B".repeat(20) }),
+    );
+    const a = await createEmbeddedMemory(stores, [1, 0], {
+      status: "contested",
+      contestedWithId: b.id,
+      digest: "A".repeat(5),
+    });
+
+    const result = await runtime.recall(ctx, { vector: [1, 0] });
+    const ids = result.memories.map((m) => m.memoryId);
+    expect(ids).toContain(a.id);
+    expect(ids).toContain(b.id);
+    expect(result.omitted.some((o) => o.kind === "unit_assembly_dropped")).toBe(false);
   });
 });
 
