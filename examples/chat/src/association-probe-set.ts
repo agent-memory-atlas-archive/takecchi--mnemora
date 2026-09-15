@@ -1,5 +1,4 @@
 import type { ProbeUtterance } from "./probe-set.js";
-import { DEFAULT_HAYSTACK_SIZE, buildHaystackUtterance } from "./probe-set.js";
 
 /**
  * 連想枠（段3.5、ADR 0151、Issue #200）専用の probe set（Issue #291）。
@@ -299,13 +298,117 @@ export function associationHaystackExternalId(index: number): string {
   return `assoc-filler-${String(index).padStart(4, "0")}`;
 }
 
+// ---------------------------------------------------------------------------
+// haystack — ⭐ この probe 集合だけ、専用の haystack を持つ
+// ---------------------------------------------------------------------------
+
+/**
+ * この probe 集合専用の haystack(60件)。
+ *
+ * 🔴 **なぜ `./probe-set.js` の `buildHaystackUtterance` を使わないのか**——
+ * **実測で、あれでは連想枠を測れないことが分かったからである。**
+ *
+ * `buildHaystackUtterance` は「${時期}${主語}${述語}」の3スロットのテンプレートから
+ * 60文を組む。⟹ **60文が互いに極めて似た1つのクラスタになる。**【実測】
+ * (`@mnemora/local-embedding` / ruri v3 30m/sym で 1770 ペアを測った):
+ *
+ * | | cos |
+ * |---|---|
+ * | haystack 同士(中央値) | 0.854 |
+ * | haystack 同士(上位10%) | 0.921 |
+ * | haystack 同士(最大) | **0.982** |
+ * | この集合が設計した anchor→gold(最小) | 0.847 |
+ *
+ * ⟹ **haystack ペアの 58.2%(1030/1770)が、設計した最弱の anchor→gold より強い。**
+ *
+ * **連想枠(ADR 0151 段3.5)は、アンカー上位3件の近傍をプールして上位 `maxCount` 件を採る。**
+ * ⟹ 3つのアンカー枠のうち1つでも haystack が取ると、**その近傍(＝ほぼ全部 haystack)が
+ * プールを埋め尽くし、設計した anchor→gold の枝が押し出される。**
+ *
+ * **これは推測ではない。CI の実測(commit `4a4f014`)で現に起きた**——
+ * `associationFrame[].anchorExternalId` を記録したところ、12 probe 中8件で
+ * 連想枠の5件すべてが `assoc-filler-*` を起点とする haystack だった。
+ *
+ * ⟹ **テンプレート生成の haystack は、この測定にとって「埋め草」ではなく「妨害」である。**
+ * だから手書きの、互いに似ていない60文を置く。
+ *
+ * ⚠ **既存の4 probe 集合は `buildHaystackUtterance` を使い続ける。**あちらは近傍を
+ * プールしないので、この退化は害にならない——**器を作り直したのはこの集合だけである。**
+ */
+export const ASSOCIATION_HAYSTACK: readonly string[] = [
+  "冷蔵庫の製氷機の水を週に一度替えている。",
+  "定期券の期限は三月末までだ。",
+  "図書館で借りた本は二週間後に返す。",
+  "妹が四月から大学院に進む。",
+  "日曜の朝にシーツを洗う。",
+  "玄関の電球が切れかけている。",
+  "去年の健康診断で特に指摘はなかった。",
+  "母はラジオ体操に通っている。",
+  "傘立てに傘が三本ある。",
+  "コーヒー豆は近所の焙煎所で買う。",
+  "町内会の当番は半年ごとに回ってくる。",
+  "包丁を年に一度研ぎに出す。",
+  "空気入れは物置にしまってある。",
+  "テレビをほとんど見なくなった。",
+  "弟が来年から名古屋に住む。",
+  "洗濯は夜のうちに回して朝に干す。",
+  "近所のパン屋は水曜が定休日だ。",
+  "小学校の学芸会は秋にある。",
+  "父は将棋の教室に通っている。",
+  "庭のミントが増えすぎて困っている。",
+  "年末に窓を全部拭く。",
+  "郵便受けの鍵をひとつ失くした。",
+  "旅行の写真を整理しないまま溜めている。",
+  "髪は二か月に一度切りに行く。",
+  "換気扇の掃除が苦手だ。",
+  "駅前の書店が先月閉まった。",
+  "目覚ましは六時に鳴らす。",
+  "ゴミ出しは月曜と木曜だ。",
+  "祖母は手紙を書くのが好きだ。",
+  "夏は麦茶を作り置きする。",
+  "押し入れの布団を春に干した。",
+  "近くの公園に大きな桜がある。",
+  "靴下ばかり片方なくなる。",
+  "味噌汁の出汁は煮干しでとる。",
+  "自転車の鍵を二重にかけている。",
+  "去年の冬は一度も雪が積もらなかった。",
+  "風呂の追い焚きをよく使う。",
+  "観葉植物に水をやりすぎて枯らした。",
+  "眼鏡のつるが緩んできた。",
+  "好きな作家の新刊が来月出る。",
+  "弁当箱は食洗機に入れられない。",
+  "手すりに埃が溜まりやすい。",
+  "山登りの靴を十年使っている。",
+  "電池は単三ばかり買い置きしている。",
+  "飼っている金魚が三匹いる。",
+  "味の濃い料理が苦手になった。",
+  "玄関マットを新しくした。",
+  "定規をどこに置いたか忘れた。",
+  "紅茶はミルクを入れずに飲む。",
+  "掃除機の紙パックを月初に替える。",
+  "手帳は毎年同じ型を使う。",
+  "隣町の温泉に年に二度行く。",
+  "鍋の焦げ付きを重曹で落とす。",
+  "パスワードを紙に書かないようにしている。",
+  "折りたたみ傘をよく車内に忘れる。",
+  "実験的な料理をして家族に不評だった。",
+  "早起きしても二度寝することが多い。",
+  "新聞紙は月末にまとめて出す。",
+  "窓際に置いた本が日に焼けた。",
+  "靴の修理を商店街の店に頼んだ。",
+];
+
+/** `ASSOCIATION_HAYSTACK` の既定件数。 */
+export const ASSOCIATION_HAYSTACK_SIZE = ASSOCIATION_HAYSTACK.length;
+
 /**
  * 全 association probe の anchor/gold/distractor + 共有の haystack を1本の会話に組む。
  *
- * **haystack は `./probe-set.js` の `buildHaystackUtterance` を再利用する**(新しい
- * 生成器を書かない、マネージャー指示)——`identifier-probe-set.ts` の `sparse` 条件と
- * 同じ生成器であり、この probe set のブリッジ語(ASCII 識別子・固有名詞・普通名詞句)を
- * 1件も含まないことは `findAssociationBridgeViolations` が実行時に再検査する。
+ * **haystack は `ASSOCIATION_HAYSTACK`(この集合専用)を使う。**`./probe-set.js` の
+ * `buildHaystackUtterance` は使わない——理由は `ASSOCIATION_HAYSTACK` の docstring に
+ * 実測値とともに書いた(要約: テンプレート生成の60文が1つの密なクラスタになり、
+ * 連想枠のプールを埋め尽くして、測りたいものが枠に入れなくなる)。
+ * ブリッジ語を1件も含まないことは `findAssociationBridgeViolations` が実行時に再検査する。
  *
  * 各 probe につき anchor → gold → distractor の順に積む(この順序は三角形の成立に
  * 必須ではない——`recall()` はテキストの並び順ではなく埋め込みで引く——が、
@@ -317,7 +420,7 @@ export function associationHaystackExternalId(index: number): string {
  * `identifier-probe-set.ts`/`probe-set.ts` の先例と同じ規律。
  */
 export function buildAssociationProbeSetConversation(
-  haystackSize: number = DEFAULT_HAYSTACK_SIZE,
+  haystackSize: number = ASSOCIATION_HAYSTACK_SIZE,
 ): ProbeUtterance[] {
   const utterances: ProbeUtterance[] = [];
   for (const probe of ASSOCIATION_PROBES) {
@@ -345,7 +448,7 @@ export function buildAssociationProbeSetConversation(
   for (let i = 0; i < haystackSize; i += 1) {
     haystackUtterances.push({
       externalId: associationHaystackExternalId(i),
-      text: buildHaystackUtterance(i),
+      text: ASSOCIATION_HAYSTACK[i % ASSOCIATION_HAYSTACK.length]!,
       kind: "haystack",
     });
   }

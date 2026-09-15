@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { DEFAULT_HAYSTACK_SIZE } from "../probe-set.js";
+import { DEFAULT_HAYSTACK_SIZE, buildHaystackUtterance } from "../probe-set.js";
 import type { ProbeUtterance } from "../probe-set.js";
 import {
   ASSOCIATION_PROBES,
@@ -11,6 +11,8 @@ import {
   buildAssociationProbeSetConversation,
   findAssociationBridgeViolations,
   findAssociationQueryLeakViolations,
+  ASSOCIATION_HAYSTACK,
+  ASSOCIATION_HAYSTACK_SIZE,
 } from "../association-probe-set.js";
 
 /**
@@ -157,5 +159,33 @@ describe("association-probe-set", () => {
       // 元に戻したことの確認(後続テスト・他ファイルへ影響を残さない)。
       expect(findAssociationQueryLeakViolations()).toEqual([]);
     });
+  });
+});
+
+describe("ASSOCIATION_HAYSTACK(専用 haystack) — なぜ buildHaystackUtterance を使わないか", () => {
+  it("60件あり、1件も重複していない", () => {
+    expect(ASSOCIATION_HAYSTACK_SIZE).toBe(60);
+    expect(ASSOCIATION_HAYSTACK).toHaveLength(60);
+    expect(new Set(ASSOCIATION_HAYSTACK).size).toBe(60);
+  });
+
+  it("⭐ probe-set.ts のテンプレート生成 haystack を1件も使っていない", () => {
+    // 🔴 これが破れると、連想枠のプールがテンプレート由来の密なクラスタで
+    // 埋まり、測りたいもの(設計した anchor→gold の枝)が枠に入れなくなる。
+    // CI の実測(commit 4a4f014)で現に起きた退化である
+    // (詳細は ASSOCIATION_HAYSTACK の docstring)。
+    const templated = new Set(Array.from({ length: 200 }, (_, i) => buildHaystackUtterance(i)));
+    for (const text of ASSOCIATION_HAYSTACK) {
+      expect(templated.has(text)).toBe(false);
+    }
+  });
+
+  it("⭐ 会話の haystack は ASSOCIATION_HAYSTACK から来ている(生成器から来ていない)", () => {
+    const conversation = buildAssociationProbeSetConversation();
+    const haystackTexts = conversation.filter((u) => u.kind === "haystack").map((u) => u.text);
+    expect(haystackTexts).toHaveLength(60);
+    for (const text of haystackTexts) {
+      expect(ASSOCIATION_HAYSTACK).toContain(text);
+    }
   });
 });
