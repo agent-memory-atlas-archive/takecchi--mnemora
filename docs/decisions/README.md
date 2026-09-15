@@ -132,6 +132,7 @@ alteroid (github.com/takecchi/alteroid) を根拠として引く箇所は、確�
 | [0114](./0114-archive-sweep-for-decayed-memories.md) | 減衰しきった記憶をアーカイブへ掃く — `archiveDecayed`（掃引） | 採用 (2026-09) |
 | [0115](./0115-event-retention-purge.md) | `MemoryStore.purgeExpiredEvents`（任意メソッド）— 設定できても効いていなかった保持期間の削除側を埋める | 採用 (2026-09) |
 | [0117](./0117-unreachable-union-values-inventory.md) | 型に在って一度も生成されない union の値の棚卸し — 落とすのは提起までにする | 採用 (2026-09) |
+| [0118](./0118-pr-merge-delegated-when-ci-green.md) | PR のマージを、CI 緑・差分健全を条件に担い手へ委譲する（`docs/autonomy.md` §3 の改定） | 採用 (2026-09) |
 | [0119](./0119-archive-sweep-cost-bench.md) | 掃引（ADR 0114）を `examples/chat` のベンチへ配線する — `archive-sweep-cost` | 採用 (2026-09) |
 | [0120](./0120-time-term-probes-in-ci.md) | 時間項 probe（8件）を継続計測の CI に配線する — 値は残すが門にはしない。#109 か別建てかは決めていない | 採用 (2026-09) |
 | [0121](./0121-bench-baselines-from-ci-artifacts.md) | `archive-sweep-cost`/`time-term` の基準値を、CI 初回実測の artifact から作る（手元では書かない） | 採用 (2026-09) |
