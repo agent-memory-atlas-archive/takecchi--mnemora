@@ -90,13 +90,78 @@ gh pr list --state open --limit 20
 - [ ] ADR が在る（`AGENTS.md` の要件を満たす。**採らなかった案・引き受けた負債・これが覆るとしたら**まで）
 - [ ] 6つの門が緑（`typecheck` / `lint` / `format:check` / `test` / `build` / `pack:check`）
 - [ ] **歯が実際に噛むことを、変異試験で示した**（壊した入力で赤く、直したら緑に戻る）
-- [ ] **CI が緑**（手元の `pnpm run test` は DB 段を実行しない。§4 を見ること）
+- [ ] **CI が緑**（手元の `pnpm run test` は DB 段を実行しない。§4 を見ること。
+      「緑」の判定手順そのものは §2.1 を見ること——素朴な判定は外れる）
 - [ ] PR 本文に、測った数字と**確かめていないこと**が書いてある
 
 **⛔ PR を出したら止まる。マージしない。**（§3）
 
 **⚠ 「ついでに直す」をしない。**ADR に書いていない変更を混ぜると、
 **その PR が何を主張しているのか読めなくなる。**別の PR にすること。
+
+### 2.1 「CI が緑」の判定手順（Issue #228 / ADR 0132）
+
+**上の止まる条件にある「CI が緑」は、素朴に見ると外れる。**この節は、
+**実際に打つコマンドと、その出力の読み方**を書く。手順の背景・検証の詳細は
+[ADR 0132](./decisions/0132-ci-green-verdict-procedure.md) を見ること。
+
+**手順:**
+
+1. **head sha を明示して取る。PR 番号だけで判定しない。**
+
+   ```bash
+   gh pr view <PR番号> --json headRefOid -q .headRefOid
+   ```
+
+   push されると head は動く。**この sha を以後の手順すべてで使い回す**——
+   途中で PR を再度見て番号から判定し直すと、別の commit を見ていることになりうる。
+
+2. **その sha の check-runs（job 単位）を取る。**
+
+   ```bash
+   gh api repos/<owner>/<repo>/commits/<sha>/check-runs --paginate \
+     -q '.check_runs[] | {name, status, conclusion}'
+   ```
+
+   - **`status` が全件 `"completed"` であることを先に見る。** 1件でも
+     `"in_progress"`/`"queued"` なら、**まだ判定してはいけない**——
+     結論を出さずに後で引き直す。
+   - **`status: "completed"` の中で、`conclusion` が全件 `"success"` であることを見る。**
+     **`"skipped"`/`"neutral"`/`"cancelled"`/`"timed_out"`/`"action_required"` はどれも
+     緑ではない。**
+   - **ここで見ているのは job 単位の `conclusion` であり、
+     `gh api repos/<owner>/<repo>/actions/runs/<run_id>` が返す run 全体の `conclusion`
+     ではない。**両者は別物である（ADR 0132 の「検算した」節）——run 全体が `failure` でも、
+     その中の特定の job は `success`ということが起きる。**逆に、1 job の `success` を見て
+     run 全体・ひいては PR 全体を緑と読むのも誤り。**
+
+3. **`mergeStateStatus` は、緑の根拠として一度も使わない。**
+   `BLOCKED` は draft のときにも check 走行中にも出うる。`CLEAN` は
+   **全 check が終端に達した後についてくる結果**であり、独立した確認にはならない。
+
+4. **「いま引いた時点で全部揃っている」を信じない。**
+   同じ sha の check-runs は、**依存ジョブ（例: 2つの regime ジョブが両方終わってから
+   登録される集計ジョブ）の分だけ、後から本数が増えることがある。**
+   確度を上げたいなら、**間隔を空けて2回引き直し、check run の名前集合が
+   増減していないかを見る**（下記のツールの `--recheck-after` がこれを機械化する）。
+   ⚠ これは「もう増えない」ことの証明にはならない——2回とも同じだった、
+   という以上の主張はできない。
+
+5. **手元の6つの門（typecheck/lint/format:check/test/build/pack:check）の緑を、
+   CI の緑の代わりにしない。** 手元は `DATABASE_URL` が無いと DB 段を実行しない
+   （ADR 0015・本書 §4）。CI は DB を要するジョブを持ち、**手元が全部緑でも
+   そこだけ赤くなることが実際に起きている。**
+
+6. **別リポジトリ（[alteroid](https://github.com/takecchi/alteroid) 等）の CI の作法を、
+   検算せずに持ち込まない。** 「draft では checks が `skipped` になる」のような教訓は
+   **この repo には当てはまらないことがある**（この repo では draft でも本物の CI が走る、
+   ADR 0132 の「検算した」節）。
+
+**機械化した道具**: `node scripts/ci-green-check.mjs --pr <番号>` が上の1〜4を1コマンドで行う
+（`--recheck-after <秒>` で4番の再確認、`--sha <sha>` で sha 直指定、`--json` で機械可読出力）。
+終了コード `0`=green・`1`=red・`2`=pending・`3`=実行時エラー。**5番（手元の門を代用にしない）は
+このツールの設計そのもの**——常に `gh` 経由で CI 自身に聞き、手元の門の結果を一切参照しない。
+**6番（他 repo の作法の持ち込み）は道具では防げない。**読む側が注意すること。
 
 ---
 
@@ -138,6 +203,7 @@ gh pr list --state open --limit 20
 | **手元の `pnpm run pack:check` が赤い** | `dist/` に古い `.map` が居残る（`tsc` は `outDir` を掃除しない）。**CI では起きない** | `rm -rf packages/*/dist && pnpm run build` |
 | **擬似 provider の数字を「性能」と読む** | arm A（擬似埋め込み）の **MRR は 0.018**＝実質ランダム | 想起の質を測るなら `recorded`（ADR 0051）。`deterministic` は配線と契約の検査用 |
 | **`npm view` で publish の成否を判断する** | registry の読み取り側は書き込みに数分遅れ、**CDN を迂回する `?write=true` でも 404 を返す**（ADR 0066 測ったこと8） | `npm publish` の出力で判断する |
+| **「CI が緑」を素朴に判定する**（PR 番号だけで見る／run 全体の `conclusion` を見る／`mergeStateStatus` を見る／手元の門の緑で代用する） | **check の本数は時間とともに増えうる・run と job の `conclusion` は別・`mergeStateStatus` は終端後の結果であって根拠にならない・手元の緑は CI の緑を予測しない**（Issue #228。5点のうち run/job の差・手元と CI の乖離は本 ADR 0132 で自分の `gh` 呼び出しにより再検算した） | §2.1 の手順どおり、**head sha を明示**して `check-runs` を job 単位で読む。`node scripts/ci-green-check.mjs --pr <番号>` が機械化している |
 
 ---
 
