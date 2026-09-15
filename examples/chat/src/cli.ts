@@ -59,6 +59,7 @@ import {
 import { createExampleRuntime } from "./runtime-factory.js";
 import { buildConversation } from "./scenario.js";
 import { formatBackfillDemo, runBackfillDemo } from "./backfill.js";
+import { formatCorrectionDemo, runCorrectionDemo } from "./correction-demo.js";
 import { formatScopeDemo, runScopeDemo } from "./scope.js";
 import { createMutableClock } from "./mutable-clock.js";
 import { formatTimeTermReport, runTimeTermArm } from "./time-term-arm.js";
@@ -270,6 +271,34 @@ async function runBackfill(): Promise<void> {
       withoutOccurredAt: `${base}-without`,
     });
     console.log(formatBackfillDemo(result));
+  } finally {
+    await handle.close();
+  }
+}
+
+/**
+ * 訂正を含む会話シナリオを実演するデモ(`src/correction-demo.ts`、Issue #303)。
+ *
+ * 北極星「間違いを正すと、古いほうが先に出てこなくなる」を、`markContested`
+ * （ADR 0134）→`recall`（両方隣接して出る）→`resolveContested`（ADR 0150）→`recall`
+ * （古いほうが消える）の一巡で実演する。`Runtime.markContested`/`resolveContested` は
+ * `examples/chat` からこれまで一度も呼ばれていなかった（Issue #303 本文）。
+ *
+ * **どの2件が対向し、どちらが勝つかは `correction-scenario.ts` が構造として宣言する。**
+ * このコマンドは判定をせず、宣言をそのまま渡すだけ。北極星の主測定(`compare`/`retrieval`)
+ * には触れない、独立したデモ実行。
+ */
+async function runCorrection(): Promise<void> {
+  const handle = await createExampleRuntime(requireDatabaseUrl());
+  printProviderMode(handle.llmMode, handle.embeddingMode);
+  try {
+    const ctx = { tenantId: `example-chat-correction-${Date.now()}` };
+    console.log(
+      "\n最初に事実を表明し、後から訂正する会話を observe() し、markContested → recall → " +
+        "resolveContested → recall で「間違いを正すと古いほうが出てこなくなる」ことを実演する。\n",
+    );
+    const result = await runCorrectionDemo(handle.runtime, ctx);
+    console.log(formatCorrectionDemo(result));
   } finally {
     await handle.close();
   }
@@ -1175,6 +1204,7 @@ function printHelp(): void {
       "                                                                      #   OPENAI_API_KEY があれば実 API、無ければ記録の再生(ADR 0052)",
       "  DATABASE_URL=... pnpm --filter @mnemora/example-chat run scope      # tenantId/subjectId のスコープを実演",
       "  DATABASE_URL=... pnpm --filter @mnemora/example-chat run backfill   # observe() の occurredAt が period の絞りに効くことを実演",
+      "  DATABASE_URL=... pnpm --filter @mnemora/example-chat run correction # 訂正を含む会話で markContested→resolveContested を実演(Issue #303)",
       "  DATABASE_URL=... pnpm --filter @mnemora/example-chat run retrieval # 意味的関連性の probe set を3 arm(擬似/埋め込みのみ本物/フル本物)で比較",
       "                                                                      #   OPENAI_API_KEY があれば実 API、無ければ記録の再生(ADR 0051)",
       "  DATABASE_URL=... pnpm --filter @mnemora/example-chat run time-term # 時間項(freshness/decay)を意味的類似度から分離して測る",
@@ -1214,6 +1244,8 @@ async function main(): Promise<void> {
     await runScope();
   } else if (command === "backfill") {
     await runBackfill();
+  } else if (command === "correction") {
+    await runCorrection();
   } else if (command === "retrieval") {
     await runRetrieval();
   } else if (command === "time-term") {
