@@ -173,6 +173,63 @@ haystack）との競合が減る——量の削減率や順位が「実際に絞
 
 ---
 
+## `explain`: `recallId` から `Runtime.getRecall()` で内訳を後から読み戻す（Issue #312）
+
+[ADR 0155](../../docs/decisions/0155-recall-score-breakdown-persisted.md) で `recalls` に
+per-memory のスコア内訳が永続化され、`MemoryStore.getRecall(ctx, recallId)` で読み戻せる
+ようになったが、それを呼ぶ本番コードは1つも無かった（Issue #312）。この節はその空白を
+`src/recall-explain.ts` の「動く例」で塞ぐ——[ADR 0161](../../docs/decisions/0161-runtime-get-recall.md)
+が足した `Runtime.getRecall` を、`examples/chat` から初めて実演する。
+
+```bash
+DATABASE_URL=... pnpm --filter @mnemora/example-chat run explain
+```
+
+**`OPENAI_API_KEY` が無くても動く**（`scope` と同じ、`@mnemora/testkit` の決定的な擬似
+provider）。2件の事実（好きな食べ物・趣味）を observe して embed を干上がらせ、3件目
+（住んでいる街）は**あえて embed させないまま**にする——「索引に載っていない記憶」を
+1件意図的に残し、「なぜ落ちたか」も見せるため。
+
+### 出力の読み方
+
+1. `runtime.recall(ctx, { text: ... })` を呼ぶ。**この戻り値からは `recallId` だけを
+   使う**——`RecallResult.memories` は表示に使わない。
+2. **別の呼び出しとして** `runtime.getRecall(ctx, recallId)` を呼び、`RecallRecord` を
+   得る。画面に出る内訳（`score` の similarity/lexicalMatch/decay/tagMatch/freshness/
+   strength/total、`retrievedVia`、`companionOf`/`associationOf`）は、すべて**この
+   2回目の呼び出しから**組み立てている——1回目の `recall()` の戻り値を整形し直した
+   ものではない。
+3. `record.returnedMemories` の各 `memoryId` について、`digest` は
+   `memoryStore.get(ctx, memoryId)` で別途引く——`RecallRecordMemory` 自身は `digest`
+   を運ばない（ADR 0155 決定1。`digest` は `MemoryStore.get()` から再現できるため
+   `recalls` へ複製していない）。
+4. `record.omitted` に、3件目（住んでいる街）が `{ kind: 'not_indexed', reason:
+   'pending' }` として現れる——索引に載っていないため候補にすらならなかったことを、
+   永続化された行から読める。
+5. 実在しない `recallId`（`crypto.randomUUID()` で作った値）で `getRecall` を呼ぶと
+   `null` が返る——「見つからなかった」と画面に名指しで出る（`0件`や`空`とは
+   別の顔で出す）。
+
+### 🔴 `breakdownCaptured: false` を「0」や「空」に読み替えない
+
+ADR 0155 決定2（ADR 0008「無い」の分類）の適用: マイグレーション以前に書かれた
+`recalls` 行は内訳を一度も持ったことが無く、`breakdownCaptured: false` になる。
+この節のデモが作る `recalls` 行はすべてマイグレーション後の新規行なので実際には
+常に `true` になるが、`formatRecallExplainDemo` の整形関数は `false` の場合も
+「この recall は内訳を持たない」と名指しで印字するように書いてあり、その分岐は
+DB を使わない歯（`__tests__/recall-explain.test.ts`）で検査している。
+
+### ⚠ 北極星の主測定には触れていない
+
+`scope`/`backfill` と同じ規律——`src/recall-explain.ts` は `compare.ts`/`compare-json.ts`/
+`retrieval-quality.ts`/`probe-set.ts`/`scenario.ts`/`naive-path.ts` のいずれも import
+しない。表示に使う値も `recall()` の戻り値（プロンプトへ積む側）ではなく `getRecall()`
+の戻り値（`recalls` テーブルの監査ログ）から作っており、`RecallResult` の形は
+1バイトも変更していない（`packages/core/src/recall.ts` の `RecallResultSchema`/
+`RecalledMemory` は本 PR で変更していない——`git diff` で確認できる）。
+
+---
+
 ## `backfill`: `observe()` の `occurredAt` を実演する
 
 ```bash

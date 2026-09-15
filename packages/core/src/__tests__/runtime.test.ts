@@ -661,6 +661,45 @@ describe("runtime.reembed（ADR 0079: provider が直った後に、索引へ戻
 });
 
 /**
+ * Issue #312 / [ADR 0161](../../../docs/decisions/0161-runtime-get-recall.md):
+ * `Runtime.getRecall` は `MemoryStore.getRecall` への**素通し**である
+ * （`reembed` と同じ形——`runtime.ts` の doc コメント参照）。ここで検査するのは
+ * 「素通しであること」そのもの——`viaRuntime` と `stores.memoryStore.getRecall` を
+ * 直接呼んだ結果が一致することを見る。値の中身（score/retrievedVia の形）の検査は
+ * `recall-runtime.ts` の歯の役目であり、ここでは行わない。
+ */
+describe("runtime.getRecall（Issue #312、ADR 0161: MemoryStore.getRecall への素通し）", () => {
+  it("createRecall で書いた行を、memoryStore.getRecall と同じ内容で読み戻す", async () => {
+    const { runtime, stores } = buildRuntime(llmReturning([]));
+    const recallId = await createRecallFixture(stores, ctx);
+
+    const viaRuntime = await runtime.getRecall(ctx, recallId);
+    const viaStore = await stores.memoryStore.getRecall(ctx, recallId);
+
+    expect(viaRuntime).not.toBeNull();
+    expect(viaRuntime).toEqual(viaStore);
+  });
+
+  it("存在しない recallId には null を返す（例外にしない）", async () => {
+    const { runtime } = buildRuntime(llmReturning([]));
+
+    const result = await runtime.getRecall(ctx, "does-not-exist");
+
+    expect(result).toBeNull();
+  });
+
+  it("別テナントの recallId には null を返す（tenant scoping）", async () => {
+    const { runtime, stores } = buildRuntime(llmReturning([]));
+    const recallId = await createRecallFixture(stores, ctx);
+    const otherCtx: Ctx = { tenantId: "tenant-2" };
+
+    const result = await runtime.getRecall(otherCtx, recallId);
+
+    expect(result).toBeNull();
+  });
+});
+
+/**
  * ADR 0114: `docs/memory-model.md` §11 行8「`decay_floor_at < now()` を検出する
  * 低頻度の掃引…→ `status='archived'` + `archived` イベント」を実行する
  * `Runtime.sweepArchive` の検査。

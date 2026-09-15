@@ -35,7 +35,7 @@ import type { TenantSettingsStore } from "./interfaces/tenant-settings-store.js"
 import type { TokenCounter } from "./interfaces/token-counter.js";
 import type { VectorStore } from "./interfaces/vector-store.js";
 import type { LexicalStore } from "./interfaces/lexical-store.js";
-import type { MemoryId, ObservationId } from "./ids.js";
+import type { MemoryId, ObservationId, RecallId } from "./ids.js";
 import type { Memory, MemoryStatus, NewMemory } from "./memory.js";
 import type {
   ObserveDocumentInput,
@@ -48,7 +48,7 @@ import { ObserveInputSchema, observeInputKindToObservationKind } from "./observa
 import type { NewObservation, Observation } from "./observation.js";
 import type { OutboxJobRecord } from "./outbox.js";
 import { runRecall } from "./recall-runtime.js";
-import type { RecallQuery, RecallResult } from "./recall.js";
+import type { RecallQuery, RecallRecord, RecallResult } from "./recall.js";
 import type { RecallOutputValidationMode } from "./recall-output-validation.js";
 import { classifyReextractTargets, classifySupersedeFailure } from "./strategies/reextract.js";
 import type { ReextractSkip } from "./strategies/reextract.js";
@@ -1166,6 +1166,38 @@ export interface Runtime {
    * （実装は `./recall-runtime.js` の `runRecall`）。
    */
   recall(ctx: Ctx, query: RecallQuery): Promise<RecallResult>;
+  /**
+   * [Issue #312](https://github.com/takecchi/mnemora/issues/312) /
+   * [ADR 0161](../../../docs/decisions/0161-runtime-get-recall.md):
+   * `recall()` が返した `RecallId` から、その recall が実際に何を・どの内訳で返したかを
+   * **後から**読み戻す。
+   *
+   * ⚠ **その場の {@link RecallResult}（`recall()` の戻り値）ではなく、後から `recallId` で
+   * 引く口である。**`recall()` を呼んだ時点の変数がスコープを抜けた後でも、`recallId` さえ
+   * 持っていれば同じ内訳（`score`/`retrievedVia`/`companionOf`/`associationOf`）に
+   * 後から届く——`docs/north-star.md`「目指す姿」の「なぜそれを思い出したのかを、
+   * 後から説明できる。」の**「後から」**を、`Runtime` だけを持つ採用側にも届かせるための
+   * 口である（ADR 0155 は `MemoryStore.getRecall` を用意したが、`Runtime` には出していない
+   * ——本 issue はその欠落を埋める）。
+   *
+   * 見つからない（そもそも存在しない `recallId`）、または別テナントの recall なら
+   * `null` を返す（例外にしない。`MemoryStore.get`/`getObservation`/`getRecall` と同じ規律）。
+   *
+   * 引数と返り値は {@link RecallId} / {@link RecallRecord} を**そのまま使う**（`TickOptions`
+   * のように別の型を立てない）。この口は
+   * `MemoryStore.getRecall`（`../interfaces/memory-store.js`）へそのまま素通しするだけで、
+   * runtime 側が足す選択肢が1つも無いためである——`reembed`（ADR 0079、上の doc コメント
+   * 参照）と同じ理由: **同じ形の型を2つ置くと、片方だけ直したときに黙ってずれる。**
+   *
+   * 🔴 **`RecallRecord.returnedMemories` は `memoryId`/`score`/`retrievedVia`/
+   * `companionOf`/`associationOf` までしか運ばない——`digest` には届かない。**`recall()`
+   * の戻り値（`RecalledMemory`）には `digest` が在るのに対して非対称である（ADR 0155
+   * 決定1が `digest` を「後から `MemoryStore.get()` で再現できる」という理由で
+   * `recalls` へ複製しなかったため）。`Runtime` には記憶を1件読む口が無いため、
+   * `digest` まで要る採用側は `MemoryStore` を自前で保持する必要がある——検討の詳細は
+   * ADR 0161 の「検討して採らなかった案」を参照。
+   */
+  getRecall(ctx: Ctx, recallId: RecallId): Promise<RecallRecord | null>;
   /**
    * ADR 0028: ADR 0013 が未解決のまま残した「失敗した抽出をやり直す」操作。
    * 指定した Observation に対してもう一度 `extractCandidates` を走らせ、成功したら
@@ -2351,6 +2383,14 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
       tokenCounter,
       outputValidation: deps.outputValidation,
     });
+  }
+
+  /**
+   * `Runtime.getRecall` の実装（Issue #312、ADR 0161）。doc コメントは interface 側にある
+   * ——ここは素通しそのものだけ。
+   */
+  async function getRecall(ctx: Ctx, recallId: RecallId): Promise<RecallRecord | null> {
+    return deps.memoryStore.getRecall(ctx, recallId);
   }
 
   async function reembed(ctx: Ctx, opts: RequeueEmbedJobsOptions): Promise<RequeueEmbedJobsResult> {
@@ -3560,6 +3600,7 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
     observe,
     tick,
     recall,
+    getRecall,
     reextract,
     reembed,
     sweepArchive,

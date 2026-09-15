@@ -64,6 +64,7 @@ import { createExampleRuntime } from "./runtime-factory.js";
 import { buildConversation } from "./scenario.js";
 import { formatBackfillDemo, runBackfillDemo } from "./backfill.js";
 import { formatScopeDemo, runScopeDemo } from "./scope.js";
+import { formatRecallExplainDemo, runRecallExplainDemo } from "./recall-explain.js";
 import { createMutableClock } from "./mutable-clock.js";
 import { formatTimeTermReport, runTimeTermArm } from "./time-term-arm.js";
 import { buildTimeTermJson } from "./time-term-json.js";
@@ -248,6 +249,32 @@ async function runScope(): Promise<void> {
     );
     const result = await runScopeDemo(handle.runtime, tenantId, otherTenantId);
     console.log(formatScopeDemo(result));
+  } finally {
+    await handle.close();
+  }
+}
+
+/**
+ * `Runtime.getRecall` を「動く例」で見せるデモ(`src/recall-explain.ts`、Issue #312、
+ * ADR 0161)。`recall()` の戻り値からは `recallId` だけを使い、別の呼び出しとして
+ * `getRecall(ctx, recallId)` を呼んで、永続化された `recalls` 行から内訳を読み戻す。
+ * 北極星の主測定(`compare`/`retrieval`)には触れない、独立したデモ実行——
+ * `runRecallExplainDemo`/`formatRecallExplainDemo` は `compare.ts`/`retrieval-quality.ts`/
+ * `probe-set.ts`/`scenario.ts`/`naive-path.ts` を import しない。
+ */
+async function runExplain(): Promise<void> {
+  const handle = await createExampleRuntime(requireDatabaseUrl());
+  printProviderMode(handle.llmMode, handle.embeddingMode);
+  try {
+    const tenantId = `example-chat-explain-${Date.now()}`;
+    console.log(
+      "\n2件の事実を observe して embed を干上がらせ、3件目はあえて索引に載せないまま" +
+        "recall() を呼ぶ。返り値からは recallId だけを使い、別の呼び出し " +
+        "runtime.getRecall(ctx, recallId) で、なぜその記憶が・どの内訳で選ばれたか" +
+        "(そして3件目がなぜ落ちたか)を、永続化された recalls 行から読み戻す。\n",
+    );
+    const result = await runRecallExplainDemo(handle.runtime, handle.memoryStore, tenantId);
+    console.log(formatRecallExplainDemo(result));
   } finally {
     await handle.close();
   }
@@ -1308,6 +1335,7 @@ function printHelp(): void {
       "  DATABASE_URL=... pnpm --filter @mnemora/example-chat run compare    # 会話の長さを変えて経路A/経路Bの量を実測",
       "                                                                      #   OPENAI_API_KEY があれば実 API、無ければ記録の再生(ADR 0052)",
       "  DATABASE_URL=... pnpm --filter @mnemora/example-chat run scope      # tenantId/subjectId のスコープを実演",
+      "  DATABASE_URL=... pnpm --filter @mnemora/example-chat run explain    # recallId から Runtime.getRecall() で内訳を後から読み戻す(Issue #312)",
       "  DATABASE_URL=... pnpm --filter @mnemora/example-chat run backfill   # observe() の occurredAt が period の絞りに効くことを実演",
       "  DATABASE_URL=... pnpm --filter @mnemora/example-chat run retrieval # 意味的関連性の probe set を3 arm(擬似/埋め込みのみ本物/フル本物)で比較",
       "                                                                      #   OPENAI_API_KEY があれば実 API、無ければ記録の再生(ADR 0051)",
@@ -1349,6 +1377,8 @@ async function main(): Promise<void> {
     await runCompare();
   } else if (command === "scope") {
     await runScope();
+  } else if (command === "explain") {
+    await runExplain();
   } else if (command === "backfill") {
     await runBackfill();
   } else if (command === "retrieval") {
