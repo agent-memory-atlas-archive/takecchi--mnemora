@@ -132,6 +132,29 @@ export interface Memory {
   halfLifeHours: number;
   decayFloorAt: Date;
 
+  /**
+   * 活動時計（[ADR 0157](../../../docs/decisions/0157-decay-activity-clock.md)）の3つ組。
+   * 壁時計の `recordedAt`/`lastReinforcedAt` → `decayFloorAt` → `halfLifeHours` と
+   * **1対1に対応する**——`decayBaseSeq` は起点（書き込み時点の `tenant_activity.activity_seq`）、
+   * `decayFloorSeq` は床（書き込み時に一度だけ計算する）、`halfLifeRecalls` は
+   * Memory 単位の半減期（単位: そのテナントで `recall()` が起きた回数）。
+   *
+   * **すべて省略可能。**`undefined` も `null` も**「この軸には床が無い＝活動時計では
+   * 沈まない」**を意味する（ADR 0157 決めたこと4）。`decay_clock` が `'wall'` のまま
+   * 一度も `'activity'`/`'either'` に切り替えていないテナントでは、この3つは
+   * 一度も書かれない。
+   *
+   * **省略可能な新規フィールドとして足した**（`purgedAt`/`validFrom` と同じ理由——
+   * `Memory` は `@mnemora/core` の公開型。必須にすると、この型を自分でリテラルとして
+   * 組み立てている既存の呼び出し元・adapter・テストのフィクスチャ（40本以上）すべてに
+   * 新しい必須プロパティを強制する破壊的変更になる）。
+   */
+  decayBaseSeq?: number | null;
+  /** `decayBaseSeq` の doc コメント参照。活動時計の床。 */
+  decayFloorSeq?: number | null;
+  /** `decayBaseSeq` の doc コメント参照。活動時計での Memory 単位の半減期。 */
+  halfLifeRecalls?: number | null;
+
   embeddingStatus: EmbeddingStatus;
 
   /**
@@ -214,6 +237,12 @@ export const MemorySchema = z.object({
   // in-memory 実装の `isHalfLifeHoursInRange` 検査）である。
   halfLifeHours: z.number().positive(),
   decayFloorAt: z.date(),
+
+  // ADR 0157: 活動時計の3つ組。3つとも省略可能——`Memory.decayBaseSeq` の doc コメント参照。
+  // ⚠ この schema は書き込み経路では走らない（上の halfLifeHours の doc コメントと同じ注記）。
+  decayBaseSeq: z.number().nullable().optional(),
+  decayFloorSeq: z.number().nullable().optional(),
+  halfLifeRecalls: z.number().nullable().optional(),
 
   embeddingStatus: EmbeddingStatusSchema,
 

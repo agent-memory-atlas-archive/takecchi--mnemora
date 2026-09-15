@@ -1,5 +1,6 @@
-import { defaultDecayStrategy } from "./decay.js";
+import { defaultActivityDecayStrategy, defaultDecayStrategy } from "./decay.js";
 import type { ScoreBreakdown } from "../recall.js";
+import type { DecayClock } from "../interfaces/tenant-settings-store.js";
 
 /**
  * ScoringStrategy — Phase 1・純関数（docs/architecture.md §5.7、docs/recall.md §7）。
@@ -54,6 +55,20 @@ export interface ScoringInput {
   lastReinforcedAt?: Date | null;
   strength: number;
   halfLifeHours: number;
+  /**
+   * [ADR 0157](../../../../docs/decisions/0157-decay-activity-clock.md) 決めたこと12:
+   * そのテナントの `decay_clock`。省略時は壁時計のみ（本 ADR 以前と1バイトも変わらない）。
+   * `'activity'`/`'either'` でも、下の `nowSeq`/`decayBaseSeq`/`halfLifeRecalls` が
+   * 揃っていなければ壁時計へフォールバックする——「揃っていない」は「この軸に床が無い
+   * （NULL）＝活動時計では沈まない」（ADR 0157 決めたこと4）と同じ向きの判断である。
+   */
+  decayClock?: DecayClock;
+  /** 活動時計の「いま」（`TenantSettingsStore.getActivitySeq` の値）。 */
+  nowSeq?: number;
+  /** `Memory.decayBaseSeq`。活動時計の起点。 */
+  decayBaseSeq?: number | null;
+  /** `Memory.halfLifeRecalls`。活動時計での Memory 単位の半減期。 */
+  halfLifeRecalls?: number | null;
 }
 
 export type ScoringStrategy = (input: ScoringInput) => ScoreBreakdown;
@@ -178,13 +193,58 @@ export const DEFAULT_STRATEGY_BOUND_ASSUMPTIONS: readonly string[] = [
     "書き込み側が無条件に 1 を書いているだけで、型（number）も DB 列（real）も保証していない。",
 ];
 
-const scoreWithDefaultStrategy: ScoringStrategy = (input) => {
-  const decay = defaultDecayStrategy.strengthAt(input.now, {
+/**
+ * 段2の再スコア係数 `decay`（ADR 0157 決めたこと12）。
+ *
+ * - `decayClock` 省略 or `'wall'`: 壁時計のみ（従来どおり）。
+ * - `'activity'`: `nowSeq`・`decayBaseSeq`・`halfLifeRecalls` の3つが揃っていれば活動時計の
+ *   係数を使う。**揃っていなければ壁時計へフォールバックする**——「揃っていない」は
+ *   ADR 0157 決めたこと4「NULL はこの軸に床が無い＝活動時計では沈まない」と同じ向きの
+ *   判断であり、活動時計だけを使おうとして値が無い場合に `decay = 0`/`NaN` へ倒すのは
+ *   その向きに反する。
+ * - `'either'`: **2つの係数の `Math.max`**（最も緩い）を使う。ADR 0157 決めたこと1が
+ *   段1のゲートで `'either'` を OR（どちらかが生きていれば通す）にしたのと同じ向き
+ *   ——段2の係数も「どちらの時計で見ても、より生きている（減衰していない）ほうを採る」
+ *   ことで、ゲートを通った候補の順位付けがゲートの判定と矛盾しないようにする。
+ *   活動時計側の入力が揃っていなければ、壁時計の係数だけが使われる（`Math.max` の
+ *   もう片方が存在しないのと同じ結果になる）。
+ */
+function computeDecay(input: ScoringInput): number {
+  const wallDecay = defaultDecayStrategy.strengthAt(input.now, {
     recordedAt: input.recordedAt,
     lastReinforcedAt: input.lastReinforcedAt,
     strength: 1,
     halfLifeHours: input.halfLifeHours,
   });
+
+  const clock = input.decayClock ?? "wall";
+  if (clock === "wall") {
+    return wallDecay;
+  }
+
+  const hasActivityInputs =
+    input.nowSeq !== undefined &&
+    input.decayBaseSeq !== undefined &&
+    input.decayBaseSeq !== null &&
+    input.halfLifeRecalls !== undefined &&
+    input.halfLifeRecalls !== null;
+
+  if (!hasActivityInputs) {
+    // 揃っていない＝この軸に床が無い（ADR 0157 決めたこと4）。壁時計へフォールバックする。
+    return wallDecay;
+  }
+
+  const activityDecay = defaultActivityDecayStrategy.strengthAt(input.nowSeq!, {
+    baseSeq: input.decayBaseSeq!,
+    strength: 1,
+    halfLifeRecalls: input.halfLifeRecalls!,
+  });
+
+  return clock === "either" ? Math.max(wallDecay, activityDecay) : activityDecay;
+}
+
+const scoreWithDefaultStrategy: ScoringStrategy = (input) => {
+  const decay = computeDecay(input);
 
   const freshness = Math.min(
     MAX_FRESHNESS,

@@ -108,6 +108,67 @@ export function assertValidEventRetentionDays(days: number): void {
 }
 
 /**
+ * 減衰の時計の種類（[ADR 0157](../../../docs/decisions/0157-decay-activity-clock.md)
+ * 決めたこと1）。
+ *
+ * - `'wall'`: 段1のゲートは `decay_floor_at > now()` のみ（本 ADR 以前と同じ）。
+ * - `'activity'`: 段1のゲートは `decay_floor_seq > <そのテナントの activity_seq>` のみ。
+ * - `'either'`: どちらかが生きていれば通す（OR）。**最も緩い。**
+ */
+export type DecayClock = "wall" | "activity" | "either";
+
+/**
+ * `tenant_settings.decay_clock` の DB 側デフォルトと一致させる、テナント設定行が
+ * 存在しない場合のフォールバック値（ADR 0157 決めたこと1「`tenant_settings` に行が無い
+ * テナントは `'wall'` として動く」——`DEFAULT_HALF_LIFE_HOURS` と同じ扱い）。
+ */
+export const DEFAULT_DECAY_CLOCK: DecayClock = "wall";
+
+/**
+ * `tenant_settings.default_half_life_recalls` の DB 側デフォルト、テナント設定行が
+ * 存在しない場合のフォールバック値（ADR 0157 決めたこと3）。
+ *
+ * **⭐ `720` は「1 recall ↔ 1時間」という1対1の対応を既定に置いたものである。**
+ * 壁時計の既定 `DEFAULT_HALF_LIFE_HOURS` も `720`（720時間 = 30日）——この2つの数字が
+ * 揃っているのは偶然ではなく、**「1時間に1回 recall するテナントでは、2本の時計がほぼ
+ * 同じ速さで進む」**という対応を意図して選んだ値である。活動が疎（1時間に1回未満）な
+ * テナントでは活動時計のほうが遅く進み（＝記憶が長生きする）、活動が密（1時間に1回超）な
+ * テナントでは活動時計のほうが速く進む——`decay_clock` を `'activity'`/`'either'` に
+ * 切り替えたときの体感速度を、壁時計からの延長として説明できるようにするための対応である。
+ */
+export const DEFAULT_HALF_LIFE_RECALLS = 720;
+
+/**
+ * `halfLifeRecalls` の値域は **`(0, ∞)`（有限の正の実数）**であり、`isHalfLifeHoursInRange`
+ * と**同じ値域**である（ADR 0125 の理由をそのまま引く——`halfLifeRecalls` も
+ * `defaultActivityDecayStrategy` の割り算 `elapsed / halfLifeRecalls` に直接入るため、
+ * 0・負・非有限を拒む理由は `isHalfLifeHoursInRange` の doc コメントに実測として
+ * 記録されているものと同一である）。
+ */
+export function isHalfLifeRecallsInRange(value: number): boolean {
+  return value > 0 && Number.isFinite(value);
+}
+
+/**
+ * `setDecayClock` に不正な値（`DecayClock` の3値のいずれでもない文字列）を渡したときに
+ * 両実装が投げる `Error` のメッセージに必ず含める文字列（`EVENT_RETENTION_DAYS_INVALID_MESSAGE`
+ * と同じ形）。
+ */
+export const DECAY_CLOCK_INVALID_MESSAGE = "decay clock must be 'wall', 'activity', or 'either'";
+
+/**
+ * `value` が `DecayClock` の3値のいずれかであることを検査する。不正なら
+ * `DECAY_CLOCK_INVALID_MESSAGE` を含む `Error` を投げる。`assertValidEventRetentionDays` と
+ * 同じ形——`packages/postgres`・`packages/testkit` の両方の `setDecayClock` 実装がこの関数を
+ * 呼ぶことで、検査の種類を1箇所に固定する。
+ */
+export function assertValidDecayClock(value: string): asserts value is DecayClock {
+  if (value !== "wall" && value !== "activity" && value !== "either") {
+    throw new Error(DECAY_CLOCK_INVALID_MESSAGE);
+  }
+}
+
+/**
  * TenantSettingsStore — Phase 1（当初は `getDefaultHalfLifeHours` のみで追加。
  * `getEventRetention`/`setEventRetention` は `docs/roadmap.md` §5.4 のオーナー決定
  * 「監査ログの既定保持期間は無期限。テナント単位で短縮できる口は必須」を満たすために
@@ -131,6 +192,25 @@ export function assertValidEventRetentionDays(days: number): void {
  * - `setEventRetention` は `{ kind: "unset" }` を受け付けない
  *   （`EventRetentionSetting` 型がそもそも許さない）。「まだ設定していない」状態への
  *   巻き戻し（行の削除）は、この interface の対象外である。
+ *
+ * [ADR 0157](../../../docs/decisions/0157-decay-activity-clock.md) 決めたこと13で
+ * `getDecayClock`/`setDecayClock`/`getDefaultHalfLifeRecalls`/`getActivitySeq` を足した。
+ * `taxonomy_mode`（interface に出していない）と `event_retention_days`（`getEventRetention`/
+ * `setEventRetention` を専用メソッドとして足した、ADR 0050）という2つの前例のうち、
+ * **後者を採る**——`examples/chat` が実際に `decay_clock` を設定できなければ、この機能は
+ * 「在る」と数えられない（ADR 0157 決めたこと11）。4メソッドとも**必須**である
+ * （`?` を付けない）。理由は `getEventRetention`/`setEventRetention` と同じ2点: (1) 読み書きの
+ * 口が無いまま列だけ足すと、`examples/chat` が公開 interface を迂回して生 SQL で
+ * UPSERT する経路をもう1つ増やすことになる。(2) 任意にすると「この adapter は活動時計を
+ * 扱えない」（未実装）と「読み書きに失敗した」（実行時エラー）が呼び出し側から同じ顔に
+ * なってしまう。
+ *
+ * ⚠ **`bumpActivitySeq`（activity_seq を+1する書き込み）はここに無い。**
+ * カウンタの前進は `MemoryStore.createRecall` が `recalls` への INSERT と**同一トランザクション**
+ * で行う契約（`MemoryStore.createRecall` の doc・`NewRecallRecord.advanceActivityClock`
+ * 参照）——`TenantSettingsStore` と `MemoryStore` は別 adapter であり、この境界を跨いで
+ * 1トランザクションを構成することはできない。`getActivitySeq` は**読み出し専用**であり、
+ * 段1のゲート（`'activity'`/`'either'`）と書き込み時の `decayBaseSeq` 採番がこの値を読む。
  */
 export interface TenantSettingsStore {
   getDefaultHalfLifeHours(ctx: Ctx): Promise<number>;
@@ -145,4 +225,34 @@ export interface TenantSettingsStore {
    * （`assertValidEventRetentionDays` 参照）。
    */
   setEventRetention(ctx: Ctx, retention: EventRetentionSetting): Promise<void>;
+
+  /**
+   * `tenant_settings.decay_clock` の現在値。行が無ければ `DEFAULT_DECAY_CLOCK`（`'wall'`）を
+   * 返す（ADR 0157 決めたこと1）。
+   */
+  getDecayClock(ctx: Ctx): Promise<DecayClock>;
+
+  /**
+   * `tenant_settings.decay_clock` を設定する（UPSERT。行が無ければ作る）。`clock` が
+   * `DecayClock` の3値のいずれでもない場合は `DECAY_CLOCK_INVALID_MESSAGE` を含む `Error` で
+   * 失敗する（`assertValidDecayClock` 参照）。
+   */
+  setDecayClock(ctx: Ctx, clock: DecayClock): Promise<void>;
+
+  /**
+   * `tenant_settings.default_half_life_recalls` の現在値。行が無ければ
+   * `DEFAULT_HALF_LIFE_RECALLS`（`720`）を返す（`getDefaultHalfLifeHours` と同じ規律）。
+   * `halfLifeHours` がそうであるのと同じ理由で、これは**新規作成時の初期値としてのみ**
+   * 使う（ADR 0157 決めたこと3）——既存 Memory の `halfLifeRecalls` はこの値が変わっても
+   * 再計算されない。
+   */
+  getDefaultHalfLifeRecalls(ctx: Ctx): Promise<number>;
+
+  /**
+   * `tenant_activity.activity_seq` の現在値。行が無ければ `0` を返す（ADR 0157 決めたこと2・5
+   * ——`decay_clock` を一度も `'wall'` 以外に設定していないテナントでは `activity_seq` は
+   * `0` のまま）。**読み出し専用。**進めるのは `MemoryStore.createRecall`
+   * （`advanceActivityClock: true`）だけである。
+   */
+  getActivitySeq(ctx: Ctx): Promise<number>;
 }

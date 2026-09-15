@@ -12,6 +12,7 @@ import type {
   ScopeAggregate,
 } from "../recall.js";
 import type { OutboxJobKind } from "./scheduler.js";
+import type { DecayClock } from "./tenant-settings-store.js";
 
 /**
  * `updateStatus` に `opts.expectedStatus` を渡したとき、書き込み時点の実際の status が
@@ -507,7 +508,20 @@ export interface MemoryStore {
     scope: RecallScope,
     opts?: AggregateScopeOptions,
   ): Promise<ScopeAggregate>;
-  /** roadmap.md 段階4/5: recall 段6（記録）。`recalls` へ1行書き込み、発行した recallId を返す。 */
+  /**
+   * roadmap.md 段階4/5: recall 段6（記録）。`recalls` へ1行書き込み、発行した recallId を返す。
+   *
+   * [ADR 0157](../../../../docs/decisions/0157-decay-activity-clock.md) 決めたこと5:
+   * `record.advanceActivityClock === true` のとき、実装は `recalls` への INSERT と
+   * **同一トランザクションで** `tenant_activity.activity_seq` を `+1` しなければならない
+   * （`NewRecallRecord.advanceActivityClock` の doc コメント参照）。
+   *
+   * ⚠ **戻り値の形はこの ADR で変えていない。**「進めた後の `activity_seq` を返り値に
+   * 載せる」案も検討したが、この口は `@mnemora/core` の公開 API であり、戻り値を
+   * `RecallId` から `{ recallId, activitySeq? }` のような形へ変えること自体が破壊的変更
+   * になる（`docs/autonomy.md`「してはいけないこと」表）。進めた後の値が要る呼び出し側は
+   * `TenantSettingsStore.getActivitySeq` を別途読むこと。
+   */
   createRecall(ctx: Ctx, record: NewRecallRecord): Promise<RecallId>;
   /**
    * Issue #298 / [ADR 0155](../../../../docs/decisions/0155-recall-score-breakdown-persisted.md):
@@ -976,6 +990,40 @@ export interface ArchiveDecayedOptions {
   now: Date;
   /** 1回の呼び出しで archived にする上限。**既定値なし**（上の doc コメント参照）。 */
   limit: number;
+  /**
+   * [ADR 0157](../../../../docs/decisions/0157-decay-activity-clock.md) 決めたこと15:
+   * 「いまの `activity_seq`」を呼び出し側から受け取る。`now: Date` と同じ規律
+   * （ADR 0037「時刻は呼び出し側が渡す」）——**store が自分で `tenant_activity` を
+   * 読みに行かない。** `clock` が `'activity'`/`'either'` のときに必須になる（`clock` の
+   * doc コメント参照）。
+   */
+  nowSeq?: number;
+  /**
+   * ADR 0157 決めたこと1・12・15: どの軸で掃くかを選ぶ。省略時は `'wall'`
+   * （本 ADR 以前と1バイトも変わらない挙動）。
+   *
+   * - `'wall'`（省略時と同じ）: `decay_floor_at <= now`（現行、境界を含む）。
+   * - `'activity'`: `decay_floor_seq IS NOT NULL AND decay_floor_seq <= nowSeq`
+   *   （`nowSeq` は必須。境界を含む——`now`/`decay_floor_at` と同じ非対称を seq 側にも
+   *   写す。下記「境界の非対称」参照）。
+   * - `'either'`: **AND**（両方の軸で沈んでいるものだけ掃く）。
+   *
+   * **⭐ `'either'` が段1のゲートでは OR（どちらかが生きていれば通す、決めたこと1）なのに、
+   * ここでは AND である理由**: ゲートの `'either'` は「どちらかの軸で生きていれば
+   * まだ通す」という**寛容**の向きに働く。掃引はその裏返し——「まだ通る」の否定は
+   * 「**両方の軸で**死んでいる」でなければならない。ゲートが通すのに掃引が掃く、
+   * という矛盾（ある行が段1では返り続けるのに `archiveDecayed` からは消える）を
+   * 避けるには、掃引の条件はゲートの条件の**論理否定**と一致していなければならず、
+   * `NOT (A OR B) = (NOT A) AND (NOT B)` により AND になる。
+   *
+   * **境界の非対称（ADR 0157 決めたこと14）**: ゲートは狭義の `>`（境界を含まない）、
+   * 掃引は `<=`（境界を含む）——これは `decayFloorAtAfter`/既存の `now` 側で既に
+   * 意図的だと明記されている非対称であり（上の `now` の doc コメント、
+   * `VectorFilter.decayFloorAtAfter` の doc コメント参照）、`decay_floor_seq` 側にも
+   * そのまま写す。片方だけ `>=` にする実装ミスは、境界1件のズレとして歯に出ないまま
+   * 紛れ込みうる——`packages/testkit` の適合テストが境界の歯を seq 側にも同じ形で置く。
+   */
+  clock?: DecayClock;
 }
 
 /** {@link MemoryStore.archiveDecayed} の返り値（ADR 0114）。 */

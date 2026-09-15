@@ -5,6 +5,7 @@ import type { MemoryStore } from "./interfaces/memory-store.js";
 import type { TokenCounter } from "./interfaces/token-counter.js";
 import type { VectorStore, VectorHit } from "./interfaces/vector-store.js";
 import type { LexicalStore, LexicalHit } from "./interfaces/lexical-store.js";
+import type { DecayClock, TenantSettingsStore } from "./interfaces/tenant-settings-store.js";
 import type { MemoryId } from "./ids.js";
 import { NOT_INDEXED_REASONS } from "./recall.js";
 import type { Memory } from "./memory.js";
@@ -67,6 +68,14 @@ import type { RecallOutputValidationMode } from "./recall-output-validation.js";
 export interface RecallRuntimeDeps {
   memoryStore: MemoryStore;
   vectorStore: VectorStore;
+  /**
+   * [ADR 0157](../../docs/decisions/0157-decay-activity-clock.md): 忘却ゲート（段1・
+   * 後置フィルタ）と段2の再スコアが、そのテナントの `decay_clock`・活動時計の「いま」
+   * （`activity_seq`）を読むために使う。`Runtime`（`runtime.ts`）は既に
+   * `RuntimeDeps.tenantSettingsStore`（`getDefaultHalfLifeHours` 用に必須）を持っており、
+   * `recall` の配線（`runtime.ts` の `recall` 関数）がそれをここへそのまま渡す。
+   */
+  tenantSettingsStore: TenantSettingsStore;
   /**
    * 語彙チャンネル（ADR 0084）。**省略可能**——語彙チャンネルを無効にしたまま
    * mnemora は成立する（北極星の問い2）。
@@ -280,6 +289,49 @@ export async function runRecall(
   // ADR 0011「Phase 1 では decayFloorAtAfter を読み取りフィルタに使わない」を
   // ADR 0153 が明示的に上書きしている。
   const decayGateActive = validatedQuery.includeFullyDecayed !== true;
+
+  // ADR 0157: テナントの decay_clock を読み、忘却ゲート（段1・後置フィルタ）と段2の
+  // 再スコアに織り込む。`decayClock` は 'wall' 以外なら段2でも使うため、ゲートが
+  // 無効（includeFullyDecayed: true）でも常に読む——「ゲートを外す」ことと「順位付けに
+  // 使う時計を選ぶ」ことは別の軸である。
+  const decayClock: DecayClock = await deps.tenantSettingsStore.getDecayClock(ctx);
+  // 活動時計の「いま」。'wall' のテナントでは一度も `tenant_activity` を読まない
+  // （ADR 0157 決めたこと5「activity_seq を進めるのは decay_clock != 'wall' のテナントに
+  // 限る」の読み側の対になる節約——'wall' のテナントの activity_seq は常に無意味な 0 なので
+  // 読む理由が無い）。
+  const nowSeq: number | undefined =
+    decayClock === "wall" ? undefined : await deps.tenantSettingsStore.getActivitySeq(ctx);
+
+  /**
+   * 忘却ゲートの壁時計側の軸: `decayFloorAt` がまだ「いま」を過ぎていないか（狭義の `>`）。
+   */
+  const wallAxisAlive = (memory: Memory): boolean => memory.decayFloorAt > now;
+
+  /**
+   * 忘却ゲートの活動時計側の軸: `decayFloorSeq` が無い（NULL）なら「この軸には床が無い
+   * ＝活動時計では沈まない」（ADR 0157 決めたこと4）ので常に true。`nowSeq` 自体が
+   * 無い（`decayClock === 'wall'` で一度も読んでいない）場合も、判定できないので
+   * 緩い側（true）へ倒す。
+   */
+  const activityAxisAlive = (memory: Memory): boolean => {
+    const floorSeq = memory.decayFloorSeq;
+    if (floorSeq === undefined || floorSeq === null) return true;
+    if (nowSeq === undefined) return true;
+    return floorSeq > nowSeq;
+  };
+
+  /**
+   * ⭐ 全チャンネル共通の後置フィルタと段1（ANN）の押し下げが、同じ述語を2軸ぶん見る
+   * （ADR 0157 決めたこと1・12）。
+   * - `'wall'`: 壁時計の軸だけ。
+   * - `'activity'`: 活動時計の軸だけ。
+   * - `'either'`: **OR**（どちらかが生きていれば通す。最も緩い——決めたこと1）。
+   */
+  const survivesDecayGate = (memory: Memory): boolean => {
+    if (decayClock === "wall") return wallAxisAlive(memory);
+    if (decayClock === "activity") return activityAxisAlive(memory);
+    return wallAxisAlive(memory) || activityAxisAlive(memory);
+  };
 
   // 🔴 配線されていない語彙チャンネルを明示的に要求されたら、ここで投げる（ADR 0084 §4）。
   // **黙って0件を返さない。**理由は RecallQuery.channels の doc に書いてある——
