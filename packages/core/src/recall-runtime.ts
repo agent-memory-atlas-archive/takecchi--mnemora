@@ -10,6 +10,8 @@ import { NOT_INDEXED_REASONS } from "./recall.js";
 import type { Memory } from "./memory.js";
 import {
   ANN_TRUNCATION_UNDECIDABLE_LEXICAL_ACTIVE,
+  DEFAULT_ASSOCIATION_ANCHOR_COUNT,
+  DEFAULT_ASSOCIATION_MIN_SIMILARITY,
   DEFAULT_DIGEST_BAND_LIMIT,
   DEFAULT_OVER_FETCH_FACTOR,
   DEFAULT_RECALL_CHANNELS,
@@ -94,8 +96,10 @@ type ScoredCandidate = {
    * 2つを併せて読むと、どのチャンネルの集合に入っていたかが一意に決まる
    * （ADR 0084 §6）。単一の値でチャンネルの集合を表そうとしないこと。
    */
-  retrievedVia: "ann" | "lexical" | "mandatory_companion";
+  retrievedVia: "ann" | "lexical" | "mandatory_companion" | "association";
   companionOf?: MemoryId;
+  /** `retrievedVia: "association"` のときだけ在る。どのアンカーから連想したか（ADR 0151）。 */
+  associationOf?: MemoryId;
   score: ScoreBreakdown;
 };
 
@@ -740,10 +744,159 @@ export async function runRecall(
   }
 
   // -------------------------------------------------------------------
-  // 段4: 予算による切り詰め（docs/recall.md §2 段4・§8）
+  // 段3.5: 連想（任意。既定 off。docs/recall.md §9、ADR 0151）
+  //
+  // 「聞かれていないことを、自分から思い出す」の実装。クエリで引けた記憶（アンカー）の
+  // 近傍を、同じ埋め込み空間の二段目として引く——「何が似ているか」を新しく定義せず、
+  // ANN が既に使っているコサイン類似度そのものを、クエリの代わりにアンカーを起点に使う。
+  //
+  // **この段が段1（候補生成）ではなく段3の隣に在る理由**: 段1で拾ったものは段2で
+  // クエリに対して再スコアされる。連想の候補は定義上クエリに当たらないのだから、
+  // 段1に置くと必ず段2の below_threshold で落ちる。「スコアに関係なく候補へ足す」経路は
+  // 既に段3（必須の同伴取得）が持っており、連想はその一般化である。
   // -------------------------------------------------------------------
+  const associationQuery = validatedQuery.association;
+  const associationUnits: Unit[] = [];
+  if (associationQuery !== undefined) {
+    if (deps.vectorStore.getVectors === undefined) {
+      // 北極星の問い2（無効にしても成立するか）を型で担保する任意メソッドが無い。
+      // `query.association` を渡していても、連想は一切実行されない。
+      omitted.push({
+        kind: "stage_skipped",
+        stage: "association",
+        reason: "vector_store_lacks_get_vectors",
+      });
+    } else {
+      // ⚠ `.bind` で `this` を固定してから切り出す——`FakeVectorStore.getVectors` の
+      // ような通常のクラスメソッドは、`const f = obj.method; f(...)` の形で呼ぶと
+      // `this` 束縛が外れる（実測: `this.entries` が `undefined` になり落ちた）。
+      const getVectors = deps.vectorStore.getVectors.bind(deps.vectorStore);
+      const anchorCount = associationQuery.anchorCount ?? DEFAULT_ASSOCIATION_ANCHOR_COUNT;
+      const minSimilarity = associationQuery.minSimilarity ?? DEFAULT_ASSOCIATION_MIN_SIMILARITY;
+      // アンカーは「クエリに実際に当たった」候補（withinLimit）から取る——companions
+      // （段3の必須同伴取得）はスコアに関係なく足された候補であり、連想の起点として
+      // 使うと「クエリに当たっていない候補から、さらにクエリに当たっていない候補を
+      // 連想する」という不透明な連鎖になる。
+      const anchors = withinLimit.slice(0, anchorCount);
+      if (anchors.length === 0) {
+        omitted.push({ kind: "stage_skipped", stage: "association", reason: "no_anchor" });
+      } else {
+        const anchorIds = anchors.map((a) => a.memory.id);
+        const anchorVectors = await getVectors(ctx, deps.embeddingProvider.space, anchorIds);
+        // 除外集合: 既に返る集合（withinLimit + companions）とアンカー自身。
+        const excludeIds = new Set<MemoryId>([
+          ...withinLimit.map((c) => c.memory.id),
+          ...companions.map((c) => c.memory.id),
+          ...anchorIds,
+        ]);
+        // 複数アンカーから同じ記憶が浮上しても、associationOf は最初に当たった
+        // アンカーだけを記録する（ADR 0151 の負債4「アンカーを1つしか指さない」）。
+        const seen = new Set<MemoryId>();
+        const associationHits: { memoryId: MemoryId; anchorId: MemoryId; similarity: number }[] =
+          [];
+        for (const anchor of anchorVectors) {
+          // **段0と同じ scope の filter で呼ぶ**（docs/recall.md §9.2 手順4）——アンカーの
+          // ベクトルを使うだけで、tenant/subject/status/period/excludeProvenanceKinds の
+          // 境界は段1のANN検索と同一にする。limit は over-fetch 済みの kPrime を流用する
+          // ——除外・閾値で落ちる分の余裕を持たせるためであり、新しい係数を定義しない。
+          const hits = await deps.vectorStore.search(
+            ctx,
+            deps.embeddingProvider.space,
+            anchor.vector,
+            {
+              limit: kPrime,
+              filter: {
+                tenantId: ctx.tenantId,
+                status: ["active", "contested"],
+                subjectId: scope.subjectId,
+                excludeProvenanceKinds: validatedQuery.excludeProvenanceKinds,
+                occurredAfter: scope.occurredAfter,
+                occurredBefore: scope.occurredBefore,
+              },
+            },
+          );
+          for (const hit of hits) {
+            if (excludeIds.has(hit.memoryId) || seen.has(hit.memoryId)) continue;
+            const similarity = 1 - hit.distance;
+            if (!(similarity >= minSimilarity)) continue;
+            seen.add(hit.memoryId);
+            associationHits.push({
+              memoryId: hit.memoryId,
+              anchorId: anchor.memoryId,
+              similarity,
+            });
+          }
+        }
+        // アンカーとの類似度降順に並べ、maxCount 件まで採る（docs/recall.md §9.2 手順6）。
+        associationHits.sort((a, b) => b.similarity - a.similarity);
+        const selectedHits = associationHits.slice(0, associationQuery.maxCount);
+        const associationMemories =
+          selectedHits.length > 0
+            ? await deps.memoryStore.getMany(
+                ctx,
+                selectedHits.map((h) => h.memoryId),
+              )
+            : [];
+        const associationMemoriesById = new Map(associationMemories.map((m) => [m.id, m]));
+        for (const hit of selectedHits) {
+          const memory = associationMemoriesById.get(hit.memoryId);
+          if (!memory) continue; // getMany は存在しない/クロステナントの id を静かに落とす契約。
+          // 多層防御（段1の後で withinLimit を組み立てるのと同じ理由、ADR 0034/0056/0059）:
+          // VectorFilter の各フィールドは adapter が実際に適用しなければならない契約だが、
+          // ここでも改めて見る。
+          if (scope.subjectId !== undefined && memory.subjectId !== scope.subjectId) continue;
+          const effectiveTime = memory.occurredAt ?? memory.recordedAt;
+          if (scope.occurredAfter && effectiveTime < scope.occurredAfter) continue;
+          if (scope.occurredBefore && effectiveTime > scope.occurredBefore) continue;
+          if (excludeKinds.has(memory.provenance.kind)) continue;
+          // ⛔ アンカーとの類似度を score.similarity（クエリとの類似度の枠）に入れない
+          // ——嘘になる（北極星の問い3・問い4、ADR 0151「採らなかった案」）。
+          // `mandatory_companion`（段3）の先例に倣い、similarity/lexicalMatch を渡さず
+          // decay × tagMatch × freshness × strength だけでスコアする（affinity は
+          // 中立の1に退化する。`strategies/scoring.ts` の doc 参照）——スコアを
+          // 合成しない、という規約をそのまま引き継ぐ。
+          const score = defaultScoringStrategy({
+            now,
+            tags: memory.tags,
+            queryTags,
+            occurredAt: memory.occurredAt,
+            recordedAt: memory.recordedAt,
+            lastReinforcedAt: memory.lastReinforcedAt,
+            strength: memory.strength,
+            halfLifeHours: memory.halfLifeHours,
+          });
+          associationUnits.push({
+            members: [
+              {
+                memory,
+                retrievedVia: "association" as const,
+                associationOf: hit.anchorId,
+                score,
+              },
+            ],
+            // 予算（段4）が「スコアの低いものから落とす」既定に従っても連想が
+            // 最初に落ちるよう、`units`（クエリで引けた本体）の後ろに必ず並ぶ配列
+            // として連結する（下記）。rankScore 自体は連想候補どうしの順序
+            // （類似度降順で既に並んでいる）を保つためだけに使う。
+            rankScore: score.total,
+          });
+        }
+      }
+    }
+  }
+
+  // -------------------------------------------------------------------
+  // 段4: 予算による切り詰め（docs/recall.md §2 段4・§8、§9.5）
+  //
+  // **連想の候補（associationUnits）は予算の内側に置き、予算で削るときは最初に落とす**
+  // ——`units`（クエリで引けた本体、既にスコア降順）の**後ろに連結する**ことで、
+  // 下の「後ろから cut する」切り詰めが連想を優先して落とす（クエリで引けたものを
+  // 押し出さない）。目次帯（§6）とは違い連想枠は digest 本文を持つ実トークンなので、
+  // 「予算の対象外」という先例（§6）はここへ適用しない。
+  // -------------------------------------------------------------------
+  const allUnits = [...units, ...associationUnits];
   const budget = validatedQuery.budget;
-  let keptUnits = units;
+  let keptUnits = allUnits;
   if (budget) {
     const maxMemoryChars = budget.maxMemoryChars;
     const maxTokens = effectiveTokenBudget(budget);
@@ -758,15 +911,18 @@ export async function runRecall(
       }
       return true;
     };
-    let cut = units.length;
-    while (cut > 0 && !fits(units.slice(0, cut))) {
+    let cut = allUnits.length;
+    while (cut > 0 && !fits(allUnits.slice(0, cut))) {
       cut -= 1;
     }
-    keptUnits = units.slice(0, cut);
-    const droppedUnits = units.slice(cut);
+    keptUnits = allUnits.slice(0, cut);
+    const droppedUnits = allUnits.slice(cut);
     const droppedCount = droppedUnits.reduce((sum, u) => sum + u.members.length, 0);
     if (droppedCount > 0) {
       // ⚠ `'exact'` をリテラルで書かない（ADR 0045）。理由は countKindForUnits の doc を参照。
+      // associationUnits は1候補=1 Unit で構築しており取りこぼしが構造的に起きないため、
+      // unitsCountKind（`units`/`allCandidates` から出した精度）をそのまま流用しても
+      // 精度の名乗りは変わらない。
       omitted.push({ kind: "budget_dropped", count: droppedCount, countKind: unitsCountKind });
     }
   }
@@ -792,9 +948,19 @@ export async function runRecall(
       if (member.companionOf !== undefined) {
         recalled.companionOf = member.companionOf;
       }
+      if (member.associationOf !== undefined) {
+        recalled.associationOf = member.associationOf;
+      }
       return recalled;
     }),
   );
+
+  // 連想枠（Issue #200、ADR 0151）が返した digest の合計文字数の内訳。`association` を
+  // 渡したときだけ usage.byTier に載せる（申告されていなければ欄自体が無い。`share`/
+  // `budgetExceeded` と同じ規約）——「呼び手が連想で何文字増えたか」を見られるようにする。
+  const associationChars = finalMemories
+    .filter((m) => m.retrievedVia === "association")
+    .reduce((sum, m) => sum + m.digest.length, 0);
 
   // -------------------------------------------------------------------
   // 段5: 目次帯の構築（索引: 集約クエリ。docs/recall.md §2 段5・§5）
@@ -1006,7 +1172,12 @@ export async function runRecall(
     chars: totalChars,
     estimatedTokens: tokenCount.tokens,
     counter: tokenCount.counter,
-    byTier: { full: 0, digest: digestChars, index: indexChars },
+    byTier: {
+      full: 0,
+      digest: digestChars,
+      index: indexChars,
+      ...(associationQuery !== undefined ? { association: associationChars } : {}),
+    },
     indexChars,
     ...(usageShareDenominator !== undefined
       ? {

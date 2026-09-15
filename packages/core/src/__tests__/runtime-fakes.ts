@@ -1151,6 +1151,40 @@ export class FakeVectorStore implements VectorStore {
   async delete(ctx: Ctx, space: EmbeddingSpaceId, memoryId: MemoryId): Promise<void> {
     this.entries.delete(this.key(space, ctx.tenantId, memoryId));
   }
+
+  /**
+   * Issue #200 / ADR 0151: 連想枠の歯が使う。`InMemoryVectorStore`
+   * （`packages/testkit`）の同名メソッドと同じ意味論——存在しない memoryId・
+   * 他テナントの memoryId は静かに結果から落ちる（tenant 境界は key の一致で掛かる）。
+   */
+  async getVectors(
+    ctx: Ctx,
+    space: EmbeddingSpaceId,
+    memoryIds: MemoryId[],
+  ): Promise<{ memoryId: MemoryId; vector: number[] }[]> {
+    const results: { memoryId: MemoryId; vector: number[] }[] = [];
+    for (const memoryId of memoryIds) {
+      const entry = this.entries.get(this.key(space, ctx.tenantId, memoryId));
+      if (entry !== undefined) {
+        results.push({ memoryId, vector: entry.vector });
+      }
+    }
+    return results;
+  }
+}
+
+/**
+ * Issue #200 / ADR 0151: `getVectors` を実装していない `VectorStore` を模す薄いラッパー。
+ * `FakeVectorStore` の `upsert`/`search`/`delete` へそのまま委譲するが、`getVectors` を
+ * プロパティとして持たない——`deps.vectorStore.getVectors === undefined` を検査する歯
+ * （`stage_skipped { reason: "vector_store_lacks_get_vectors" }`）専用。
+ */
+export function withoutGetVectors(store: FakeVectorStore): VectorStore {
+  return {
+    upsert: (ctx, space, memoryId, vector) => store.upsert(ctx, space, memoryId, vector),
+    search: (ctx, space, query, opts) => store.search(ctx, space, query, opts),
+    delete: (ctx, space, memoryId) => store.delete(ctx, space, memoryId),
+  };
 }
 
 /**

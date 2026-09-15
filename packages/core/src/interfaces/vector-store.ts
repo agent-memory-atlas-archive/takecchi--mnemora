@@ -96,6 +96,12 @@ export interface VectorFilter {
   occurredBefore?: Date;
 }
 
+/** `VectorStore.getVectors` が返す1件。 */
+export interface VectorEntry {
+  memoryId: MemoryId;
+  vector: number[];
+}
+
 export interface VectorHit {
   memoryId: MemoryId;
   /**
@@ -145,4 +151,31 @@ export interface VectorStore {
    * `isUuidLike` の doc コメント参照）。
    */
   delete(ctx: Ctx, space: EmbeddingSpaceId, memoryId: MemoryId): Promise<void>;
+  /**
+   * アンカーとなる Memory のベクトルをまとめて取得する（連想枠、Issue #200）。
+   *
+   * **任意メソッドである。**`MemoryStore.purgeMemory?`/`purgeExpiredEvents?`/
+   * `archiveDecayed?`（`packages/core/src/interfaces/memory-store.ts`）と同じ判断——
+   * これが無くても `VectorStore` としては成立する。`recall-runtime.ts` の段3.5
+   * （連想）はこれが無い場合、`omitted` に
+   * `stage_skipped{stage:"association", reason:"vector_store_lacks_get_vectors"}`
+   * を積んでスキップするだけであり、`recall()` 自体はそのまま成立する
+   * （北極星の問い2「これを無効にしても Memory Framework として成立するか」を
+   * 型で担保する）。
+   *
+   * **存在しない `memoryId` は黙って結果から落とす。**`MemoryStore.getMany` と同じ
+   * 「存在しないものは存在しないの一種」の扱い（`packages/postgres/src/mapping.ts` の
+   * `isUuidLike` の doc コメント参照）——呼び出し全体を弾かない。`memoryIds` のうち
+   * adapter の期待する形式でないものも、無い id と同じく静かに結果から落とす。
+   * 全件が存在しない/形式に合わなければ空配列を返す。
+   *
+   * **tenant 境界を必ず掛けること。**`ctx.tenantId` に属さない `memoryId` は、
+   * それが実在しても「存在しない」と同じ扱い（返さない）——`search` の
+   * `filter.tenantId` と同じ境界であり、これを緩めると連想の段がテナントを
+   * 跨いで記憶を漏らす経路になる。
+   *
+   * 返す順序は `memoryIds` の順序と一致している必要はない——呼び出し側
+   * （`recall-runtime.ts`）は `memoryId` をキーに引き直す。
+   */
+  getVectors?(ctx: Ctx, space: EmbeddingSpaceId, memoryIds: MemoryId[]): Promise<VectorEntry[]>;
 }

@@ -2,6 +2,7 @@ import type {
   Ctx,
   EmbeddingSpaceId,
   MemoryId,
+  VectorEntry,
   VectorFilter,
   VectorHit,
   VectorStore,
@@ -188,5 +189,23 @@ export class InMemoryVectorStore implements VectorStore {
 
   async delete(ctx: Ctx, space: EmbeddingSpaceId, memoryId: MemoryId): Promise<void> {
     this.entries.delete(this.key(space, ctx.tenantId, memoryId));
+  }
+
+  async getVectors(
+    ctx: Ctx,
+    space: EmbeddingSpaceId,
+    memoryIds: MemoryId[],
+  ): Promise<VectorEntry[]> {
+    // `key` は space + tenantId + memoryId から機械的に決まる（クラス冒頭の `key` 参照）
+    // ので、tenant 境界は search と同じくキーの一致だけで自然に掛かる——他テナントの
+    // memoryId が渡っても、そのテナントの key には一致しない。
+    const results: VectorEntry[] = [];
+    for (const memoryId of memoryIds) {
+      const entry = this.entries.get(this.key(space, ctx.tenantId, memoryId));
+      if (entry !== undefined) {
+        results.push({ memoryId, vector: entry.vector });
+      }
+    }
+    return results;
   }
 }

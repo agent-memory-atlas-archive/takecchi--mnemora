@@ -151,6 +151,8 @@ describeVectorStoreConformance({
   // 未知の space を渡しても事前登録は要らない（`registerEmbeddingSpace` に相当する
   // ものが無い）。そのため no-op で足りる。
   prepareEmbeddingSpace: () => {},
+  // Issue #200 / ADR 0151: InMemoryVectorStore は getVectors を実装している。
+  supportsGetVectors: true,
 });
 
 // ADR 0084 / Issue #106: `InMemoryLexicalStore` は自前の Map を持たず、`memoryStore` の

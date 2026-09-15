@@ -3,6 +3,7 @@ import type {
   Ctx,
   EmbeddingSpaceId,
   MemoryId,
+  VectorEntry,
   VectorFilter,
   VectorHit,
   VectorStore,
@@ -14,6 +15,11 @@ import { isUuidLike } from "./mapping.js";
 /** `number[]` を pgvector のテキスト表現（`[1,2,3]`）に変換する。 */
 function toVectorLiteral(vector: number[]): string {
   return `[${vector.join(",")}]`;
+}
+
+/** `toVectorLiteral` の逆——pgvector のテキスト表現（`[1,2,3]`）を `number[]` に戻す。 */
+function parseVectorLiteral(literal: string): number[] {
+  return literal.slice(1, -1).split(",").map(Number);
 }
 
 /**
@@ -121,5 +127,32 @@ export class PostgresVectorStore implements VectorStore {
     await this.db.execute(sql`
       DELETE FROM ${sql.identifier(table)} WHERE tenant_id = ${ctx.tenantId} AND memory_id = ${memoryId}
     `);
+  }
+
+  async getVectors(
+    ctx: Ctx,
+    space: EmbeddingSpaceId,
+    memoryIds: MemoryId[],
+  ): Promise<VectorEntry[]> {
+    // `memory_id` 列は uuid 型。形式不正な id は「存在しない」の一種として扱う
+    // （`delete` と同じ判断。`isUuidLike` の doc コメント参照）——クエリを投げる前に
+    // 落とし、DB 由来の invalid input syntax を漏らさない。
+    const validIds = memoryIds.filter(isUuidLike);
+    if (validIds.length === 0) {
+      return [];
+    }
+    const table = embeddingSpaceTableName(space);
+    assertSafeIdentifier(table);
+    // tenant 境界を必ず掛ける（`VectorEntry` の doc・`search` の `filter.tenantId` と
+    // 同じ境界）——他テナントの memoryId が偶然 validIds に混ざっていても返さない。
+    const result = await this.db.execute(sql`
+      SELECT memory_id AS memory_id, embedding::text AS embedding
+      FROM ${sql.identifier(table)}
+      WHERE tenant_id = ${ctx.tenantId} AND memory_id = ANY(${sql.param(validIds)}::uuid[])
+    `);
+    return result.rows.map((row) => {
+      const r = row as unknown as { memory_id: string; embedding: string };
+      return { memoryId: r.memory_id, vector: parseVectorLiteral(r.embedding) };
+    });
   }
 }

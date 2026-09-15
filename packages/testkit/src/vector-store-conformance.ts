@@ -84,6 +84,23 @@ export interface VectorStoreConformanceOptions {
    * 新しいフックでも繰り返す。
    */
   prepareEmbeddingSpace: (space: EmbeddingSpaceId) => Promise<void> | void;
+  /**
+   * Issue #200: 対象の `VectorStore` 実装が `getVectors`（任意メソッド）を
+   * 実装しているかどうか。**必須。**
+   *
+   * `memory-store-conformance.ts` の `supportsArchiveDecayed`/`supportsPurgeMemory`/
+   * `supportsMarkContestedPair` と同じ判断——**省略可にしないこと。**省略できると
+   * 「連想の段が実際に検査された adapter」と「検査されていない adapter」が同じ
+   * 緑色の出力になり、このリポジトリが繰り返し塞いできた「名乗れる以上の精度を
+   * 主張する」族の失敗を、フックの省略という形で再現することになる。
+   *
+   * `true` なら契約の歯（upsert したベクトルがそのまま返る、存在しない
+   * memoryId は静かに結果から落ちる、他テナントの memoryId は返らない、
+   * 一部の id が存在しなくても存在する id は返る）を実行する。`false` なら
+   * `expect(store.getVectors).toBeUndefined()` を積極的に assert する——
+   * `it.skip` にはしない。
+   */
+  supportsGetVectors: boolean;
 }
 
 const space: EmbeddingSpaceId = { provider: "test", model: "fixture-model", dimensions: 3 };
@@ -109,7 +126,7 @@ const spaceB: EmbeddingSpaceId = { provider: "test", model: "fixture-model-b", d
  * `packages/postgres` 側のテスト（生 SQL・`EXPLAIN` を直接扱う）に置く。
  */
 export function describeVectorStoreConformance(options: VectorStoreConformanceOptions): void {
-  const { name, createStore, prepareMemoryId, prepareEmbeddingSpace } = options;
+  const { name, createStore, prepareMemoryId, prepareEmbeddingSpace, supportsGetVectors } = options;
 
   describe(`VectorStore conformance (${name})`, () => {
     it("upsert した vector が search で見つかる", async () => {
@@ -628,5 +645,65 @@ export function describeVectorStoreConformance(options: VectorStoreConformanceOp
       const memoryId = await prepareMemoryId(ctx);
       await expect(store.upsert(ctx, space, memoryId, [1, 0, 0])).resolves.toBeUndefined();
     });
+
+    // -------------------------------------------------------------------
+    // getVectors（Issue #200: 連想枠、任意メソッド）。`archiveDecayed`/`purgeMemory`
+    // （`memory-store-conformance.ts`）と同じ形——`supportsGetVectors` で分岐し、
+    // 実装していない adapter に対しても「実装していない」ことを積極的に assert する
+    // （`it.skip` にしない）。
+    // -------------------------------------------------------------------
+    if (supportsGetVectors) {
+      it("getVectors: upsert したベクトルがそのまま返る", async () => {
+        const store = await createStore();
+        const ctx: Ctx = { tenantId: "tenant-1" };
+        const memoryId = await prepareMemoryId(ctx);
+        await store.upsert(ctx, space, memoryId, [1, 0.5, 0.25]);
+
+        const entries = await store.getVectors!(ctx, space, [memoryId]);
+
+        expect(entries).toHaveLength(1);
+        expect(entries[0]?.memoryId).toBe(memoryId);
+        expect(entries[0]?.vector[0]).toBeCloseTo(1, 5);
+        expect(entries[0]?.vector[1]).toBeCloseTo(0.5, 5);
+        expect(entries[0]?.vector[2]).toBeCloseTo(0.25, 5);
+      });
+
+      it("getVectors: 存在しない memoryId は結果から静かに落ちる（呼び出し全体は弾かない）", async () => {
+        const store = await createStore();
+        const ctx: Ctx = { tenantId: "tenant-1" };
+        const memoryId = await prepareMemoryId(ctx);
+        await store.upsert(ctx, space, memoryId, [1, 0, 0]);
+
+        const entries = await store.getVectors!(ctx, space, [memoryId, randomUUID()]);
+
+        expect(entries.map((e) => e.memoryId)).toEqual([memoryId]);
+      });
+
+      it("getVectors: 全件が存在しなければ空配列を返す", async () => {
+        const store = await createStore();
+        const ctx: Ctx = { tenantId: "tenant-1" };
+
+        const entries = await store.getVectors!(ctx, space, [randomUUID(), randomUUID()]);
+
+        expect(entries).toEqual([]);
+      });
+
+      it("getVectors: 他テナントの memoryId は返らない（tenant 境界）", async () => {
+        const store = await createStore();
+        const ctxA: Ctx = { tenantId: "tenant-a" };
+        const ctxB: Ctx = { tenantId: "tenant-b" };
+        const memoryIdA = await prepareMemoryId(ctxA);
+        await store.upsert(ctxA, space, memoryIdA, [1, 0, 0]);
+
+        const entries = await store.getVectors!(ctxB, space, [memoryIdA]);
+
+        expect(entries).toEqual([]);
+      });
+    } else {
+      it("getVectors は任意メソッドであり、この adapter は実装していない", async () => {
+        const store = await createStore();
+        expect(store.getVectors).toBeUndefined();
+      });
+    }
   });
 }

@@ -21,7 +21,7 @@ export const CountKindSchema = z.enum([
 
 export interface StageSkippedOmission {
   kind: "stage_skipped";
-  stage: "candidate_generation" | "rescore" | "index_band";
+  stage: "candidate_generation" | "rescore" | "index_band" | "association";
   /**
    * **`"budget_exhausted"` は、この union に存在していたが、2026-09-16 に落とした**
    * （Issue #206 / [ADR 0117](../../../docs/decisions/0117-unreachable-union-values-inventory.md)
@@ -29,8 +29,26 @@ export interface StageSkippedOmission {
    * で実施。`@mnemora/core` の公開 API の破壊的変更）。`recall-runtime.ts` はこの値を
    * 一度も push しておらず、`RecallBudget` を使い切ったときの実際の落とし方は
    * `budget_dropped`（`BudgetDroppedOmission`）である。
+   *
+   * **`"vector_store_lacks_get_vectors"` / `"no_anchor"` は連想枠（Issue #200）専用**
+   * （`stage: "association"` のときだけ現れる）。
+   * - `"vector_store_lacks_get_vectors"`: `deps.vectorStore.getVectors` が
+   *   実装されていない。**北極星の問い2**（これを無効にしても recall は成立するか）を
+   *   型で担保する任意メソッド（`VectorStore.getVectors` の doc 参照）が無いだけであり、
+   *   `query.association` を渡しても連想は一切実行されない。
+   * - `"no_anchor"`: `getVectors` はあるが、段3までに残った候補（アンカー候補）が
+   *   0件だった——連想を起点にできる記憶が無い。
+   *
+   * **⚠ この2つは「連想を走らせたが0件だった」とは別の事象である。**走らせて0件なら
+   * この omission は積まない（`docs/recall.md` の「無いの種類を潰さない」原則）——
+   * `stage_skipped` は常に「実行しなかった」ことの札であり、「実行して収穫が無かった」
+   * ことの札ではない。
    */
-  reason: "embedding_provider_unavailable" | "empty_query_content";
+  reason:
+    | "embedding_provider_unavailable"
+    | "empty_query_content"
+    | "vector_store_lacks_get_vectors"
+    | "no_anchor";
 }
 
 export interface FilteredOmission {
@@ -243,8 +261,13 @@ export type Omission =
 
 const StageSkippedOmissionSchema = z.object({
   kind: z.literal("stage_skipped"),
-  stage: z.enum(["candidate_generation", "rescore", "index_band"]),
-  reason: z.enum(["embedding_provider_unavailable", "empty_query_content"]),
+  stage: z.enum(["candidate_generation", "rescore", "index_band", "association"]),
+  reason: z.enum([
+    "embedding_provider_unavailable",
+    "empty_query_content",
+    "vector_store_lacks_get_vectors",
+    "no_anchor",
+  ]),
 }) satisfies z.ZodType<StageSkippedOmission>;
 
 const FilteredOmissionSchema = z.object({
@@ -574,7 +597,25 @@ export interface RecallUsage {
   chars: number;
   estimatedTokens: number;
   counter: "heuristic" | "exact";
-  byTier: { full: number; digest: number; index: number };
+  byTier: {
+    full: number;
+    digest: number;
+    index: number;
+    /**
+     * **`memories`（連想を含む）のうち、連想枠（Issue #200）が返した digest の
+     * 合計文字数の内訳。**`digest` に既に含まれている量の一部であり、`digest` に
+     * 加算するものではない——「呼び手が連想で何文字増えたか」を見られるようにするための
+     * 内訳の欄である。
+     *
+     * **存在条件は `RecallQuery.association` を渡したかどうか**（`share`/`budgetExceeded`
+     * と同じ規約——申告されていなければ欄自体が無い）。`association` を渡さない
+     * 呼び出しではこの欄が無いままなので、`byTier` の形は1バイトも変わらない
+     * （既定 off の証明そのもの）。渡していれば、連想が実際には0件だった run でも
+     * `0` として現れる——「連想を走らせたが0件だった」と「連想を走らせなかった」を
+     * 同じ顔にしない、という `docs/recall.md` の原則をここでも守る。
+     */
+    association?: number;
+  };
   /**
    * 目次帯（`IndexBand`）の実費。**`budget` の対象外**であり、
    * `budget` をどれだけ小さくしてもこの分は削られない（理由は `RecallBudget` を見よ）。
@@ -653,6 +694,7 @@ export const RecallUsageSchema = z.object({
     full: z.number().int().nonnegative(),
     digest: z.number().int().nonnegative(),
     index: z.number().int().nonnegative(),
+    association: z.number().int().nonnegative().optional(),
   }),
   indexChars: z.number().int().nonnegative(),
   // ⚠ `.max(1)` を外してある（ADR 0097）。`share` は 1 を超えうる——超えたときは
@@ -758,10 +800,28 @@ export interface RecalledMemory {
    * 無いので黙って何も起きない。`"lexical"` は実装を伴って足した値である。**新しく足す
    * 値を、`"tag_match"`/`"recency"` だった形（実装より先に型だけ置く）にしないこと**
    * （ADR 0084 の決定）。
+   *
+   * **`"association"`（Issue #200）は「クエリに直接は当たらなかったが、クエリで
+   * 引けた記憶（アンカー）の近傍として引いた」候補**（北極星「聞かれていないことを、
+   * 自分から思い出す」）。`query.association` を渡したときだけ現れる（既定 off）。
+   * `recall-runtime.ts` の段3.5、`VectorStore.getVectors`（任意メソッド）を参照。
+   *
+   * **⚠ 公開 API の破壊的変更である**——この union を網羅的に `switch` している
+   * 呼び出し側は、新しい値を扱わないまま黙って通ってしまう可能性がある。
+   * `0.x` の間はオーナーの明示で許容されている（`docs/autonomy.md` §3）。
+   * この変更を入れた PR で `switch (m.retrievedVia)` の網羅箇所を grep し、
+   * 全箇所を確認済み（PR 本文参照）。
    */
-  retrievedVia: "ann" | "lexical" | "mandatory_companion";
+  retrievedVia: "ann" | "lexical" | "mandatory_companion" | "association";
   /** 矛盾の相手として同伴取得された場合、その相手の memoryId。 */
   companionOf?: MemoryId;
+  /**
+   * **`retrievedVia: "association"` のときだけ在る。**どのアンカー（`memoryId`）を
+   * 起点に連想したか（Issue #200）。`companionOf` と同じ形・同じ理由——
+   * 北極星の問い3（この記憶が選ばれた理由を、後から説明できるか）に答えるための欄であり、
+   * 「なぜこれが出てきたか」を呼び出し側がアンカーまで辿れるようにする。
+   */
+  associationOf?: MemoryId;
   /**
    * この記憶が「本人が述べた事実」なのか「AI の推論」なのか（オーナーの原則7）。
    *
@@ -784,8 +844,9 @@ export interface RecalledMemory {
 export const RecalledMemorySchema = z.object({
   memoryId: z.string().min(1),
   digest: z.string(),
-  retrievedVia: z.enum(["ann", "lexical", "mandatory_companion"]),
+  retrievedVia: z.enum(["ann", "lexical", "mandatory_companion", "association"]),
   companionOf: z.string().min(1).optional(),
+  associationOf: z.string().min(1).optional(),
   provenanceKind: ProvenanceKindSchema,
   score: ScoreBreakdownSchema,
 }) satisfies z.ZodType<RecalledMemory>;
@@ -892,6 +953,14 @@ export interface RecallQuery {
    * 同じ作法——上げ下げはできるが、0にして帯そのものを消すことはできない。
    */
   digestBandLimit?: number;
+  /**
+   * **連想枠（Issue #200、北極星「聞かれていないことを、自分から思い出す」）。**
+   *
+   * **省略時は連想を一切走らせない**（既定 off）——`association` を渡さない呼び出しの
+   * 結果は1バイトも変わらない（歯: `packages/core/src/__tests__/recall-association.test.ts`）。
+   * 詳細は {@link RecallAssociationQuery} と `recall-runtime.ts` の段3.5の doc を参照。
+   */
+  association?: RecallAssociationQuery;
 }
 
 /**
@@ -947,6 +1016,70 @@ export const LEXICAL_STORE_UNAVAILABLE_ERROR_PREFIX =
 /** RecallQuery.scoreThreshold の既定値。強い根拠のない Phase 1 の裁量値（本ファイルの doc 参照）。 */
 export const DEFAULT_SCORE_THRESHOLD = 0.1;
 
+// ---------------------------------------------------------------------------
+// 連想（association）枠（Issue #200、北極星「聞かれていないことを、自分から思い出す」）
+// ---------------------------------------------------------------------------
+
+/**
+ * `RecallQuery.association` の入力。**任意フィールド。省略時は連想を一切走らせない
+ * （既定 off——北極星の問い2「これを無効にしても Memory Framework として成立するか」）。**
+ *
+ * 「何が似ているか」を新しく定義しない——ANN が既に使っているコサイン類似度そのものを、
+ * クエリの代わりにアンカー（クエリで引けた記憶）を起点に使うだけである
+ * （`recall-runtime.ts` の段3.5の doc 参照）。
+ */
+export interface RecallAssociationQuery {
+  /**
+   * 連想枠に入れる最大件数。**必須**——`maxCount` を持たない「連想を頼む」は
+   * 存在しない（`digestBandLimit` が0を許さないのと似た理由で、量の上限を
+   * 呼び出し側に必ず明示させる）。
+   */
+  maxCount: number;
+  /**
+   * 起点にするアンカー（段3までに残った候補の上位何件を連想の起点にするか）の数。
+   * 既定 {@link DEFAULT_ASSOCIATION_ANCHOR_COUNT}。
+   */
+  anchorCount?: number;
+  /**
+   * アンカーとの類似度の下限。既定 {@link DEFAULT_ASSOCIATION_MIN_SIMILARITY}。
+   *
+   * **既存の `scoreThreshold`（既定 {@link DEFAULT_SCORE_THRESHOLD} = 0.1）とは
+   * 独立の値である。**`scoreThreshold` は `ScoreBreakdown.total`
+   * （affinity × decay × tagMatch × freshness × strength の積、0〜1に収まらない
+   * 複合値）に対する閾値だが、`minSimilarity` は**生のコサイン類似度**
+   * （`VectorHit.distance` から `1 - distance` で変換した値。負にもなりうる——
+   * `ScoreBreakdown.similarity` の doc 参照）に対する閾値であり、尺度が違う。
+   * `scoreThreshold` の値をそのまま流用すると、単位の違う2つの閾値が
+   * 同じ数字を共有する偶然の一致になり、どちらかを見直すときにもう片方を
+   * 巻き込む——だから独立の定数を置く。
+   */
+  minSimilarity?: number;
+}
+
+export const RecallAssociationQuerySchema = z.object({
+  maxCount: z.number().int().positive(),
+  anchorCount: z.number().int().positive().optional(),
+  minSimilarity: z.number().optional(),
+}) satisfies z.ZodType<RecallAssociationQuery>;
+
+/** `RecallAssociationQuery.anchorCount` の既定値（マネージャー決定）。 */
+export const DEFAULT_ASSOCIATION_ANCHOR_COUNT = 3;
+
+/**
+ * `RecallAssociationQuery.minSimilarity` の既定値（マネージャー決定）。
+ *
+ * **強い根拠のない Phase 1 の裁量値**（`DEFAULT_SCORE_THRESHOLD`/
+ * `DIGEST_BAND_MAX_ENTRY_CHARS` と同じ立て付け）。コサイン類似度は埋め込みモデル・
+ * データ分布に強く依存するため、実データでの分布を測ってから見直すべき値である。
+ * 0.5 を選んだ理由: `scoreThreshold`（0.1）のように「明らかに無関係なものだけを
+ * 落とす」緩い閾値ではなく、**連想は「クエリしていないのに手元に来る」性質上、
+ * 無関係なものを混ぜるコストがクエリ結果より高い**（北極星の問い1「増やすなら、
+ * その分だけ想起が良くなると言えるか」）ため、中間より少し厳しめの値を既定にした。
+ * 実運用のコサイン類似度の分布が測れたら見直すこと——見直す根拠になるのは
+ * 「多くの連想候補がこの値の前後で切られている」という実測であり、勘で変えない。
+ */
+export const DEFAULT_ASSOCIATION_MIN_SIMILARITY = 0.5;
+
 /** RecallQuery.limit の既定値。 */
 export const DEFAULT_RECALL_LIMIT = 10;
 
@@ -967,6 +1100,7 @@ export const RecallQuerySchema = z.object({
   budget: RecallBudgetSchema.optional(),
   scoreThreshold: z.number().optional(),
   digestBandLimit: z.number().int().positive().optional(),
+  association: RecallAssociationQuerySchema.optional(),
 }) satisfies z.ZodType<RecallQuery>;
 
 /**
