@@ -57,16 +57,22 @@
 （[ADR 0088](./docs/decisions/0088-retrieval-quality-measured-in-ci.md)）。
 `example-chat` ジョブの `compare` も、`retrieval-quality` ジョブも、
 **`recorded`（記録した実 API の応答の再生）**で走る——
-**鍵は要らないが、擬似物でもない。**下の3層の表で、どのジョブがどの層かを見分けること。
+**鍵は要らないが、擬似物でもない。**下の4層の表で、どのジョブがどの層かを見分けること。
 
-**provider は3層ある**（[ADR 0051](./docs/decisions/0051-recorded-provider-cassette.md)）。
-**用途で使い分けること。**
+**provider は4層ある**（[ADR 0051](./docs/decisions/0051-recorded-provider-cassette.md)が
+`deterministic`/`recorded`/`openai` の3層を、[ADR 0085](./docs/decisions/0085-local-embedding-provider.md)
+が4層目の `local` を導入している）。**用途で使い分けること。**
 
 | 層 | 何か | 使う場所 |
 |---|---|---|
 | `deterministic` | 意味を持たない stub（文字コードからベクトルを作る／発話を40字で切る） | 配線・契約・適合テスト |
 | `recorded` | 記録した実 API の応答の再生。**記録に無い入力は例外** | 北極星の物差し（`retrieval` / `compare`） |
 | `openai` | 実 API | 記録を録るとき・乖離を測るとき |
+| `local` | 外部サービスに繋がない、プロセス内 ONNX 推論（`@mnemora/local-embedding`、[ADR 0085](./docs/decisions/0085-local-embedding-provider.md)）。**擬似物ではなく実推論**。⚠ **embedding 専用——LLM 側に `local` は無い**（`examples/chat/src/providers.ts` の `ProviderMode`） | CI の `identifier-probes` / `consolidation-cost` / `archive-sweep-cost`（3ジョブとも `MNEMORA_EMBEDDING=local` を固定で使う） |
+
+**⚠ 上の3ジョブ（`identifier-probes` / `consolidation-cost` / `archive-sweep-cost`）の数字を
+`deterministic` の行に当てはめないこと。**`local` は本物の ONNX 推論であり、
+「性能について何も言っていない」という次段の警告は `deterministic` にだけ掛かる。
 
 **⚠ `recorded` で測った `compare` の数字も、「実運用でも同じ削減率になる」ことを
 保証しない。**理由は「擬似物だから」ではない——**カセットは記録した時点の応答の再生**
