@@ -27,8 +27,8 @@
 --
 -- 🔴 **`rel.relname = 'memory_events'` だけでは足りない（CI で実際に踏んだ、ADR 0057）。**
 -- `packages/postgres/src/migrate.ts` は専用スキーマ（ADR 0057）向けに各移行ファイルを、
--- 接続の search_path の先頭を `SET LOCAL` で対象スキーマへ切り替えた直後に実行する——
--- この切り替え文そのものの正確な構文は `migrate.ts` を参照。このファイル自身も含め、
+-- `SET LOCAL search_path TO <schema>[,<extensionSchema>]` の直後に実行する——この
+-- 切り替え文そのものの正確な構文は `migrate.ts` を参照。このファイル自身も含め、
 -- 移行の中身は常に裸のテーブル名（`memory_events`）で書かれており、
 -- どのスキーマに効くかは search_path 任せである（`schema-namespace.ts` の doc:
 -- 「DML は search_path に任せ、DDL と存在検査は明示修飾する」。この移行の

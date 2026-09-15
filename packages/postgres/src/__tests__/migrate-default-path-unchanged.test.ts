@@ -3,6 +3,7 @@ import { join } from "node:path";
 import type { Pool } from "pg";
 import { describe, expect, it } from "vitest";
 import { DEFAULT_MIGRATIONS_DIR, listMigrationFiles, runMigrations } from "../migrate.js";
+import { stripSqlComments } from "./sql-comments.js";
 
 /**
  * `packages/postgres/src/bin/migrate.ts` の doc コメントに書かれた主張を、
@@ -42,6 +43,24 @@ import { DEFAULT_MIGRATIONS_DIR, listMigrationFiles, runMigrations } from "../mi
  *
  * ⚠ このファイルは `test-db.ts` を import しない（`DATABASE_URL` を要求しない）。
  * DB を要する検査は `dedicated-schema.postgres.test.ts` 等、別ファイルの役目。
+ *
+ * ## Issue #227: 検査は「発行テキストの comment」ではなく「実行される文」に当てる
+ *
+ * `../migrate.ts` は `migrations/*.sql` の生テキストを comment ごと `client.query()` へ
+ * 渡す（それ自体は正しい振る舞い——PostgreSQL 自身が comment を無視して実行する）。
+ * この歯の主張は「既定経路は `SET LOCAL search_path` を**実行**しない」であって、
+ * 「発行するテキストにその**字面**が一切現れない」ではない。後者のまま素朴な正規表現を
+ * 生テキストへかけると、マイグレーションの**説明 comment** にその語を書いただけで
+ * この歯が落ちる——実際に PR #226 で `0011_memory_events_kind_restored.sql` の説明
+ * comment がこれを踏んだ（Issue #227）。
+ *
+ * そのため下の1本目の `it` では、検査の直前に `./sql-comments.ts` の
+ * `stripSqlComments` で comment を剥がしてから `.not.toMatch(...)` にかける。
+ * **`../migrate.ts` 側は変えない**——DB へ実際に送る文字列は今まで通り comment 込みの
+ * 生テキストのままである（`stripSqlComments` はこの歯専用で、`../migrate.ts` からは
+ * 一切参照されない）。2本目の it（空振り防止）は生の `sql`
+ * （comment を含む）が log に含まれることを確かめる必要があるため、そちらは comment を
+ * 剥がさない。
  */
 
 /** `runMigrations` が発行した SQL を記録するだけの偽の `Pool` と、その記録先の配列。 */
@@ -90,9 +109,15 @@ describe("migrate.ts CLI の既定経路: options 省略と1バイトも変わ�
     // （意図的な二重管理として、`../migrate.ts` の `REQUIRED_EXTENSIONS` の doc 参照）
     // `CREATE EXTENSION IF NOT EXISTS vector;` 等を本文に含むため、実マイグレーション
     // 本文が正しく流れている限り正当に現れる。
+    //
+    // ⚠ Issue #227: `entry` には `migrations/*.sql` の生テキストが comment ごと含まれる。
+    // `stripSqlComments` で comment を剥がしてから見ることで、「説明 comment にこの語を
+    // 書いただけで落ちる」ことを避け、検査を「実行される文に現れるか」に近づける
+    // （このファイル冒頭の doc「Issue #227」節を参照）。
     for (const entry of a.log) {
-      expect(entry).not.toMatch(/CREATE SCHEMA/);
-      expect(entry).not.toMatch(/SET LOCAL search_path/);
+      const executable = stripSqlComments(entry);
+      expect(executable).not.toMatch(/CREATE SCHEMA/);
+      expect(executable).not.toMatch(/SET LOCAL search_path/);
     }
   });
 
