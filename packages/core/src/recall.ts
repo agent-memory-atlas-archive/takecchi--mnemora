@@ -70,8 +70,26 @@ export interface FilteredOmission {
    * - `"taxonomy"`: **Phase 1 に実体が無いため、今は来ない。**labels テーブルは Phase 2
    *   （docs/memory-model.md §8、Issue #201）。あちらが入れば発火するようになる、
    *   という意味で `"tenant"` とは性質が違う。
+   *
+   * **`"decayed"`（マネージャー決定、Issue #196 /
+   * [ADR 0153](../../../docs/decisions/0153-recall-decay-floor-gate.md)）**:
+   * `decayFloorAt` を過ぎた（＝完全に減衰しきった）Memory が recall の候補から
+   * 外れたことを表す。**`"archived"` に相乗りさせない**——`archived` は
+   * `status` 列によるゲート（掃引が明示的に書き換えた状態）だが、`"decayed"` は
+   * `decay_floor_at` 列によるゲート（書き込み時に計算された時刻と「いま」の比較）であり、
+   * 別の列・別の条件・別の次の一手（`archived` は強化すれば戻る可能性があるが、
+   * `decayed` は強化すれば `decayFloorAt` 自体が先へ延びるため、そもそも次の recall では
+   * この条件に当たらなくなる）を持つ。
+   *
+   * **⚠ `count`/`countKind` は他の `filtered` 系と性質が違う。** ANN 段（段1）へ
+   * 押し下げた分（`VectorFilter.decayFloorAtAfter`）は、[ADR 0011](../../../docs/decisions/0011-no-window-count-in-ann-stage.md)
+   * が段1の候補生成について確立した理由と同じく、原理的に数えられない——ANN が
+   * 窓の外に残した候補の総数を知る手段が無い。**ここに載る `count` は、core が
+   * 段2の直前で全チャンネルの候補に対して掛ける後置フィルタが実際に落とした件数
+   * だけである。**⟹ `countKind` は常に `"lower_bound"`（押し下げで落ちた分は
+   * この数に含まれておらず、実際の総数はこれ以上でありうる）。
    */
-  condition: "tenant" | "superseded" | "forgotten" | "archived" | "taxonomy" | "period";
+  condition: "tenant" | "superseded" | "forgotten" | "archived" | "taxonomy" | "period" | "decayed";
   count: number;
   countKind: CountKind;
 }
@@ -272,7 +290,15 @@ const StageSkippedOmissionSchema = z.object({
 
 const FilteredOmissionSchema = z.object({
   kind: z.literal("filtered"),
-  condition: z.enum(["tenant", "superseded", "forgotten", "archived", "taxonomy", "period"]),
+  condition: z.enum([
+    "tenant",
+    "superseded",
+    "forgotten",
+    "archived",
+    "taxonomy",
+    "period",
+    "decayed",
+  ]),
   count: z.number().int().nonnegative(),
   countKind: CountKindSchema,
 }) satisfies z.ZodType<FilteredOmission>;
@@ -954,6 +980,32 @@ export interface RecallQuery {
    */
   digestBandLimit?: number;
   /**
+   * **忘却ゲート（decay floor gate）の明示的な opt-out**
+   * （マネージャー決定、Issue #196 / [ADR 0153](../../../docs/decisions/0153-recall-decay-floor-gate.md)）。
+   *
+   * **既定（省略 = `false`）では、`decayFloorAt` を過ぎた（＝完全に減衰しきった）Memory は
+   * recall の候補から外れる。**ANN チャンネル（段1）は `VectorFilter.decayFloorAtAfter` に
+   * 「いま」を押し下げ、語彙チャンネルは `LexicalFilter` を増やさず core の後置フィルタで
+   * 同じ述語（`memory.decayFloorAt > now`）を適用する（ADR 0153「決めたこと」3）。
+   *
+   * **⚠ これは破壊的変更である。**[ADR 0011](../../../docs/decisions/0011-no-window-count-in-ann-stage.md)
+   * の「Phase 1 では `decayFloorAtAfter` を読み取りフィルタに使わない」という決定を、
+   * ADR 0153 が明示的に上書きしている——**「使われない記憶が、静かに遠ざかる」
+   * （docs/north-star.md「目指す姿」）を、掃引（`status='archived'`）を呼んでいない期間にも
+   * 効かせるため。**
+   *
+   * `true` を渡すと、この PR より前の挙動（減衰しきった Memory も候補に残り続ける）に戻る
+   * ——北極星の問い2（「これを無効にしたとき、Memory Framework として成立するか」）に
+   * 応じて用意した明示的な逃げ道であり、既定を opt-in にする代わりに opt-out を持たせる形
+   * （ADR 0153「検討した代替案」）。
+   *
+   * `true` を渡したときの `explain.stages` の `candidate_generation` の `detail.decayGate`
+   * は `"disabled"` になる（既定は ANN が `"pushed_down"`、語彙が `"post_filtered"`）——
+   * **ゲートが効いたかどうかは、呼び出し側から常に見える**（マネージャー決定「⚠ 件数を
+   * 偽らない」の一部）。
+   */
+  includeFullyDecayed?: boolean;
+  /**
    * **連想枠（Issue #200、北極星「聞かれていないことを、自分から思い出す」）。**
    *
    * **省略時は連想を一切走らせない**（既定 off）——`association` を渡さない呼び出しの
@@ -1100,6 +1152,7 @@ export const RecallQuerySchema = z.object({
   budget: RecallBudgetSchema.optional(),
   scoreThreshold: z.number().optional(),
   digestBandLimit: z.number().int().positive().optional(),
+  includeFullyDecayed: z.boolean().optional(),
   association: RecallAssociationQuerySchema.optional(),
 }) satisfies z.ZodType<RecallQuery>;
 

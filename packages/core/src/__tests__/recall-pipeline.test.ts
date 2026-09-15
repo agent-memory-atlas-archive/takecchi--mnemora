@@ -564,6 +564,14 @@ describe("recall() — omitted.kind = 'score_not_comparable'（ADR 0044）", () 
   // ここでは `halfLifeHours = 0` かつ経過時間ちょうど 0 を使う——
   // `0.5 ** (0 / 0)` が `NaN` になる（実測: +1ms なら 0、−1ms なら +Infinity）。
   // この歯の時計は `NOW` に固定してあり、`recordedAt` も `NOW` なので経過時間は厳密に 0。
+  //
+  // ⚠ 2026-09（ADR 0153・Issue #196）追記: `halfLifeHours: 0` は `defaultDecayStrategy.floorAt`
+  // の `hours = 0 * log2(...)  = 0` により `decayFloorAt === recordedAt === NOW` になる——
+  // 忘却ゲートの境界（狭義の `>`）にちょうど乗り、**既定では段1にすら候補として現れなくなる**
+  // （score_not_comparable に届く前に、忘却ゲートが「decayed」として先に落とす）。
+  // これはこの describe が検査したい対象（段2の NaN 三分割）とは別の関心事なので、
+  // `includeFullyDecayed: true` でゲートを明示的に無効化し、以前と同じ経路（段2まで届かせる）
+  // を保つ。
 
   it("比較が決まらない候補は score_not_comparable に出る（件数と countKind つき）", async () => {
     const { runtime, stores } = buildRuntime();
@@ -572,7 +580,11 @@ describe("recall() — omitted.kind = 'score_not_comparable'（ADR 0044）", () 
     await createEmbeddedMemory(stores, [1, 0], { digest: "正常1" });
     await createEmbeddedMemory(stores, [0.9, 0.1], { digest: "正常2" });
 
-    const result = await runtime.recall(ctx, { vector: [1, 0], limit: 10 });
+    const result = await runtime.recall(ctx, {
+      vector: [1, 0],
+      limit: 10,
+      includeFullyDecayed: true,
+    });
     const digests = result.memories.map((m) => m.digest);
     expect(digests).toContain("正常1");
     expect(digests).toContain("正常2");
@@ -591,7 +603,13 @@ describe("recall() — omitted.kind = 'score_not_comparable'（ADR 0044）", () 
     await createEmbeddedMemory(stores, [1, 0], { digest: "壊れた", halfLifeHours: 0 });
     await createEmbeddedMemory(stores, [1, 0], { digest: "正常" });
 
-    const result = await runtime.recall(ctx, { vector: [1, 0], limit: 10, scoreThreshold: 0 });
+    // includeFullyDecayed: true の理由は上の describe 冒頭コメント（ADR 0153）を参照。
+    const result = await runtime.recall(ctx, {
+      vector: [1, 0],
+      limit: 10,
+      scoreThreshold: 0,
+      includeFullyDecayed: true,
+    });
     const rescore = result.explain.stages.find((st) => st.stage === "rescore");
     const detail = rescore?.detail as
       { scored: number; passedThreshold: number; notComparable: number } | undefined;

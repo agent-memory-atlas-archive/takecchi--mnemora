@@ -275,6 +275,12 @@ export async function runRecall(
   const wantsAnn = channels.includes("ann");
   const wantsLexical = channels.includes("lexical");
 
+  // 忘却ゲート（decay floor gate、マネージャー決定、Issue #196 / ADR 0153）。
+  // 既定で有効——opt-in ではなく opt-out（`RecallQuery.includeFullyDecayed`）。
+  // ADR 0011「Phase 1 では decayFloorAtAfter を読み取りフィルタに使わない」を
+  // ADR 0153 が明示的に上書きしている。
+  const decayGateActive = validatedQuery.includeFullyDecayed !== true;
+
   // 🔴 配線されていない語彙チャンネルを明示的に要求されたら、ここで投げる（ADR 0084 §4）。
   // **黙って0件を返さない。**理由は RecallQuery.channels の doc に書いてある——
   // これは「探したが無かった」ではなく「探せる状態になっていない」であり、
@@ -341,8 +347,14 @@ export async function runRecall(
         excludeProvenanceKinds: validatedQuery.excludeProvenanceKinds,
         occurredAfter: scope.occurredAfter,
         occurredBefore: scope.occurredBefore,
+        // ADR 0153（Issue #196）が ADR 0011「Phase 1 では decayFloorAtAfter を
+        // 読み取りフィルタに使わない」を明示的に上書きした。既定（decayGateActive）では
+        // 「いま」を押し下げ、`decayFloorAt` を過ぎた（完全に減衰しきった）Memory を
+        // 段1の候補集合そのものから外す——over-fetch の窓（k'）を、まだ生きている記憶で
+        // 埋める方向に働く。`includeFullyDecayed: true` を渡すと `undefined` になり、
+        // ADR 0153 より前の挙動（decayFloorAtAfter を渡さない）に戻る。
+        decayFloorAtAfter: decayGateActive ? now : undefined,
       },
-      // ADR 0011: decayFloorAtAfter は Phase 1 では読み取りフィルタに使わない。
       // subjectId は等値一致なので段1に降ろす（ADR 0023）。excludeProvenanceKinds も
       // 離散5値の独立列への等値比較なので同じ理由で段1に降ろす（ADR 0056）。period は
       // 連続値の範囲比較であり partial index の離散値向き制約（docs/recall.md 133行目）に
@@ -362,7 +374,15 @@ export async function runRecall(
     stages.push({
       stage: "candidate_generation",
       executed: candidateGenerationExecuted,
-      detail: { channel: "ann", kPrime, hits: annHits.length },
+      // decayGate（ADR 0153）: ANN は段1の VectorFilter.decayFloorAtAfter へ押し下げる
+      // ——落ちた件数は原理的に数えられない（ADR 0011 と同じ理由）ので、ここでは
+      // 「適用されたかどうか」だけを名乗る。件数は omitted.filtered(condition:'decayed') を見よ。
+      detail: {
+        channel: "ann",
+        kPrime,
+        hits: annHits.length,
+        decayGate: decayGateActive ? "pushed_down" : "disabled",
+      },
     });
   }
 
@@ -395,7 +415,16 @@ export async function runRecall(
     stages.push({
       stage: "candidate_generation",
       executed: lexicalExecuted,
-      detail: { channel: "lexical", kPrime, hits: lexicalHits.length },
+      // decayGate（ADR 0153）: `LexicalFilter` は decayFloorAtAfter を持たない
+      // （マネージャー決定3 — interface/adapter を増やさない）。代わりに core が
+      // 全チャンネル共通の後置フィルタで同じ述語（`memory.decayFloorAt > now`）を掛ける
+      // ——語彙チャンネルだけ減衰しきった記憶が返り続ける非対称を消す。
+      detail: {
+        channel: "lexical",
+        kPrime,
+        hits: lexicalHits.length,
+        decayGate: decayGateActive ? "post_filtered" : "disabled",
+      },
     });
   }
 
@@ -445,6 +474,10 @@ export async function runRecall(
   const memoriesById = new Map(fetchedMemories.map((m) => [m.id, m]));
 
   const excludeKinds = new Set(validatedQuery.excludeProvenanceKinds ?? []);
+  // 忘却ゲート（decay floor gate、マネージャー決定、Issue #196 / ADR 0153）の後置フィルタで
+  // 実際に落とした件数。ANN の押し下げ分はここに含まれない（原理的に数えられない）ので、
+  // これは常に「少なくともこれだけは落ちた」という下限である（下の omitted push を参照）。
+  let decayFilteredCount = 0;
   const filteredCandidates: { memory: Memory; distance?: number; lexicalCoverage?: number }[] = [];
   for (const memoryId of candidateIds) {
     const raw = rawById.get(memoryId);
@@ -472,10 +505,35 @@ export async function runRecall(
     if (scope.occurredAfter && effectiveTime < scope.occurredAfter) continue;
     if (scope.occurredBefore && effectiveTime > scope.occurredBefore) continue;
     if (excludeKinds.has(memory.provenance.kind)) continue;
+    // 忘却ゲート（ADR 0153）: `LexicalFilter` に decayFloorAtAfter を足さず（マネージャー決定3）、
+    // ここで**全チャンネル共通**の述語を適用する——ANN の候補にも同じ述語が掛かる。
+    // 既定で押し下げている ANN の候補は `memory.decayFloorAt > now` を段1で既に満たして
+    // いるはずなので、通常はここでは何も落とさない（実際に落ちないことを歯で検算する。
+    // マネージャー決定「押し下げと後置が同じ述語であることの検算になる」）。
+    // 境界は `VectorFilter.decayFloorAtAfter` と同じ狭義の `>`（ちょうど境界の Memory は除外）。
+    if (decayGateActive && !(memory.decayFloorAt > now)) {
+      decayFilteredCount += 1;
+      continue;
+    }
     filteredCandidates.push({
       memory,
       distance: raw.distance,
       lexicalCoverage: raw.lexicalCoverage,
+    });
+  }
+
+  // 忘却ゲートが実際に落とした件数を報告する（マネージャー決定「黙って減らさない。
+  // ただし件数を偽らない」）。0件のときは push しない——ゲートが1件も落とさなかった
+  // 回に偽の omitted を積まない（マネージャー決定の明示的な注意）。
+  // `condition: 'archived'` に相乗りしない——status ゲートとは別の列・別の理由（recall.ts 参照）。
+  if (decayFilteredCount > 0) {
+    omitted.push({
+      kind: "filtered",
+      condition: "decayed",
+      count: decayFilteredCount,
+      // ANN の押し下げ分は数えられない（ADR 0011）ので、これは下限——
+      // 実際に落ちた総数はこれ以上でありうる。
+      countKind: "lower_bound",
     });
   }
 

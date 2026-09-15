@@ -175,6 +175,8 @@ LIMIT $3;  -- k' = k × over-fetch 係数
 2. **`m.decay_floor_at > now()` の行を Phase 1 のクエリから外した。** roadmap.md の Phase 1 範囲の記述（「`decay_floor_at` 列は Phase 1 では書き込むだけ」「Phase 2 で `WHERE decay_floor_at > now()` を使い始めるだけ」）が一次資料であり、本書の当初案がこの行を最初から含めていたのは Phase 分けと矛盾していた。Phase 1 はこの行を持たない。索引の3列目としては最初から `decay_floor_at` を持つため、Phase 2 で読み取りに使い始める際に索引の作り直しは不要。
 3. **`count(*) OVER ()` を段1のクエリから外した。** 当初案は「追加のクエリ無しに候補件数を正確に取得でき、`omitted.countKind = 'exact'` を安く出すための実務上の要である」としていたが、これは HNSW 索引の上では成立しないことが実測で分かった（PostgreSQL 18.6 + pgvector 0.8.6、50万行）。索引スキャンを使うプランでは `count(*) OVER ()` の値は真の候補件数ではなく `hnsw.ef_search` に依存する値になり（データと無関係な定数）、正しい件数を出すプランでは索引が捨てられ Seq Scan に落ちる（本書冒頭が禁じる「索引が効かない形」そのもの）。**代わりに §5（目次帯）が既にスコープ全体の群カウント集約を走らせており、その総和が「フィルタ条件下に何件あったか」そのものである。** 追加コスト無しに exact な件数を得られる経路は、段1のクエリではなく段5の集約から得る。詳細は ADR 0011（`docs/decisions/0011-no-window-count-in-ann-stage.md`）を参照。
 
+**⚠ 2026-09 追記（[ADR 0153](./decisions/0153-recall-decay-floor-gate.md)、Issue #196）: 上の2番目の訂正（`m.decay_floor_at > now()` を Phase 1 のクエリから外す）は、その後 ADR 0153 が明示的に上書きした。** `recall()` は既定でこの行を段1のクエリに含める（コメントアウトしていたクエリ骨格の1行が、既定で有効になったと読み替えること）。`RecallQuery.includeFullyDecayed: true` を渡すと、この節が書いていた Phase 1 の挙動（この行を含めない）に戻る。理由・引き受けた負債・語彙チャンネル側の扱いは ADR 0153 を参照。**この節の本文・上の3点の記述自体は書き換えない**（履歴を書き換えない）。
+
 ### over-fetch 係数の決め方
 
 既定案は **k' = k × 4**（k=10 なら k'=40 を取得し、段2で10件に絞る）。この数字に強い根拠はなく、次の裁量として書く。
@@ -235,6 +237,17 @@ type Omission =
       count: number; countKind: CountKind }
 ```
 
+**⚠ 2026-09 追記（[ADR 0153](./decisions/0153-recall-decay-floor-gate.md)、Issue #196）**:
+`filtered` の `condition` は上のコード例には無い `'decayed'` も持つ（本節の型例は書き換えない
+——追記としてここに足す）。`decay_floor_at` を過ぎた（完全に減衰しきった）Memory が
+recall の候補から外れたことを表す。`'archived'` には相乗りしない——`archived` は `status`
+列によるゲート、`decayed` は `decay_floor_at` 列によるゲートであり、別の列・別の理由・
+別の次の一手（`archived` は強化すれば戻る可能性があるが、`decayed` は強化すれば
+`decayFloorAt` 自体が先へ延びるため、そもそも次の recall では条件に当たらなくなる）を持つ。
+**`count`/`countKind` は他の `filtered` 系と性質が違う**——ANN 段（段1）へ押し下げた分は
+ADR 0011 と同じ理由で原理的に数えられず、ここに載る `count` は core の後置フィルタが
+実際に落とした件数だけである。⟹ `countKind` は常に `'lower_bound'`。詳細は ADR 0153。
+
 **⚠ 2026-09-16 追記**: `reason` は以前 `'budget_exhausted'` も持っていたが、
 生成するコードが一度も無かった（Issue #206 / [ADR 0117](./decisions/0117-unreachable-union-values-inventory.md)
 の分類3）。オーナー判断を受けて
@@ -263,6 +276,8 @@ type Omission =
 | `ann_unreached` | 近似索引がこの scope に届かなかった可能性がある、と分かる（ADR 0025・0026）。`ann_truncated`（打ち切り）とは別の出来事——こちらは k' に届く前に候補を取りこぼした疑いであり、厳密検索へのフォールバックや subject を絞り直す一手につながる。件数は原理的に分からない（`countKind` は常に `'unknown'`）。 |
 | `score_not_comparable` | **スコアが閾値と比較できなかった**と分かる（[ADR 0044](./decisions/0044-score-not-comparable-omission.md)）。閾値を緩めても直らない——`below_threshold` とは別の出来事である。実際に起きるのは埋め込みがゼロベクトルのとき（コサインが未定義になり距離が `NaN` になる。[ADR 0040](./decisions/0040-zero-vector-never-returned.md)）で、次の一手は「その記憶の埋め込みを作り直す」であって「閾値を下げる」ではない。**件数は数え上げられる**（段2が触った候補の三分割なので）——ただし `countKind` は三分割が網羅であることを確かめた結果から決まる。 |
 | `unit_assembly_dropped` | **段3で単位を組むときに候補が漏れた**と分かる（[ADR 0043](./decisions/0043-unit-assembly-dropped-omission.md)）。原因は `contested_with_id` の一対一が破れていることであり、次の一手は「その対向関係を直す」——閾値にも予算にも索引にも関係がない。**⚠ 口は在るが、今日は `Runtime` 経由では発火しない**（2026-09-16 訂正）——[Issue #197](https://github.com/takecchi/mnemora/issues/197) / [ADR 0134](./decisions/0134-mark-contested-explicit-operation.md) で `Runtime.markContested` が入り、**`contested` を書く主体そのものは存在するようになった。**ただし `markContested` は両側 `status='active'` の CAS を課したうえで相互参照を1トランザクションで書くため、**`Runtime` 経由で作られた `contested` ペアが一対一を破ることは無い**——⟹ **今日この分岐が通るとすれば、`MemoryStore` を `Runtime` を経由せず直接叩いた場合に限る**（`packages/core/src/recall-runtime.ts` の同じ分岐のコメントが、同じことを書いている）。**さらに、`markContested` を呼ぶ本番コードは今日ひとつも無い**（【実測】2026-09-16、`main` が `5f11291` の時点で `rg "markContested" --glob '!**/__tests__/**' packages examples` が返すのは定義と適合テストだけである）——追跡は [Issue #284](https://github.com/takecchi/mnemora/issues/284)。`countKind` は `'lower_bound'`——二重計上が同時に起きていると消失が隠れるため、下限しか言えない。 |
+
+**`filtered(condition: 'decayed')` の次の一手（2026-09 追記、[ADR 0153](./decisions/0153-recall-decay-floor-gate.md)、Issue #196）**: 忘却ゲートが効いたと分かる。`filtered(condition:'archived')` とは別の一手につながる——`archived` は強化すれば戻る可能性があるが（次の recall で `status` を見直す）、`decayed` は `RecallQuery.includeFullyDecayed: true` を明示的に渡さない限り、強化しても `decayFloorAt` が先へ延びるだけで、次の recall では再びこの条件に当たらなくなる。
 
 ### 件数にも「無いの種類」を適用する
 

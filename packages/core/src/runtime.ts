@@ -768,6 +768,14 @@ export interface RestoreArchivedOptions {
  * - `"restored"`: 今回の呼び出しで実際に `status` を `archived` から `active` へ動かし、
  *   `memory_events` に `kind: 'restored'` を積んだ。`previousStatus` は常に `"archived"`
  *   （このメソッドが動かす遷移はこの1本だけであり、他の値を取らない）。
+ *   **⚠ 2026-09 追記（マネージャー決定、Issue #196 / [ADR 0153](../../../docs/decisions/0153-recall-decay-floor-gate.md)）:
+ *   `status` の復帰に続けて `MemoryStore.reinforce` も呼ぶ**（`decay_floor_at` を
+ *   復帰の瞬間から引き直す。理由は `restoreArchived` の JSDoc・ADR 0153 を参照）。
+ *   **`reinforce` が失敗しても、既に成功した `status` の復帰は握り潰さない**
+ *   ——`kind` は `"restored"` のままで、失敗は `reinforceError` に運ぶ
+ *   （additive。省略時は成功、または対象が無かった旧来の形と区別が付かないという
+ *   ことはない——`reinforce` は必ず `status` の復帰の直後に試みるので、この欄が
+ *   無ければ「試みて成功した」ことを意味する）。
  * - `"status_not_archived"`: 対象は最初から（または同じ呼び出し内の先行する要素の
  *   処理によって）`archived` ではなかった。**書き込みは一切起きていない。**
  *   `status` に現在値（`active`/`superseded`/`contested`/`forgotten` のいずれか）が入る。
@@ -784,7 +792,18 @@ export interface RestoreArchivedOptions {
  * - `"not_attempted"`: それより前の要素が `"failed"` になったため、まだ見ていない。
  */
 export type RestoreArchivedOutcome =
-  | { memoryId: MemoryId; kind: "restored"; previousStatus: "archived" }
+  | {
+      memoryId: MemoryId;
+      kind: "restored";
+      previousStatus: "archived";
+      /**
+       * `status` の復帰に続けて試みた `reinforce` が失敗した場合だけ在る
+       * （マネージャー決定、Issue #196 / ADR 0153）。省略時（`undefined`）は
+       * `reinforce` も成功したことを意味する——「試みていない」という第3の状態は
+       * 無い（`reinforce` は復帰が成功した全件に対して必ず試みる）。
+       */
+      reinforceError?: string;
+    }
   | { memoryId: MemoryId; kind: "status_not_archived"; status: Exclude<MemoryStatus, "archived"> }
   | { memoryId: MemoryId; kind: "not_found" }
   | { memoryId: MemoryId; kind: "conflicted"; observedStatus: MemoryStatus | null }
@@ -1184,22 +1203,35 @@ export interface Runtime {
    * 同じ規律。docs/memory-model.md §9）。`opts.reason` を渡すと `meta.reason` に入り、
    * 省略すると `meta` に `reason` キー自体を持たせない。
    *
-   * ⚠ **`decay_floor_at` は動かさない。**「復帰」と「強化」は別の操作である——
-   * `decay_floor_at` の再計算は `reinforce`（ADR 0041・ADR 0048）だけが持つ責務であり、
-   * このメソッドはそれを複製しない。**⟹ 復帰した直後の Memory の `decay_floor_at` は
-   * 依然として過去を指したままである可能性が高い**（そもそも過去を指していたから
-   * `archived` になった）——その状態で `sweepArchive` を同じかそれ以降の `now` で
-   * もう一度呼ぶと、**同じ Memory が即座にまた `archived` へ戻る。**呼び戻した Memory を
-   * 居着かせたい呼び出し側は、この呼び出しに続けて `reinforce(ctx, id, now)` を
-   * 別途呼ぶこと（`restoreArchived` 自身はそれを代行しない。ADR 0122「引き受けた負債」
-   * 参照）。
+   * ⚠ **2026-09 訂正（マネージャー決定、Issue #196 / [ADR 0153](../../../docs/decisions/0153-recall-decay-floor-gate.md)）:
+   * `decay_floor_at` は動かす。** ADR 0122 の当初決定は「復帰と強化は別の操作であり、
+   * `decay_floor_at` の再計算は複製しない。居着かせたい呼び出し側が `reinforce` を
+   * 別途呼ぶこと」だった。**この決定は ADR 0153 が覆した。** 理由は、ADR 0153 が
+   * `recall()` に既定 ON の忘却ゲート（`decayFloorAt <= now` の Memory を候補から
+   * 除外する）を導入したことで、上記の「引き受けた負債」が実害に変わったため——
+   * `sweepArchive` が `archived` にする選定条件はまさに `decayFloorAt <= now` であり、
+   * `restoreArchived` の対象は定義上すべてこの条件を満たす。⟹ `reinforce` を
+   * 別途呼ばない限り、`status` は `"active"` に戻っても**既定では recall に二度と
+   * 現れない**——呼び出し側から見ると「restored と言われたのに何も返ってこない」。
+   * これは `docs/north-star.md`「目指す姿」の逐語「必要な場合だけ過去の記憶を
+   * 再び呼び戻せる」と正面から食い違う（`AGENTS.md`「正典と実装が食い違ったら、
+   * バグなのは実装のほう」）。**⟹ このメソッドは、`status` の復帰に成功した対象へ
+   * 続けて `MemoryStore.reinforce(ctx, id, now)` を呼ぶ**（新しい interface・adapter
+   * は増やさない。既存の契約された口をそのまま呼ぶだけ）。**復帰させるという行為
+   * そのものが「この記憶がいま必要だ」という明示の信号であり、北極星が言う
+   * 「必要な場合」に当たる、というのが ADR 0153 の意味づけである。**
    *
-   * ⚠ **`recall()` 側は一切変更していない。**`status` が `"active"` へ戻った時点で、
+   * `reinforce` が失敗しても、既に成功した `status` の復帰は握り潰さない——`outcomes`
+   * の `kind` は `"restored"` のままで、失敗は `RestoreArchivedOutcome` の
+   * `reinforceError` に運ぶ（`RestoreArchivedOutcome` の doc コメント参照）。
+   *
+   * ⚠ **`recall()` 自身は一切変更していない。**`status` が `"active"` へ戻った時点で、
    * 段1の候補生成が使う既存の status ゲート（`["active","contested"]`、
    * `recall-runtime.ts`）へ他の `active` な Memory と全く同じ経路で合流する——
    * `docs/recall.md` §2 段0「スコープの外延」・§5 の被覆不変条件のどちらも、
-   * この操作のために1行も変更していない（`recall` はこの Memory を「スコープ内」の
-   * 集合へ他の `active` な行と区別なく含めるようになるだけである）。
+   * この操作のために1行も変更していない。**変わったのはこのメソッドが `reinforce`
+   * も呼ぶようになったことだけであり**、それによって `decayFloorAt` が「いま」より
+   * 先へ進むので、既定の忘却ゲート（ADR 0153）を通過できるようになる。
    */
   restoreArchived(
     ctx: Ctx,
@@ -2256,7 +2288,48 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
           },
         );
         byId.set(id, memory);
-        outcomes.push({ memoryId: id, kind: "restored", previousStatus: "archived" });
+
+        // マネージャー決定（Issue #196 / ADR 0153「restoreArchived と忘却ゲートの
+        // 相互作用」）: 復帰そのものが「いま必要だ」という明示の信号なので、
+        // reinforce して decay_floor_at を復帰の瞬間から引き直す。これをしないと、
+        // status は active に戻ったのに decayFloorAt が過去を指したままなので、
+        // recall() の既定の忘却ゲート（ADR 0153、`RecallQuery.includeFullyDecayed`
+        // の既定 false）に阻まれて recall に二度と現れない——「必要な場合だけ過去の
+        // 記憶を再び呼び戻せる」（docs/north-star.md「目指す姿」）と正面から食い違う。
+        // interface/adapter は増やさない——既存の契約された口 `reinforce`
+        // （`docs/memory-model.md` §7、ADR 0041・ADR 0048）をそのまま呼ぶだけである。
+        //
+        // ⚠ status の復帰は既にここで成功している。reinforce が失敗しても、
+        // 既に成功した復帰を握り潰さない——outcome は "restored" のままにし
+        // （`kind` を "failed" に落とさない）、reinforce の失敗は追加欄
+        // `reinforceError` で運ぶ（additive。既存欄の意味は変えない）。
+        // これは既存の「競合以外の例外は打ち切って残りを not_attempted にする」
+        // という規律（下の catch 節）とは別の規律である——あちらは「書き込みその
+        // ものが起きなかった」場合の安全弁だが、こちらは「主たる書き込み
+        // （status の復帰）は成功したあとの、副次的な強化の失敗」であり、
+        // 呼び出し側にとっての意味が違う（前者は「何も変わっていない」、
+        // 後者は「復帰はしたが、忘却ゲートに再び阻まれるかもしれない」）。
+        // だから reinforce 専用の内側の try/catch で切り離し、外側の catch
+        // （`MemoryStatusConflictError` 分岐・打ち切り分岐）に一切触れさせない。
+        const reinforcedAt = clock.now();
+        let reinforceError: string | undefined;
+        try {
+          const reinforced = await deps.memoryStore.reinforce(ctx, id, reinforcedAt);
+          byId.set(id, reinforced);
+        } catch (err) {
+          reinforceError = err instanceof Error ? err.message : String(err);
+        }
+
+        if (reinforceError === undefined) {
+          outcomes.push({ memoryId: id, kind: "restored", previousStatus: "archived" });
+        } else {
+          outcomes.push({
+            memoryId: id,
+            kind: "restored",
+            previousStatus: "archived",
+            reinforceError,
+          });
+        }
       } catch (error) {
         if (error instanceof MemoryStatusConflictError) {
           // 安全弁（`forget` と同じ形。1回だけ再読して打ち切る——上限の無い
