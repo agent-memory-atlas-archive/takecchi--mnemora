@@ -204,6 +204,7 @@ gh pr list --state open --limit 20
 | **擬似 provider の数字を「性能」と読む** | arm A（擬似埋め込み）の **MRR は 0.018**＝実質ランダム | 想起の質を測るなら `recorded`（ADR 0051）。`deterministic` は配線と契約の検査用 |
 | **`npm view` で publish の成否を判断する** | registry の読み取り側は書き込みに数分遅れ、**CDN を迂回する `?write=true` でも 404 を返す**（ADR 0066 測ったこと8） | `npm publish` の出力で判断する |
 | **「CI が緑」を素朴に判定する**（PR 番号だけで見る／run 全体の `conclusion` を見る／`mergeStateStatus` を見る／手元の門の緑で代用する） | **check の本数は時間とともに増えうる・run と job の `conclusion` は別・`mergeStateStatus` は終端後の結果であって根拠にならない・手元の緑は CI の緑を予測しない**（Issue #228。5点のうち run/job の差・手元と CI の乖離は本 ADR 0132 で自分の `gh` 呼び出しにより再検算した） | §2.1 の手順どおり、**head sha を明示**して `check-runs` を job 単位で読む。`node scripts/ci-green-check.mjs --pr <番号>` が機械化している |
+| **ADR PR をマージするとき、索引の再生成を忘れる** | `docs/decisions/README.md` の ADR 索引は**機械生成**であり（[ADR 0137](./decisions/0137-adr-index-generated-from-source.md)）、**ADR を足す PR の作成者は索引を触らない**——触らないことが並行 PR 間の行位置の衝突を消している仕組みである。⟹ **マージする側が再生成しないと `main` の索引が陳腐化する**（`main` 限定の鮮度の歯が赤くなる） | **squash merge する直前に、PR ブランチ上で**次を実行してコミットし、push してからマージする: `git fetch origin main && git merge origin/main` → `node scripts/generate-adr-index.mjs` → commit → push。⚠ **マージ「後」に `main` 上で再生成する形にしない**——`ci.yml` は `on: push: branches: [main]` であり、**マージで生まれた `main` のコミットが索引の古いまま CI に入って赤くなる**（その赤は履歴に残る）。手順は ADR 0137「決定」2番
 
 ---
 
