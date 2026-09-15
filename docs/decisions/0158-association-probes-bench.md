@@ -274,4 +274,44 @@ probe を直す人、あるいは「それでもなお門にすべきか」を�
   更新していない（ADR 0137 の設計。ADR を追加する PR の作成者は索引を触らない）。
   マージする側が、squash merge 直前に再生成する。
 
+---
+
+## 追記（Issue #317 の修正、2026-09-16）
+
+**本節は、本 ADR が既に足すことを決めた bench の probe 集合が、自ら宣言した
+条件（上の「4条件」）を破っていたことを訂正する。新しい ADR は起こしていない**
+——決定（bench を足すこと自体）は変わらず、変わるのはその bench が自ら主張した
+実測条件の食い違いを直したことだけだからである。
+
+**何が破れていたか**: 条件② 「gold はクエリ単独では11位以降にしか出ない」が
+`ascii-project` / `name-trip` の2件で破れていた。`off` arm（連想枠なし）の
+`goldRank` がちょうど `recallLimit`（10）で、クエリ単独で `limit=10` 以内に
+gold が入っていた（Issue #317 本文、CI run `35020771347`）。
+
+**どう直したか**: `ASSOCIATION_PROBES`（`bridge`/`query`/`anchor`/`gold`/`distractor`）
+は1文字も変えていない。`ASSOCIATION_HAYSTACK` に、この2 probe 専用の filler を
+2文だけ足した——**話題は query に近いが、bridge 語を持たない**（Issue #317 の
+コメントが名指しで推奨した方向）:
+
+```
+"担当している別件の見積もりをまだ作成していません。" // ascii-project 用
+"来週、大阪への出張の日程を変更しました。"           // name-trip 用
+```
+
+**手元の素コサイン計算**（`@mnemora/local-embedding`、CI と同じ
+`ruri-v3-30m/sym/256次元`）で、追加前は `ascii-project`/`name-trip` とも
+`goldRank=10`（CIの実測と一致）、追加後は `goldRank=11`/`12` に下がり、
+他10 probe の相対順位（`goldRank`/`anchorRank`/`distractorRank`）は変化しないことを
+確認した。**素コサインは `recall()` の実ランキングと完全一致しないため、
+最終判定は CI に委ねている**（PR 本文参照）。
+
+**`name-meeting` について**: `maxCount=10` でも一度も gold を返していない事実
+（旧・新 haystack のどちらでも `goldRank=null`）を、本ファイルの docstring に
+「確かめていないこと」として明記した。**場を弱める方向の変更はしていない**
+——Issue #317 のコメントが名指しで禁じている。
+
+**#316（非決定性）は本追記の範囲外であり、未解決のまま。** 上の「引き受けた
+負債」1・2番はそのまま残る——②の一部が直っても、①が残っている限り
+`goldReturnedCount` の値を「連想枠が効いた」の証拠として読めない。
+
 Refs #291, #316, #317

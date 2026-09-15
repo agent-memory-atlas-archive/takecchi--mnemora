@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { DEFAULT_HAYSTACK_SIZE, buildHaystackUtterance } from "../probe-set.js";
+import { buildHaystackUtterance } from "../probe-set.js";
 import type { ProbeUtterance } from "../probe-set.js";
 import {
   ASSOCIATION_PROBES,
@@ -66,11 +66,11 @@ describe("association-probe-set", () => {
   // 会話の組み立て
   // ---------------------------------------------------------------------------
 
-  it("buildAssociationProbeSetConversation(): 既定の haystackSize で 12×3 + haystackSize = 96件", () => {
+  it("buildAssociationProbeSetConversation(): 既定の haystackSize で 12×3 + haystackSize = 98件（Issue #317 で60→62）", () => {
     const utterances = buildAssociationProbeSetConversation();
-    expect(DEFAULT_HAYSTACK_SIZE).toBe(60);
-    expect(utterances).toHaveLength(ASSOCIATION_PROBES.length * 3 + DEFAULT_HAYSTACK_SIZE);
-    expect(utterances).toHaveLength(96);
+    expect(ASSOCIATION_HAYSTACK_SIZE).toBe(62);
+    expect(utterances).toHaveLength(ASSOCIATION_PROBES.length * 3 + ASSOCIATION_HAYSTACK_SIZE);
+    expect(utterances).toHaveLength(98);
   });
 
   it("buildAssociationProbeSetConversation(4): anchor/gold/distractor の externalId・kind・text が probe と対応する", () => {
@@ -163,10 +163,10 @@ describe("association-probe-set", () => {
 });
 
 describe("ASSOCIATION_HAYSTACK(専用 haystack) — なぜ buildHaystackUtterance を使わないか", () => {
-  it("60件あり、1件も重複していない", () => {
-    expect(ASSOCIATION_HAYSTACK_SIZE).toBe(60);
-    expect(ASSOCIATION_HAYSTACK).toHaveLength(60);
-    expect(new Set(ASSOCIATION_HAYSTACK).size).toBe(60);
+  it("62件あり、1件も重複していない（Issue #317 で60→62。条件②の修正で2件足した）", () => {
+    expect(ASSOCIATION_HAYSTACK_SIZE).toBe(62);
+    expect(ASSOCIATION_HAYSTACK).toHaveLength(62);
+    expect(new Set(ASSOCIATION_HAYSTACK).size).toBe(62);
   });
 
   it("⭐ probe-set.ts のテンプレート生成 haystack を1件も使っていない", () => {
@@ -183,7 +183,7 @@ describe("ASSOCIATION_HAYSTACK(専用 haystack) — なぜ buildHaystackUtteranc
   it("⭐ 会話の haystack は ASSOCIATION_HAYSTACK から来ている(生成器から来ていない)", () => {
     const conversation = buildAssociationProbeSetConversation();
     const haystackTexts = conversation.filter((u) => u.kind === "haystack").map((u) => u.text);
-    expect(haystackTexts).toHaveLength(60);
+    expect(haystackTexts).toHaveLength(62);
     for (const text of haystackTexts) {
       expect(ASSOCIATION_HAYSTACK).toContain(text);
     }
