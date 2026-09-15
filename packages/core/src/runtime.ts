@@ -653,6 +653,71 @@ export interface SweepArchiveResult {
   reachedLimit: boolean;
 }
 
+/**
+ * `runtime.restoreArchived` の対象（Issue #195、ADR 0122）。`ForgetTarget` と**意図的に
+ * 同じ形**——`{ memoryId }`（単数）と `{ memoryIds }`（複数）のどちらでも同じ意味論であり、
+ * 内部で `MemoryId[]` に正規化してから処理する。
+ */
+export type RestoreArchivedTarget = { memoryId: MemoryId } | { memoryIds: MemoryId[] };
+
+/** `runtime.restoreArchived` の任意オプション（Issue #195、ADR 0122）。`ForgetOptions` と同じ形。 */
+export interface RestoreArchivedOptions {
+  /**
+   * 監査ログ（`memory_events.meta.reason`）に残る自由文。省略時、`meta` に `reason`
+   * キー自体を持たせない（`ForgetOptions.reason` と同じ規律）。
+   */
+  reason?: string;
+  /** イベントの `actor`。省略時 `{ type: "system" }`。 */
+  actor?: EventActor;
+}
+
+/**
+ * `runtime.restoreArchived` が対象1件ごとに返す結果（Issue #195、ADR 0122）。
+ * `ForgetOutcome` と**同じ6つの `kind`**（`forgotten`/`already_forgotten` の位置が
+ * `restored`/`status_not_archived` に入れ替わるだけ）——呼び出し側の次の一手が違う
+ * 状況を1つの `boolean` に潰さない、という同じ「無い」の分類（ADR 0008）を適用する。
+ *
+ * - `"restored"`: 今回の呼び出しで実際に `status` を `archived` から `active` へ動かし、
+ *   `memory_events` に `kind: 'restored'` を積んだ。`previousStatus` は常に `"archived"`
+ *   （このメソッドが動かす遷移はこの1本だけであり、他の値を取らない）。
+ * - `"status_not_archived"`: 対象は最初から（または同じ呼び出し内の先行する要素の
+ *   処理によって）`archived` ではなかった。**書き込みは一切起きていない。**
+ *   `status` に現在値（`active`/`superseded`/`contested`/`forgotten` のいずれか）が入る。
+ *   `ConsolidateSourceOutcome.status_not_active` と同じ命名規律——「対象は見た。
+ *   だが前提の状態ではなかった」を1つの語で表す。
+ * - `"not_found"`: そのテナントにその id の Memory がそもそも無い。
+ * - `"conflicted"`: compare-and-swap が破れた——`getMany` で読んだ時点は `archived` だったが、
+ *   実際に書きに行った時点では別の書き込みが割り込んでいた。**このメソッドは自動で
+ *   再試行しない。**再読した結果が `"active"`（＝別の呼び出しがちょうど同じ復帰を
+ *   先に済ませていた）だった場合は `"status_not_archived"` に含める——「求めていた状態に
+ *   既に居る」ことは対立ではない（`forget` の `already_forgotten` と同じ扱い）。
+ *   それ以外の状態に変わっていた場合だけ `"conflicted"` として `observedStatus` を運ぶ。
+ * - `"failed"`: 競合以外の例外で書き込みそのものが失敗した。**この時点で処理を打ち切る。**
+ * - `"not_attempted"`: それより前の要素が `"failed"` になったため、まだ見ていない。
+ */
+export type RestoreArchivedOutcome =
+  | { memoryId: MemoryId; kind: "restored"; previousStatus: "archived" }
+  | { memoryId: MemoryId; kind: "status_not_archived"; status: Exclude<MemoryStatus, "archived"> }
+  | { memoryId: MemoryId; kind: "not_found" }
+  | { memoryId: MemoryId; kind: "conflicted"; observedStatus: MemoryStatus | null }
+  | { memoryId: MemoryId; kind: "failed"; error: string }
+  | { memoryId: MemoryId; kind: "not_attempted" };
+
+/**
+ * `runtime.restoreArchived` の結果（Issue #195、ADR 0122）。
+ *
+ * ⛔ `restoredCount` のような派生値を持たない（`ForgetResult`/`ConsolidationResult` と
+ * 同じ理由——`outcomes` を数えれば得られる値を欄として複製すると、片方だけ直して
+ * ずれるという、このリポジトリが繰り返し踏んできた欠陥を新しく作ることになる）。
+ */
+export interface RestoreArchivedResult {
+  /**
+   * 入力（`RestoreArchivedTarget` を正規化した `MemoryId[]`）と**同じ順序・同じ長さ**。
+   * 入力に同じ id が2回現れたら、結果にも2回現れる（`ForgetResult.outcomes` と同じ規律）。
+   */
+  outcomes: RestoreArchivedOutcome[];
+}
+
 export interface Runtime {
   observe(ctx: Ctx, input: ObserveInput): Promise<ObserveResult>;
   /**
@@ -739,6 +804,69 @@ export interface Runtime {
    * 同じ立場。`opts.now`/`opts.limit` のどちらにも既定値を置かない規律も共有する）。
    */
   sweepArchive(ctx: Ctx, opts: ArchiveDecayedOptions): Promise<SweepArchiveResult>;
+  /**
+   * Issue #195（[ADR 0122](../../../docs/decisions/0122-restore-archived-memory.md)）:
+   * `archived` な Memory を、呼び出し側が**明示的に**取り戻す。`sweepArchive`
+   * （ADR 0114）が閉じる方向（`active` → `archived`）だけを持っていた片道を、
+   * 開く方向（`archived` → `active`）で埋める——`docs/north-star.md` が引くオーナー
+   * 仕様§48「必要な場合だけ過去の記憶を再び呼び戻せる」の、その「呼び戻せる」側。
+   *
+   * 🔴 **`MemoryStore` に新しい任意メソッドを足していない。**`sweepArchive`
+   * （`archiveDecayed?`）と違い、この操作は「`status` を1つ動かし、同一トランザクションで
+   * `memory_events` に1件積む」という、**既に必須メソッドとして存在する
+   * `MemoryStore.updateStatusWithEvent`（ADR 0031）がそのまま満たせる形**をしている
+   * ——`archived` → `active` への compare-and-swap を撃つだけであり、`archiveDecayed`
+   * のような「範囲走査して複数件を一度に選ぶ」独自のクエリ形状を必要としない。
+   * **⟹ `supported: false` を名乗る余地が無い**（`MemoryStore` を実装するすべての
+   * adapter で、追加のコードなしに今日から動く）。
+   *
+   * 手順（`forget` (`ForgetOutcome` の doc コメント) と同じ骨格。**新しいメソッドを
+   * 足さない代わりに、アルゴリズムの形をできる限り揃えた**）:
+   * 1. `target` を `MemoryId[]` に正規化する。空配列は store に一切触れず
+   *    `{ outcomes: [] }`。
+   * 2. `getMany` で一括読み。存在しなければ `"not_found"`。`status !== "archived"`
+   *    なら `"status_not_archived"`（現在の `status` を添える。書き込み無し）。
+   * 3. それ以外（`status === "archived"`）は、観測した `"archived"` を `expectedStatus`
+   *    にした compare-and-swap で `updateStatusWithEvent(ctx, id, "active",
+   *    { expectedStatus: "archived" }, { kind: "restored", ... })` を呼ぶ。
+   *    {@link MemoryStatusConflictError} が投げられたら**1回だけ**再読し、
+   *    再読した `status` が `"active"`（＝別の呼び出しが先に同じ復帰を済ませていた）
+   *    なら `"status_not_archived"`、`null`（行が無くなっていた）なら `"not_found"`、
+   *    それ以外なら `"conflicted"` として `observedStatus` を返す——**上限の無い
+   *    再試行ループにはしない**（`forget` と同じ安全弁）。
+   * 4. それ以外の例外は `"failed"` を積んだ上で**その場で処理を打ち切り**、残りの
+   *    対象は一切試みずに `"not_attempted"` として返す。例外はこのメソッドの外へは
+   *    投げない。
+   *
+   * `memory_events` へ積むイベントの `kind` は `"restored"`
+   * （[ADR 0122](../../../docs/decisions/0122-restore-archived-memory.md) が
+   * `MemoryEventKind` へ足した新しい値）。`digestSnapshot` にはその Memory の
+   * 現在の `digest` を入れ、**`content`（本文）は運ばない**（`forget`/`reextract` と
+   * 同じ規律。docs/memory-model.md §9）。`opts.reason` を渡すと `meta.reason` に入り、
+   * 省略すると `meta` に `reason` キー自体を持たせない。
+   *
+   * ⚠ **`decay_floor_at` は動かさない。**「復帰」と「強化」は別の操作である——
+   * `decay_floor_at` の再計算は `reinforce`（ADR 0041・ADR 0048）だけが持つ責務であり、
+   * このメソッドはそれを複製しない。**⟹ 復帰した直後の Memory の `decay_floor_at` は
+   * 依然として過去を指したままである可能性が高い**（そもそも過去を指していたから
+   * `archived` になった）——その状態で `sweepArchive` を同じかそれ以降の `now` で
+   * もう一度呼ぶと、**同じ Memory が即座にまた `archived` へ戻る。**呼び戻した Memory を
+   * 居着かせたい呼び出し側は、この呼び出しに続けて `reinforce(ctx, id, now)` を
+   * 別途呼ぶこと（`restoreArchived` 自身はそれを代行しない。ADR 0122「引き受けた負債」
+   * 参照）。
+   *
+   * ⚠ **`recall()` 側は一切変更していない。**`status` が `"active"` へ戻った時点で、
+   * 段1の候補生成が使う既存の status ゲート（`["active","contested"]`、
+   * `recall-runtime.ts`）へ他の `active` な Memory と全く同じ経路で合流する——
+   * `docs/recall.md` §2 段0「スコープの外延」・§5 の被覆不変条件のどちらも、
+   * この操作のために1行も変更していない（`recall` はこの Memory を「スコープ内」の
+   * 集合へ他の `active` な行と区別なく含めるようになるだけである）。
+   */
+  restoreArchived(
+    ctx: Ctx,
+    target: RestoreArchivedTarget,
+    opts?: RestoreArchivedOptions,
+  ): Promise<RestoreArchivedResult>;
   /**
    * Issue #102: Memory を**論理的に**忘れさせる。
    *
@@ -1484,6 +1612,106 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
   }
 
   /**
+   * `Runtime.restoreArchived` の実装（Issue #195、ADR 0122）。doc コメントは interface
+   * 側（`restoreArchived` の JSDoc）にある——ここはアルゴリズムそのものだけ。
+   * `forget` の実装と意図的に同じ骨格を持つ（`ForgetOutcome`/`RestoreArchivedOutcome`
+   * の対応は両者の doc コメント参照）。
+   */
+  async function restoreArchived(
+    ctx: Ctx,
+    target: RestoreArchivedTarget,
+    opts?: RestoreArchivedOptions,
+  ): Promise<RestoreArchivedResult> {
+    const ids: MemoryId[] = "memoryId" in target ? [target.memoryId] : target.memoryIds;
+    if (ids.length === 0) {
+      return { outcomes: [] };
+    }
+
+    const found = await deps.memoryStore.getMany(ctx, ids);
+    const byId = new Map<MemoryId, Memory>();
+    for (const memory of found) {
+      byId.set(memory.id, memory);
+    }
+
+    const actor = opts?.actor ?? { type: "system" };
+    const outcomes: RestoreArchivedOutcome[] = [];
+
+    for (let i = 0; i < ids.length; i += 1) {
+      const id = ids[i]!;
+      const current = byId.get(id);
+      if (current === undefined) {
+        outcomes.push({ memoryId: id, kind: "not_found" });
+        continue;
+      }
+      if (current.status !== "archived") {
+        outcomes.push({
+          memoryId: id,
+          kind: "status_not_archived",
+          status: current.status as Exclude<MemoryStatus, "archived">,
+        });
+        continue;
+      }
+
+      try {
+        const { memory } = await deps.memoryStore.updateStatusWithEvent(
+          ctx,
+          id,
+          "active",
+          { expectedStatus: "archived" },
+          {
+            tenantId: ctx.tenantId,
+            memoryId: id,
+            kind: "restored",
+            actor,
+            digestSnapshot: current.digest,
+            meta: opts?.reason === undefined ? {} : { reason: opts.reason },
+          },
+        );
+        byId.set(id, memory);
+        outcomes.push({ memoryId: id, kind: "restored", previousStatus: "archived" });
+      } catch (error) {
+        if (error instanceof MemoryStatusConflictError) {
+          // 安全弁（`forget` と同じ形。1回だけ再読して打ち切る——上限の無い
+          // 再試行ループを作らない）。
+          const refetched = await deps.memoryStore.get(ctx, id);
+          if (refetched === null) {
+            outcomes.push({ memoryId: id, kind: "not_found" });
+          } else if (refetched.status === "active") {
+            // 別の呼び出しが先に同じ復帰（archived → active）を済ませていた——
+            // 求めていた状態に既に居るのは対立ではない（`forget` の
+            // `already_forgotten` と同じ扱い。interface doc コメント参照）。
+            byId.set(id, refetched);
+            outcomes.push({ memoryId: id, kind: "status_not_archived", status: "active" });
+          } else {
+            // active 以外の別の状態に変わっていた（または archived のまま、という
+            // 二重の競合）——求めていない状態への変化なので conflicted として扱う。
+            byId.set(id, refetched);
+            outcomes.push({
+              memoryId: id,
+              kind: "conflicted",
+              observedStatus: refetched.status,
+            });
+          }
+          continue;
+        }
+        // 競合以外の例外——打ち切って、残りは「見ていない」として返す（interface の
+        // doc コメント参照）。例外をここより外へは投げない。
+        outcomes.push({
+          memoryId: id,
+          kind: "failed",
+          error: error instanceof Error ? error.message : String(error),
+        });
+        for (let j = i + 1; j < ids.length; j += 1) {
+          outcomes.push({ memoryId: ids[j]!, kind: "not_attempted" });
+        }
+        return { outcomes };
+      }
+    }
+
+    return { outcomes };
+  }
+
+  /**
    * `Runtime.forget` の実装（Issue #102）。doc コメントは interface 側
    * （`forget` の JSDoc）にある——ここはアルゴリズムそのものだけ。
    */
@@ -2106,5 +2334,16 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
     };
   }
 
-  return { observe, tick, recall, reextract, reembed, sweepArchive, forget, consolidate, reflect };
+  return {
+    observe,
+    tick,
+    recall,
+    reextract,
+    reembed,
+    sweepArchive,
+    restoreArchived,
+    forget,
+    consolidate,
+    reflect,
+  };
 }

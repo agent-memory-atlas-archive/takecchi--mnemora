@@ -61,6 +61,7 @@ const DB_VECTOR_SPACE = "mnemora_ds_vector_space";
 const DB_CLIENT = "mnemora_ds_client";
 const DB_DEFAULT = "mnemora_ds_default";
 const DB_VECTOR_STORE = "mnemora_ds_vector_store";
+const DB_KIND_CONSTRAINT_SCOPE = "mnemora_ds_kind_constraint_scope";
 
 const VECTOR_SPACE: EmbeddingSpaceId = {
   provider: "test",
@@ -133,6 +134,25 @@ async function foreignKeyTargets(pool: Pool, schema: string, table: string): Pro
     [table, schema],
   );
   return rows.map((r) => r.loc);
+}
+
+/**
+ * `schema` の `memory_events` に付いている CHECK 制約の定義文字列一覧
+ * （`pg_get_constraintdef` の出力）。`foreignKeyTargets` と同じく `nspname` を
+ * 明示的にパラメータで絞る——`relname` だけで絞ると、同じ DB に同居する別スキーマの
+ * `memory_events` まで一緒に拾ってしまう（migrations/0011 が実際に踏んだ形と同じ穴を
+ * この歯自身に持ち込まないため）。
+ */
+async function memoryEventsKindCheckDefs(pool: Pool, schema: string): Promise<string[]> {
+  const { rows } = await pool.query<{ def: string }>(
+    `SELECT pg_get_constraintdef(con.oid) AS def
+       FROM pg_constraint con
+       JOIN pg_class rel ON rel.oid = con.conrelid
+       JOIN pg_namespace n ON n.oid = rel.relnamespace
+      WHERE rel.relname = 'memory_events' AND n.nspname = $1 AND con.contype = 'c'`,
+    [schema],
+  );
+  return rows.map((r) => r.def);
 }
 
 describe("専用スキーマ（feat/dedicated-schema）", () => {
@@ -401,6 +421,42 @@ describe("専用スキーマ（feat/dedicated-schema）", () => {
         ).toBe("0");
       } finally {
         await closePostgresClient(client);
+      }
+    },
+  );
+
+  // 🔴 探針からの移植ではない（測定1〜7と違い、この歯は元の
+  // schema-namespace-probe.postgres.test.ts に対応物を持たない）。
+  // PR #226 / Issue #195 / ADR 0122 決定5: `migrations/0011_memory_events_kind_restored.sql`
+  // の `DO $$ ... $$` が、張り替え対象の CHECK 制約を `pg_class.relname = 'memory_events'`
+  // だけで特定していた。専用スキーマを同居させると（測定2・3と同じ形）候補が2件以上に
+  // なり、その安全弁（`RAISE EXCEPTION`）が発火して CI が赤くなった
+  // （`dedicated-schema.postgres.test.ts` 測定1・2・3・5・7 と `migrate-cli-schema.
+  // postgres.test.ts` 全5件が、移行そのものの失敗として道連れで落ちた）。
+  // 安全弁は設計どおり働いた——直したのは 0011 の絞り込み側（`pg_table_is_visible`
+  // を足した）。この歯は、既存の測定群が結果的に（移行全体の成否として）捕まえていた
+  // ものを、直接（張り替えが正しいスキーマにだけ効いたことそのものを）測る。
+  it(
+    "追加: 移行0011（memory_events.kind の CHECK 制約張り替え）は、専用スキーマが" +
+      "同居していても現在のスキーマの制約だけを張り替える",
+    async () => {
+      const pool = await createBlankDatabase(DB_KIND_CONSTRAINT_SCOPE);
+
+      // 測定2・3と同じ形: 1つの DB に専用スキーマを2つ同居させる。
+      await runMigrations(pool, DEFAULT_MIGRATIONS_DIR, { schema: "mnemora_kc_a" });
+      await runMigrations(pool, DEFAULT_MIGRATIONS_DIR, { schema: "mnemora_kc_b" });
+
+      for (const schema of ["mnemora_kc_a", "mnemora_kc_b"]) {
+        const defs = await memoryEventsKindCheckDefs(pool, schema);
+        // memory_events.kind に関する CHECK 制約は常に2本（IN リスト側 +
+        // events_purged 側、0001_init.sql）——0011 は張り替えるだけで本数は増減しない。
+        expect(defs, `${schema}: kind の CHECK 制約が2本であること`).toHaveLength(2);
+        // そのうち 'restored' を許す（= 0011 が実際に張り替えた）ものがちょうど1本。
+        const restoredDefs = defs.filter((def) => def.includes("'restored'"));
+        expect(
+          restoredDefs,
+          `${schema}: 'restored' を許す制約がちょうど1本であること（他スキーマの制約を誤って数えていないこと）`,
+        ).toHaveLength(1);
       }
     },
   );

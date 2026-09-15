@@ -34,6 +34,11 @@ describe("MemoryEventSchema", () => {
     const event = { ...baseEvent(), kind: "renamed" };
     expect(MemoryEventSchema.safeParse(event).success).toBe(false);
   });
+
+  it("accepts kind: 'restored'（Issue #195、ADR 0122）", () => {
+    const event = { ...baseEvent(), kind: "restored" as const };
+    expect(MemoryEventSchema.safeParse(event).success).toBe(true);
+  });
 });
 
 describe("NewMemoryEventSchema", () => {

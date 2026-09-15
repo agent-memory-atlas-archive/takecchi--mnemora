@@ -13,9 +13,26 @@ import type { EventId, MemoryId } from "./ids.js";
  * （テストのフィクスチャにも無い）。`"events_purged"` は `@mnemora/testkit` の適合テストが
  * FK 制約（`memory_events.memory_id` が NULL を拒まないこと）を検査する
  * リテラルとしてのみ現れ、`purge()` を模してはいない。
+ *
+ * **`"restored"`（Issue #195、[ADR 0122](../../../docs/decisions/0122-restore-archived-memory.md)）
+ * は上の2つと違い、この PR から実際に生成される。**`Runtime.restoreArchived` が
+ * `status='archived'` → `status='active'` の遷移（`docs/memory-model.md` §11 行14）で
+ * 積む。既存の網羅的な `switch (event.kind)` は出荷対象パッケージ（`packages/core`・
+ * `packages/postgres`・`packages/openai`・`packages/local-embedding`・
+ * `packages/anthropic`）のどこにも無いことを確認した上で追加している
+ * （`rg -n "switch" packages/*\/src` の結果に `MemoryEventKind` を分岐する箇所は無い）
+ * ——union へ値を足すことが破壊的変更になる経路（網羅的 switch）がこの repo に
+ * 存在しないため、追加である。
  */
 export type MemoryEventKind =
-  "created" | "updated" | "superseded" | "archived" | "forgotten" | "purged" | "events_purged";
+  | "created"
+  | "updated"
+  | "superseded"
+  | "archived"
+  | "forgotten"
+  | "purged"
+  | "events_purged"
+  | "restored";
 
 export const MemoryEventKindSchema = z.enum([
   "created",
@@ -25,6 +42,7 @@ export const MemoryEventKindSchema = z.enum([
   "forgotten",
   "purged",
   "events_purged",
+  "restored",
 ]) satisfies z.ZodType<MemoryEventKind>;
 
 export interface EventActor {

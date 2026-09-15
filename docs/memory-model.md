@@ -915,6 +915,8 @@ observed → extracted → active ───────────────�
                           │
                           ▼
                        archived  ──(forget() 呼び出し)──▶ forgotten ──(purge() 呼び出し・Phase 2)──▶ purged(*)
+                          │
+                          └──(restoreArchived() 呼び出し・明示的な復帰)──▶ active（行14）
 
 (なし) ──consolidate() 呼び出し──▶ active   ※ Observation を経ない。統合元は同時に superseded へ（行5・行12）
 (なし) ──reflect() 呼び出し──────▶ active   ※ Observation を経ない。既存の行は一切書き換えない（行13）
@@ -952,6 +954,7 @@ observed → extracted → active ───────────────�
 | 11 | (memory_events の掃除) | `MemoryStore.purgeExpiredEvents?` の明示呼び出し（任意メソッド。Issue #210 / [ADR 0115](./decisions/0115-event-retention-purge.md)）。定期実行そのものは呼び出し側（運用のスクリプト・cron）の責務——`tick()`/`observe()` には配線しない | 非同期（保守ジョブ。`EventStore` interface は経由しない） | `memory_events` から古い行を DELETE | `events_purged`（件数・期間のみ。削除対象の詳細は残さない） |
 | 12 | (なし) → active（統合先の新規作成。Observation を経ない） | `Runtime.consolidate()` 呼び出し（Issue #103、ADR 0089）。統合元 2件以上が確定した後、LLM 呼び出しが成功した場合のみ | 同期（`consolidate()` の呼び出し1回の中で完結し、`tick()` はこの操作を駆動しない）。統合元の supersede（行5）と同一トランザクションで書けるかは adapter 依存——口（`MemoryStore.supersedeWithNewMemories`）が在れば1トランザクション、無ければ2段（ADR 0100） | `memories` へ INSERT（`status='active'`、`provenance.kind='consolidated'`・`sources=<統合元の memoryId>`、`decay_floor_at` を初期計算、`strength=1`）。`source_observation_id`/`extractor_version` は常に `NULL` | `created`（`meta.reason='consolidated'`、`meta.sources=<統合元の memoryId>`） |
 | 13 | (なし) → active（内省による新規作成。Observation を経ない） | `Runtime.reflect()` 呼び出し（Issue #104、ADR 0091）。土台 1件以上に対し LLM が `outcome:'reflected'` を返した場合のみ | 同期（`reflect()` の呼び出し1回の中で完結し、`tick()` はこの操作を駆動しない） | `memories` へ INSERT（`status='active'`、`provenance.kind='reflected'`・`sources=<土台の memoryId>`、`decay_floor_at` を初期計算、`strength=1`）。`source_observation_id`/`extractor_version` は常に `NULL`。**既存の行へは一切書き込まない**——行5〜7のどれも発生しない | `created`（`meta.reason='reflected'`、`meta.sources=<土台の memoryId>`） |
+| 14 | archived → active | `Runtime.restoreArchived(ctx, target)` 呼び出し（Issue #195、[ADR 0122](./decisions/0122-restore-archived-memory.md)）。行8（掃引）の片道を、明示的な呼び出しで開く | 同期（`MemoryStore.updateStatusWithEvent` の呼び出し1回・1トランザクションで完結。行9〔`forget`〕と同じ扱い） | `status='active'`。**`decay_floor_at` は動かさない**——復帰と強化（行4）は別の操作であり、居着かせたい呼び出し側は `reinforce`（行4）を別途呼ぶ | `restored` |
 
 **同期/非同期の要点**: `observe()` は常に同期でリターンする（呼び出し側は待たされない）。
 「重い処理」——抽出・埋め込み・アーカイブ掃引・監査ログの保持期間掃除——はすべて非同期に

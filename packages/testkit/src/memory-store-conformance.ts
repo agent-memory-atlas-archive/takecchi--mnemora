@@ -2238,6 +2238,84 @@ export function describeMemoryStoreConformance(options: MemoryStoreConformanceOp
     }
 
     // -------------------------------------------------------------------
+    // 明示的な復帰（archived → active。Issue #195、ADR 0122）
+    //
+    // 🔴 `restoreArchived` は `MemoryStore` の新しい任意メソッドではない
+    // （`Runtime.restoreArchived` の doc コメント参照）——`archived` → `active` への
+    // compare-and-swap は既存の必須メソッド `updateStatusWithEvent`（ADR 0031）で
+    // 表現できるため、ここでは `supportsArchiveDecayed` のような分岐を持たない。
+    // **この歯は両方の adapter（postgres・in-memory）で常に走る**——`archiveDecayed`
+    // を経由せず、`buildNewMemoryFixture({ status: 'archived' })` で直接 archived な
+    // Memory を用意し、`updateStatusWithEvent` に新しい event kind `'restored'`
+    // （ADR 0122 が `MemoryEventKind` へ足した値）を渡せることそのものを検査する
+    // ——DB 側の CHECK 制約（`migrations/0011_memory_events_kind_restored.sql`）が
+    // 実際にこの値を受け付けることを postgres 側で確認する場でもある。
+    // -------------------------------------------------------------------
+
+    function buildRestoredEvent(ctx: Ctx, memoryId: MemoryId, digest: string): NewMemoryEvent {
+      return {
+        tenantId: ctx.tenantId,
+        memoryId,
+        kind: "restored",
+        actor: { type: "system" },
+        digestSnapshot: digest,
+        sizeBeforeBytes: null,
+        meta: {},
+      };
+    }
+
+    it("updateStatusWithEvent は kind='restored' で archived な Memory を active へ戻せる（往復の店側半分）", async () => {
+      const store = await createStore();
+      const ctx: Ctx = { tenantId: "tenant-1" };
+      const memory = await store.createMemory(
+        ctx,
+        buildNewMemoryFixture({ tenantId: "tenant-1", status: "archived" }),
+      );
+      expect(memory.status).toBe("archived");
+
+      const { memory: restored, event } = await store.updateStatusWithEvent(
+        ctx,
+        memory.id,
+        "active",
+        { expectedStatus: "archived" },
+        buildRestoredEvent(ctx, memory.id, memory.digest),
+      );
+
+      expect(restored.status).toBe("active");
+      expect(event.kind).toBe("restored");
+      expect(event.memoryId).toBe(memory.id);
+
+      const events = await listEventsForMemory(ctx, memory.id);
+      expect(events).toHaveLength(1);
+      expect(events[0]?.kind).toBe("restored");
+
+      const reread = await store.get(ctx, memory.id);
+      expect(reread?.status).toBe("active");
+    });
+
+    it("kind='restored' の compare-and-swap は archived 以外を対象にできない（active に戻っている行を二重に戻さない）", async () => {
+      const store = await createStore();
+      const ctx: Ctx = { tenantId: "tenant-1" };
+      const memory = await store.createMemory(
+        ctx,
+        buildNewMemoryFixture({ tenantId: "tenant-1", status: "active" }),
+      );
+
+      await expect(
+        store.updateStatusWithEvent(
+          ctx,
+          memory.id,
+          "active",
+          { expectedStatus: "archived" },
+          buildRestoredEvent(ctx, memory.id, memory.digest),
+        ),
+      ).rejects.toBeInstanceOf(MemoryStatusConflictError);
+
+      const events = await listEventsForMemory(ctx, memory.id);
+      expect(events).toEqual([]);
+    });
+
+    // -------------------------------------------------------------------
     // aggregateScope（docs/recall.md §5 目次帯・第3階・「スコープの外延」マネージャー決定）
     // -------------------------------------------------------------------
 
