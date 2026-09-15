@@ -150,5 +150,6 @@ alteroid (github.com/takecchi/alteroid) を根拠として引く箇所は、確�
 | [0136](./0136-contested-lone-dropped-not-returned-alone.md) | 片側だけの `contested`（`contestedWithId=null`）を、読み取り側で単独返却させない | 採用 (2026-09) |
 | [0137](./0137-adr-index-generated-from-source.md) | ADR 索引（`docs/decisions/README.md`）を `docs/decisions/*.md` から生成する — 案A、行位置の衝突そのものを消す | 採用 (2026-09) |
 | [0138](./0138-pack-check-in-ci.md) | 六つの門の `pack:check` を、毎PRの `ci.yml` でも走らせる | 採用 (2026-09) |
+| [0139](./0139-consolidation-cost-huge-utterance-timeout.md) | `consolidation-cost` の「巨大な utterance」テストの間欠タイムアウトを直す — 支配的費用は `encode()` であり、同じ壁を kana 巡回文字列で越えると解消する（Issue #258） | 採用 (2026-09) |
 
 <!-- ADR-INDEX:GENERATED:END -->

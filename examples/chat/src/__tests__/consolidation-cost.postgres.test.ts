@@ -119,17 +119,37 @@ describe("consolidation-cost: 埋め込みの入力上限(ADR 0090)への着地"
       const warmup = await warmupLocalEmbedding(handle.embeddingProvider);
       expect(warmup.ok, warmup.detail).toBe(true);
       const ctx = { tenantId: `consolidation-cost-toolong-${Date.now()}` };
-      // ADR 0090: 8192 トークンの壁。十分に上回るよう、多様な語彙を含む長文を作る
-      // (単純な1文字の繰り返しは BPE に圧縮されて壁を越えない——ADR 0090 §1.2 の実測)。
-      // ⚠ **大きすぎる入力は tokenizer の encode() 自体が重い**(実測:
-      // この作業env で 210,000字相当の入力は1本のテストが数分かかり、86,000字でも
-      // 約60秒かかった)。この文言・この個数(800件・約56,700字)は
-      // **13,493トークン(> 上限8192)で確実に壁を越え、かつ encode() 自体が
-      // 約20秒で終わる**ことをこの作業で実測して選んだ値である——大きくしすぎない。
+      // ADR 0090: 8192 トークンの壁。
+      //
+      // [Issue #258 / ADR 0139] 元は「多様な語彙を含む長文」
+      // (800件の filler sentence・約56,700字)を使っていたが、この構成は
+      // tokenizer.encode() 自体が重く(実測: 3試行 41,885ms/41,365ms/42,926ms、
+      // 平均約42秒)、CI 実測 234,066ms(与えられた120秒の約2倍。Issue #258)の
+      // 主因だった。
+      //
+      // ⟹ `packages/local-embedding/src/__tests__/live.local-embedding.test.ts` の
+      // `KANA_CYCLE` と同じ手法(46字を巡回させる)に切り替える。単純な1文字の繰り返しは
+      // BPE に圧縮されて壁を越えない(ADR 0090 §1.2 の実測)が、46字を巡回させ連続する
+      // 同一文字を無くすと増分が常に0か1になり、壁をきちんと越えられる(同ファイルの
+      // 実測コメント参照)。
+      //
+      // この作業で実測(この env、@huggingface/transformers@4.2.0・
+      // sirasagi62/ruri-v3-30m-ONNX 固定): 12,000字で 9,392 トークン
+      // (> 上限8192、余裕 +1,200トークン/+14.6%——上限ちょうどに寄せすぎない)。
+      // encode() は 870ms——旧構成(56,689字・13,493トークン・平均約42秒)の
+      // **約48分の1**。トークン数は固定バージョンの tokenizer に対する純関数の
+      // 結果であり決定的(実行のたびに変わらない)。速いのは、より少ない文字数を
+      // 埋め込んでいるからではなく(むしろ文字数はこちらのほうが少ない=12,000字 vs
+      // 56,689字)、**同じ46字が巡回するだけの文字列は、多様な英単語・数字が混ざる
+      // 文字列より encode() 自体の計算コストが低い**ためだと考えられる
+      // (ADR 0139 参照。厳密な原因分析——pretokenization の正規表現
+      // マッチ回数等——はしていない)。
+      const KANA_CYCLE =
+        "あいうえおかきくけこさしすせそたちつてとなにぬねのはひふへほまみむめもやゆよらりるれろわをん";
       const hugeText = Array.from(
-        { length: 800 },
-        (_, i) => `filler sentence number ${i} with varying words to avoid token collapse.`,
-      ).join(" ");
+        { length: 12_000 },
+        (_, i) => KANA_CYCLE[i % KANA_CYCLE.length],
+      ).join("");
       const observed = await handle.runtime.observe(ctx, {
         kind: "utterance",
         text: hugeText,
@@ -154,7 +174,13 @@ describe("consolidation-cost: 埋め込みの入力上限(ADR 0090)への着地"
     } finally {
       await handle.close();
     }
-  }, 120_000);
+    // 120_000 → 60_000: 上のコメントの実測(encode() が旧構成の約48分の1)により
+    // 支配的だった費用を大きく削ったが、この env には Postgres が無く、DB を含む
+    // この検査自体の総所要時間はこの作業で再現できていない(ADR 0139
+    // 「確かめていないこと」)。ゼロ(既定の30秒)へは寄せず、CI のばらつきに対する
+    // 余裕を明示的に残す——旧値(120秒)を全面的に信用しない一方、実測していない
+    // 総所要への保険として、半分に留める。
+  }, 60_000);
 });
 
 const repoRoot = fileURLToPath(new URL("../../../../", import.meta.url));
