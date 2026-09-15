@@ -674,6 +674,71 @@ export function describeMemoryStoreConformance(options: MemoryStoreConformanceOp
     });
 
     // -------------------------------------------------------------------
+    // validFrom/validUntil（Issue #202、ADR 0145）
+    // -------------------------------------------------------------------
+
+    it("createMemory は validFrom/validUntil を書き込み、読み戻す", async () => {
+      const store = await createStore();
+      const ctx: Ctx = { tenantId: "tenant-1" };
+      const validFrom = new Date("2025-01-01T00:00:00.000Z");
+      const validUntil = new Date("2025-12-31T23:59:59.000Z");
+
+      const created = await store.createMemory(
+        ctx,
+        buildNewMemoryFixture({ tenantId: "tenant-1", validFrom, validUntil }),
+      );
+      expect(created.validFrom?.getTime()).toBe(validFrom.getTime());
+      expect(created.validUntil?.getTime()).toBe(validUntil.getTime());
+
+      const reread = await store.get(ctx, created.id);
+      expect(reread?.validFrom?.getTime()).toBe(validFrom.getTime());
+      expect(reread?.validUntil?.getTime()).toBe(validUntil.getTime());
+    });
+
+    it("createMemory は validFrom/validUntil を省略すると null のまま保存・返却する（非破壊の既定値）", async () => {
+      const store = await createStore();
+      const ctx: Ctx = { tenantId: "tenant-1" };
+
+      const created = await store.createMemory(
+        ctx,
+        buildNewMemoryFixture({ tenantId: "tenant-1" }),
+      );
+      expect(created.validFrom ?? null).toBeNull();
+      expect(created.validUntil ?? null).toBeNull();
+
+      const reread = await store.get(ctx, created.id);
+      expect(reread?.validFrom ?? null).toBeNull();
+      expect(reread?.validUntil ?? null).toBeNull();
+    });
+
+    it("createMemory は occurredAt と validFrom/validUntil を混同しない — 3つに別々の値を渡すと、別々に返る（Issue #202 受け入れ条件2）", async () => {
+      const store = await createStore();
+      const ctx: Ctx = { tenantId: "tenant-1" };
+      const occurredAt = new Date("2024-06-01T00:00:00.000Z");
+      const validFrom = new Date("2025-01-01T00:00:00.000Z");
+      const validUntil = new Date("2025-12-31T23:59:59.000Z");
+
+      const created = await store.createMemory(
+        ctx,
+        buildNewMemoryFixture({ tenantId: "tenant-1", occurredAt, validFrom, validUntil }),
+      );
+
+      // ⚠ 3つとも異なる値であり、どの2つも取り違えていないことを個別に確かめる。
+      // `occurredAt` を `validFrom`/`validUntil` へエイリアスするような実装の誤りは、
+      // この歯でだけ検出できる（round-trip だけを見る歯は、同じ値を書けば通ってしまう）。
+      expect(created.occurredAt?.getTime()).toBe(occurredAt.getTime());
+      expect(created.validFrom?.getTime()).toBe(validFrom.getTime());
+      expect(created.validUntil?.getTime()).toBe(validUntil.getTime());
+      expect(created.occurredAt?.getTime()).not.toBe(created.validFrom?.getTime());
+      expect(created.validFrom?.getTime()).not.toBe(created.validUntil?.getTime());
+
+      const reread = await store.get(ctx, created.id);
+      expect(reread?.occurredAt?.getTime()).toBe(occurredAt.getTime());
+      expect(reread?.validFrom?.getTime()).toBe(validFrom.getTime());
+      expect(reread?.validUntil?.getTime()).toBe(validUntil.getTime());
+    });
+
+    // -------------------------------------------------------------------
     // listBySourceObservation（ADR 0028・runtime.reextract の前提）
     // -------------------------------------------------------------------
 

@@ -96,6 +96,38 @@ export interface Memory {
   recordedAt: Date;
   lastReinforcedAt?: Date | null;
 
+  /**
+   * Issue #202（`docs/memory-model.md` §3「三つ（四つ）の時計」の4本目・5本目、
+   * [ADR 0145](../../../docs/decisions/0145-valid-from-until-storage.md)）:
+   * その事実が**真であり続けた期間**の始点。可（不明・無期限なら NULL）。
+   *
+   * 🔴 **`occurredAt` と混同しないこと。** `occurredAt` はその出来事・事実が
+   * *いつのものか*（1点、鮮度スコアに使う）であり、`validFrom`/`validUntil` は
+   * その事実が*いつからいつまで真か*（区間）である。「去年の住所」と「今の住所」は
+   * どちらも `occurredAt`（引っ越した/住み始めた時刻）を持ちうるが、**「いまも真か」を
+   * 分けるのは `validFrom`/`validUntil` のほうである**——`occurredAt` が同じでも、
+   * `validUntil` が過去なら「もう真ではない」を表せる。
+   *
+   * DB 列自体は `packages/postgres/migrations/0001_init.sql` に Phase 1 から存在するが
+   * （`purgedAt` の doc コメントと同じ経緯）、`Memory`/`MemoryRow` にこのフィールドが無く
+   * 一度も読み書きされていなかった。ADR 0145 が `packages/postgres` の読み書きを
+   * 初めて配線する。
+   *
+   * ⚠ **この PR は `recall()` のどのフィルタ・スコアにもこの値を使わない。**
+   * 「いつ時点で真だった記憶か」を問う口（`RecallQuery`）・段1（ANN）への索引の
+   * 押し下げ・`validUntil` を過ぎた記憶を `omitted` で名指しすることは、いずれも
+   * この PR の射程外であり、別の ADR に委ねる（ADR 0145「これが覆るとしたら」参照）。
+   *
+   * **省略可能な既存フィールドとして足した**（`purgedAt` と同じ理由——`Memory` は
+   * `@mnemora/core` の公開型。必須にすると、この型を自分でリテラルとして組み立てている
+   * 既存の呼び出し元・adapter・テストのフィクスチャすべてに新しい必須プロパティを
+   * 強制する破壊的変更になる。省略可能なら、値を持たない既存の組み立て方はそのまま
+   * 型を満たす）。
+   */
+  validFrom?: Date | null;
+  /** `validFrom` の doc コメント参照。対になる終点。 */
+  validUntil?: Date | null;
+
   strength: number;
   halfLifeHours: number;
   decayFloorAt: Date;
@@ -160,6 +192,10 @@ export const MemorySchema = z.object({
   occurredAt: z.date().nullable().optional(),
   recordedAt: z.date(),
   lastReinforcedAt: z.date().nullable().optional(),
+
+  // Issue #202（ADR 0145）: `Memory.validFrom`/`validUntil` の doc コメント参照。
+  validFrom: z.date().nullable().optional(),
+  validUntil: z.date().nullable().optional(),
 
   // ADR 0078: 値域は `(0, MAX_STRENGTH]`。
   // ⚠ **この schema は書き込み経路では走らない**——`MemorySchema` / `NewMemorySchema` を

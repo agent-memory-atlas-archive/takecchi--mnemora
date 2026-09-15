@@ -82,6 +82,8 @@ export interface MemoryRow {
   occurred_at: string | null;
   recorded_at: string;
   last_reinforced_at: string | null;
+  valid_from: string | null;
+  valid_until: string | null;
   strength: number;
   half_life_hours: number;
   decay_floor_at: string;
@@ -110,6 +112,8 @@ export function rowToMemory(row: MemoryRow): Memory {
     occurredAt: parsePgTimestamp(row.occurred_at),
     recordedAt: parsePgTimestamp(row.recorded_at),
     lastReinforcedAt: parsePgTimestamp(row.last_reinforced_at),
+    validFrom: parsePgTimestamp(row.valid_from),
+    validUntil: parsePgTimestamp(row.valid_until),
     strength: row.strength,
     halfLifeHours: row.half_life_hours,
     decayFloorAt: parsePgTimestamp(row.decay_floor_at),

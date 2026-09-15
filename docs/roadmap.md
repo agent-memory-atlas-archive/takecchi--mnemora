@@ -138,7 +138,9 @@ Phase 1 で入れた土台が、後続フェーズをどう安くしているか
 | 忘却の実処理（`decay_floor_at` を使った検索時フィルタとアーカイブ掃引） | Phase 1 では `decay_floor_at` を書き込むだけで読み取りに使っていない。Phase 2 で `WHERE decay_floor_at > now()` を使い始めるだけで、列追加や既存行の再計算は不要。 |
 | `valid_from` / `valid_until`（時間的妥当性） | Phase 1 で `occurred_at` / `recorded_at` / `last_reinforced_at` の3つの時刻を混ぜずに区別してあるため、4本目・5本目の時計として自然に追加できる。 |
 
-**⚠ 2026-09 訂正（digest 帯の実装 PR、[ADR 0073](./decisions/0073-digest-band-bounded-without-taxonomy.md)）: 上の表の「目次帯の第2階（digest 帯）」は、オーナーの指示により前倒しで実装済みである。**同じ行に並記された **`taxonomy` の語彙登録・昇格フロー（`labels` / `memory_labels`）は Phase 2 のままである**——2つは同じ行に書かれているが、機構としては独立しており、帯のほうは taxonomy を要さなかった。**⛔ この表の他の項目も前倒しされていない。**
+**⚠ 2026-09 訂正（digest 帯の実装 PR、[ADR 0073](./decisions/0073-digest-band-bounded-without-taxonomy.md)）: 上の表の「目次帯の第2階（digest 帯）」は、オーナーの指示により前倒しで実装済みである。**同じ行に並記された **`taxonomy` の語彙登録・昇格フロー（`labels` / `memory_labels`）は Phase 2 のままである**——2つは同じ行に書かれているが、機構としては独立しており、帯のほうは taxonomy を要さなかった。**⛔ この表の他の項目も前倒しされていない。**（⚠ この一文自体は本 PR より前から在り、本 PR は検証していない。少なくとも `valid_from` / `valid_until` の行は下の追加訂正のとおり部分的に前倒しされている。）
+
+**⚠ 2026-09 追加訂正（Issue #202、[ADR 0145](./decisions/0145-valid-from-until-storage.md)）: 上の表の「`valid_from` / `valid_until`（時間的妥当性）」も、`Memory` 型と `packages/postgres` の読み書きに限って前倒しで実装済みである。**「4本目・5本目の時計として自然に追加できる」という本文の見立て自体はここで実証された形になるが、**`RecallQuery` からこの区間を問う口・段1（ANN）への索引の押し下げ・`valid_until` を過ぎた記憶を `omitted` で名指しすることは、いずれもまだ実装されておらず Phase 2 のままである**（ADR 0145「射程外」参照）。
 
 
 ### Phase 3

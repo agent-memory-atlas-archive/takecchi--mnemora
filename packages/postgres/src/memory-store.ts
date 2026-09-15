@@ -190,7 +190,7 @@ export class PostgresMemoryStore implements MemoryStore {
         provenance_kind, provenance,
         status, superseded_by_id, contested_with_id,
         tags,
-        occurred_at, recorded_at, last_reinforced_at,
+        occurred_at, recorded_at, last_reinforced_at, valid_from, valid_until,
         strength, half_life_hours, decay_floor_at,
         embedding_status,
         created_at, updated_at
@@ -202,6 +202,7 @@ export class PostgresMemoryStore implements MemoryStore {
         ${input.status ?? "active"}, ${input.supersededById ?? null}, ${input.contestedWithId ?? null},
         ${sql.param(input.tags)},
         ${input.occurredAt ?? null}, ${input.recordedAt}, ${input.lastReinforcedAt ?? null},
+        ${input.validFrom ?? null}, ${input.validUntil ?? null},
         ${input.strength}, ${input.halfLifeHours}, ${input.decayFloorAt},
         ${input.embeddingStatus},
         now(), now()
@@ -254,7 +255,7 @@ export class PostgresMemoryStore implements MemoryStore {
           provenance_kind, provenance,
           status, superseded_by_id, contested_with_id,
           tags,
-          occurred_at, recorded_at, last_reinforced_at,
+          occurred_at, recorded_at, last_reinforced_at, valid_from, valid_until,
           strength, half_life_hours, decay_floor_at,
           embedding_status,
           created_at, updated_at
@@ -266,6 +267,7 @@ export class PostgresMemoryStore implements MemoryStore {
           ${input.status ?? "active"}, ${input.supersededById ?? null}, ${input.contestedWithId ?? null},
           ${sql.param(input.tags)},
           ${input.occurredAt ?? null}, ${input.recordedAt}, ${input.lastReinforcedAt ?? null},
+          ${input.validFrom ?? null}, ${input.validUntil ?? null},
           ${input.strength}, ${input.halfLifeHours}, ${input.decayFloorAt},
           ${input.embeddingStatus},
           now(), now()
@@ -582,7 +584,7 @@ export class PostgresMemoryStore implements MemoryStore {
             provenance_kind, provenance,
             status, superseded_by_id, contested_with_id,
             tags,
-            occurred_at, recorded_at, last_reinforced_at,
+            occurred_at, recorded_at, last_reinforced_at, valid_from, valid_until,
             strength, half_life_hours, decay_floor_at,
             embedding_status,
             created_at, updated_at
@@ -594,6 +596,7 @@ export class PostgresMemoryStore implements MemoryStore {
             ${input.status ?? "active"}, ${input.supersededById ?? null}, ${input.contestedWithId ?? null},
             ${sql.param(input.tags)},
             ${input.occurredAt ?? null}, ${input.recordedAt}, ${input.lastReinforcedAt ?? null},
+            ${input.validFrom ?? null}, ${input.validUntil ?? null},
             ${input.strength}, ${input.halfLifeHours}, ${input.decayFloorAt},
             ${input.embeddingStatus},
             now(), now()

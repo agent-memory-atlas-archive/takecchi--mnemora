@@ -234,6 +234,8 @@ export class InMemoryMemoryStore implements MemoryStore {
         occurredAt: input.occurredAt ?? null,
         recordedAt: input.recordedAt,
         lastReinforcedAt: input.lastReinforcedAt ?? null,
+        validFrom: input.validFrom ?? null,
+        validUntil: input.validUntil ?? null,
         strength: input.strength,
         halfLifeHours: input.halfLifeHours,
         decayFloorAt: input.decayFloorAt,
