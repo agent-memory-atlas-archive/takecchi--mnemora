@@ -219,6 +219,36 @@ forget(ctx, target)      // 記憶を落とす / 失効させる
 
 **内部が複雑でも、外側はこの5つに保つ。6つ目は作らない。**
 
+### 「mnemora を使うべきか」を判定する（動詞ではない）
+
+**mnemora を入れるとプロンプトが小さくなるのか、会話ログを全部積むほうが小さいのかは、
+会話の長さによって変わる**——短い会話では mnemora のほうが大きい。
+その判定は `@mnemora/core` の**純関数**として提供する（[ADR 0147](./docs/decisions/0147-recall-footprint-estimator.md)）。
+
+```ts
+import { compareWithFullLog } from "@mnemora/core";
+
+const verdict = compareWithFullLog({
+  fullLogChars: transcript.length,        // 会話ログを全部積んだときの文字数（呼び出し側が測る）
+  shape: { memoryCountInScope: 120 },     // スコープ内の Memory 件数
+});
+// verdict.verdict                 → 'mnemora_smaller' | 'full_log_smaller' | 'too_close_to_call'
+// verdict.breakEvenFullLogChars   → 会話ログが何文字を超えたら mnemora が小さくなるか
+// verdict.reasons                 → なぜそう判定したか（コードで分岐できる形）
+```
+
+⚠ **これは「6つ目の動詞」ではない。**`Runtime` のメソッドではなく、`ctx` も取らない
+純関数であり、**`recall()` を一度も呼んでいない時点でも使える**——「mnemora を入れるべきか」を
+判断したいのは、まさにその時点だからである。
+
+⚠ **見ているのは量だけである。**「削っても目的の記憶が落ちていないか」には答えない
+（下の「想起の質をどう測っているか」を見ること）。**量で負けていても、想起のために
+mnemora を使うという判断はありうる。**
+
+⚠ **同梱の既定係数は、このリポジトリのベンチ（日本語・記録済みカセット）で測った値である。**
+自分の環境の値ではない。`calibrateRecallFootprint()` に `recall()` の結果を渡せば較正できる
+（新しい計測は要らない）。較正したかどうかは戻り値の `estimate.profileOrigin.kind` で分岐できる。
+
 ---
 
 ## 記憶を誰に紐づけるか（`tenantId` / `subjectId`）
