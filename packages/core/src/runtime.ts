@@ -89,6 +89,27 @@ export interface RuntimeConfig {
   digestFallbackLength?: number;
   /** `tick` の既定 claimedBy 値。複数ワーカーを区別したい場合に指定する。 */
   defaultClaimedBy?: string;
+  /**
+   * [Issue #204](https://github.com/takecchi/mnemora/issues/204) /
+   * [ADR 0157](../../../docs/decisions/0157-tick-drives-consolidate-and-reflect.md):
+   * `extract`（`observe()` の sync 経路・`tick()` の `extract` ジョブ経路の両方）が新しい
+   * Memory を1件作るたびに、その `memoryId` を種にした `consolidate` / `reflect` の
+   * outbox ジョブも追加で積むかどうか。
+   *
+   * 🔴 **既定は `false`（積まない）。** 北極星の問い2（「これを無効にしたとき、
+   * Memory Framework として成立するか」）を満たすための opt-in——この設定を有効に
+   * しなくても `observe()`/`recall()`/`tick()` は完全に成立し、`tick()` は
+   * `embed` ジョブだけを処理し続ける。`consolidate()`/`reflect()` 自体は
+   * この設定と無関係に、呼び出し側が明示的に呼べば常に動く（ADR 0089/0091）。
+   *
+   * `true` にすると、積む job kinds が `["embed"]` から `["embed", "consolidate", "reflect"]`
+   * に変わる。ジョブの `payload` は既存の `embed` ジョブと同じ `{ memoryId }`
+   * （`MemoryStore.createMemoryWithOutbox` が `jobKinds` の各要素に同じ payload を使う。
+   * 新しい payload 形は発明していない）。`tick()` はその2種を
+   * `consolidate(ctx, { target: { seedMemoryId: memoryId } })` /
+   * `reflect(ctx, { target: { seedMemoryId: memoryId } })` として処理する。
+   */
+  autoQueueConsolidateReflectOnExtract?: boolean;
 }
 
 const DEFAULT_EXTRACTOR_VERSION = "v1";
@@ -116,7 +137,7 @@ const DEFAULT_TICK_LIMIT = 50;
  * 積むこと自体は正しい使い方である（利用者が独自の種別を足して別経路で処理する）。
  * ここに無い kind を **`tick` に渡した**ときの倒れ方は {@link TickResult.unsupported} を見ること。
  */
-export const TICK_SUPPORTED_JOB_KINDS = ["extract", "embed"] as const;
+export const TICK_SUPPORTED_JOB_KINDS = ["extract", "embed", "consolidate", "reflect"] as const;
 
 /** {@link TICK_SUPPORTED_JOB_KINDS} の要素型。 */
 export type TickSupportedJobKind = (typeof TICK_SUPPORTED_JOB_KINDS)[number];
@@ -1561,8 +1582,15 @@ export interface Runtime {
    * （`reextract_superseded` に次ぐ2つ目の値、ADR 0074 が予言した形）。`digestSnapshot` は
    * 積むが **`content` は積まない**（`forget`/`reextract` と同じ規律）。
    *
-   * ⚠ **`tick()` はこの操作を駆動しない。**`TICK_SUPPORTED_JOB_KINDS` に `'consolidate'` は
-   * 足していない（Issue #103 本文「tick のジョブとして回せる形は別 issue」。ADR 0089 §4）。
+   * ⭐ **`tick()` は `'consolidate'` の outbox ジョブが在ればこれを駆動する**
+   * （Issue #204 / ADR 0157。`TICK_SUPPORTED_JOB_KINDS` に足された）。ジョブの
+   * `payload` は `{ memoryId }`（既存の `embed` ジョブと同じ形）で、`tick` はそれを
+   * `seedMemoryId` として `consolidate(ctx, { target: { seedMemoryId } })` を呼ぶ
+   * だけである——このメソッド自身の意味論・呼び出し方は一切変わっていない。
+   * ⚠ **そのジョブが自動で積まれるとは限らない**——`extract` がこの種を積むのは
+   * `RuntimeConfig.autoQueueConsolidateReflectOnExtract`（既定 `false`）を有効にした
+   * ときだけである。無効のままでも `consolidate()` を直接呼ぶ経路は変わらず動く
+   * （北極星の問い2）。
    */
   consolidate(ctx: Ctx, opts: ConsolidateOptions): Promise<ConsolidationResult>;
   /**
@@ -1622,10 +1650,17 @@ export interface Runtime {
    * `reflected` Memory が2件できる。**これを塞ぐために `MemoryStore` へメソッドや索引を
    * 足すことはしていない（`reflect.test.ts` がこの挙動を歯で固定している）。
    *
-   * ⚠ **`tick()` はこの操作を駆動しない。**`TICK_SUPPORTED_JOB_KINDS` に `'reflect'` は
-   * 足していない——`reflect()` の*実運用*（Background Cognition）が Phase 1 の範囲外
-   * （docs/roadmap.md §1.3）なのであって、この動詞の口が範囲外なのではない
-   * （ADR 0089 決定7 が `consolidate` について採ったのと同じ立場）。
+   * ⭐ **`tick()` は `'reflect'` の outbox ジョブが在ればこれを駆動する**
+   * （Issue #204 / ADR 0157。`TICK_SUPPORTED_JOB_KINDS` に足された）。`consolidate` と
+   * 対称——ジョブの `payload` は `{ memoryId }` で、`tick` はそれを `seedMemoryId` として
+   * `reflect(ctx, { target: { seedMemoryId } })` を呼ぶだけである。
+   * ⚠ **`reflect()` の *実運用*（Background Cognition・Scheduler による自動起動）は
+   * 依然として Phase 1 の範囲外のままである**（docs/roadmap.md §1.1/§1.3）——ここで
+   * 変わったのは「`tick` に渡されたジョブを処理できるようになった」ことだけであり、
+   * ジョブを**自動で積む**かどうかは別の決定である。`extract` がこの種を積むのは
+   * `RuntimeConfig.autoQueueConsolidateReflectOnExtract`（既定 `false`）を有効に
+   * したときだけであり、無効のままでも `reflect()` を直接呼ぶ経路は変わらず動く
+   * （北極星の問い2）。
    */
   reflect(ctx: Ctx, opts: ReflectOptions): Promise<ReflectionResult>;
 }
@@ -1654,6 +1689,8 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
   const promptVersion = deps.config?.promptVersion ?? DEFAULT_PROMPT_VERSION;
   const digestFallbackLength = deps.config?.digestFallbackLength ?? DEFAULT_DIGEST_FALLBACK_LENGTH;
   const defaultClaimedBy = deps.config?.defaultClaimedBy ?? DEFAULT_CLAIMED_BY;
+  const autoQueueConsolidateReflectOnExtract =
+    deps.config?.autoQueueConsolidateReflectOnExtract ?? false;
 
   /**
    * 抽出候補から Memory を作る核（`runExtraction` と `reextract` の共通経路）。
@@ -1743,17 +1780,26 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
     const newMemories = await buildNewMemoriesForCandidates(ctx, observation, candidates);
     const memoryIds: MemoryId[] = [];
     const contentHashes = new Set<string>();
+    // Issue #204 / ADR 0157: 既定 `["embed"]` のみ。opt-in（config.autoQueueConsolidateReflectOnExtract）
+    // が true のときだけ、同じ memoryId を種にした consolidate/reflect ジョブも積む——
+    // `createMemoryWithOutbox` は jobKinds の各要素に同じ payload `{ memoryId }` を使うので、
+    // 新しい payload 形を発明する必要がない（下の processConsolidateJob/processReflectJob 参照）。
+    const jobKinds: OutboxJobKind[] = autoQueueConsolidateReflectOnExtract
+      ? ["embed", "consolidate", "reflect"]
+      : ["embed"];
     for (const newMemory of newMemories) {
       contentHashes.add(newMemory.contentHash);
-      const { memory, created } = await deps.memoryStore.createMemoryWithOutbox(ctx, newMemory, [
-        "embed",
-      ]);
+      const { memory, created } = await deps.memoryStore.createMemoryWithOutbox(
+        ctx,
+        newMemory,
+        jobKinds,
+      );
       memoryIds.push(memory.id);
       if (created) {
         await appendCreatedEvent(ctx, memory, observation, outcome, failure);
       }
-      // embed ジョブは常に outbox 経由（非同期、docs/memory-model.md §11 行3）。
-      // ここでは何もしない — tick() の processEmbedJob が処理する。
+      // embed/consolidate/reflect ジョブは常に outbox 経由（非同期、docs/memory-model.md §11 行3）。
+      // ここでは何もしない — tick() の各 processXxxJob が処理する。
     }
     return { memoryIds, contentHashes };
   }
@@ -2142,6 +2188,51 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
   }
 
   /**
+   * `job.payload` から `memoryId` を取り出す共通部分（Issue #204 / ADR 0157）。
+   * `processEmbedJob` の `memoryId` 取り出しと同じ形——`consolidate`/`reflect` の
+   * ジョブも `createMemoryWithOutbox` が作る以上、payload の形は embed と同じ
+   * `{ memoryId }` である（新しい payload 形を発明しない、ADR 0157 決定2）。
+   *
+   * 🔴 **payload が壊れていた（`memoryId` が無い/文字列でない）場合は投げる。**
+   * `processEmbedJob` と同じ規律——黙って何もしない・空処理として `complete()` しない
+   * （ADR 0082 の哲学）。呼び出し元の `tick()` がこれを catch し、`outboxStore.fail()`
+   * で終端に落として `TickResult.failed` に数える。
+   */
+  function readSeedMemoryIdFromPayload(job: OutboxJobRecord): MemoryId {
+    const memoryId = job.payload.memoryId;
+    if (typeof memoryId !== "string") {
+      throw new Error(`runtime.tick: ${job.kind} job payload missing memoryId`);
+    }
+    return memoryId;
+  }
+
+  /**
+   * `tick` の `consolidate` ジョブハンドラ（Issue #204 / ADR 0157）。
+   *
+   * **`seedMemoryId` が指す Memory が見つからない場合は投げない。**
+   * `consolidate()` 自身が「種が見つからない」を `nothingReason` 経由の正規の結末
+   * （`not_found` → `nothing_to_consolidate`/`no_eligible_sources` 等、ADR 0152 決定6）
+   * として扱うため、ここで二重に判定しない——`processEmbedJob` が `memory not found` を
+   * 例外にしているのとは事情が違う（embed には「対象が無かった」を表す正規の結末が無い）。
+   * `consolidate()` が投げるのは LLM/store が本当に失敗したときだけであり、その例外は
+   * そのまま伝播させて `tick()` に `fail()` させる。
+   */
+  async function processConsolidateJob(ctx: Ctx, job: OutboxJobRecord): Promise<void> {
+    const seedMemoryId = readSeedMemoryIdFromPayload(job);
+    await consolidate(ctx, { target: { seedMemoryId } });
+  }
+
+  /**
+   * `tick` の `reflect` ジョブハンドラ（Issue #204 / ADR 0157）。
+   * `processConsolidateJob` と対称——理由は同じ（`reflect()` も種が見つからない場合を
+   * `not_found` 経由の正規の結末として扱う、ADR 0154 決定5）。
+   */
+  async function processReflectJob(ctx: Ctx, job: OutboxJobRecord): Promise<void> {
+    const seedMemoryId = readSeedMemoryIdFromPayload(job);
+    await reflect(ctx, { target: { seedMemoryId } });
+  }
+
+  /**
    * `tick` がジョブを配る先。**キーの集合は {@link TICK_SUPPORTED_JOB_KINDS} と型で結ばれている**
    * ——`Record<TickSupportedJobKind, JobHandler>` なので、片方だけ足す/消すと型検査が落ちる。
    * issue #105（型に `consolidate` が在るのに分岐が無い）と同じずれを、次からは
@@ -2150,6 +2241,8 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
   const jobHandlers: Record<TickSupportedJobKind, JobHandler> = {
     extract: processExtractJob,
     embed: processEmbedJob,
+    consolidate: processConsolidateJob,
+    reflect: processReflectJob,
   };
   /**
    * `job.kind`（開いたユニオン＝任意の文字列）で引くための索引。

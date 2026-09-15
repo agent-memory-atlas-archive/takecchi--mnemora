@@ -920,36 +920,49 @@ describe("runtime.tick — 対応していない outbox job kind（ADR 0082 / is
   });
 
   /**
-   * 🔴 **この歯は時限式である。意図してそう置いてある。**
+   * 🔴 **この歯は時限式だった。ここで役目を終えた（Issue #204 / ADR 0157）。**
    *
-   * `consolidate` / `reflect` は `OutboxJobKind` に名指しで在るが、いまは `tick` に分岐が無い
-   * ——これが issue #105 の報告者を読み違えさせたものそのものである。**その本体はこれから
-   * 実装される**（オーナーの決定、2026-09-09）。
+   * 元の歯は「`consolidate` / `reflect` はいまは `tick` に分岐が無く `unsupported` に出る」を
+   * `it.each(["consolidate", "reflect"])` で測っていた。ADR 0082 決定5 が予告していた
+   * とおり——「本体が入ったら赤くなる。それが正しい。**本体を足す側がこの歯を
+   * 書き換えるところまでがその作業**である」——`TICK_SUPPORTED_JOB_KINDS` に
+   * `"consolidate"`/`"reflect"` を足した今、元のアサーション
+   * （`expect(TICK_SUPPORTED_JOB_KINDS).not.toContain(kind)` と
+   * `unsupported: [{ jobId, kind }]`）はどちらも成り立たなくなった。
    *
-   * **本体が入ったら、この歯は赤くなる。それが正しい。**赤くなったら「壊れた」のではなく
-   * 「この歯が役目を終えた」合図であり、本体を足す側が**この歯を書き換えるところまでが
-   * その作業**である。散文のコメント（「Phase 1 では extract/embed だけ」等）で同じことを
-   * 書かなかったのは、**コメントは検査されず、黙って嘘になる**からである。
+   * **単に削除しない**（ADR 0157 決定3）——代わりに、下の2本を「いまは tick が処理する」
+   * ことを測る歯として書き換えた:
    *
-   * ⚠ この節の他の4つの歯は時限式では**ない**——`CUSTOM_KIND` は利用者が足した kind であり、
-   * `TICK_SUPPORTED_JOB_KINDS` に入ることは無い。kind がいくつ増えても、それらは効き続ける。
+   * 1. `TICK_SUPPORTED_JOB_KINDS` が実際に両方を含むこと（元の歯の否定）。
+   * 2. payload が壊れている（`memoryId` が無い）ジョブは、**`unsupported` にではなく
+   *    `failed` の側**（対応している kind として扱われたが、処理を試みて失敗した）に
+   *    出ること——`processConsolidateJob`/`processReflectJob` が
+   *    `readSeedMemoryIdFromPayload` で投げ、`tick()` がそれを `fail()` に落とす経路
+   *    （ADR 0082 の「無いの分類」を保ったまま、`unsupported` の意味を壊さない）。
    *
-   * ⚠ 追記（Issue #103、ADR 0089）: **動詞の本体（`Runtime.consolidate`）はこの PR で入った。**
-   * ただし入ったのは `consolidate` という**動詞**の実装だけであり、`tick` にその分岐を足す
-   * 作業（`TICK_SUPPORTED_JOB_KINDS` へ `"consolidate"` を足し、ハンドラを配線すること）は
-   * **含まれていない**——Issue #103 本文が「tick のジョブとして回せる形は別途 issue を立てる」
-   * と明示しているため（ADR 0089 §4）。**この歯が測っているのは *tick の分岐* であり、
-   * それはまだ無い。**下のアサーションは1文字も変えていない——この段落は、次にこの歯を
-   * 読む人が「時限式が（本体が入ったのに）不発だった」と誤読しないための追記に過ぎない。
-   * ⚠ 追記（Issue #104）: **`reflect` の動詞本体もこの PR で入ったが、この歯が測っているのは
-   * *tick の分岐* であり、それはまだ無い**（上と同じ区別。アサーションは1文字も変えていない）。
+   * ⚠ 「well-formed な payload を tick が実際に処理する」歯は、この describe の外
+   * （`runtime.tick — consolidate/reflect ジョブを処理する`）に置いた——対象の Memory を
+   * 用意する必要があり、この describe の他の歯（未対応 kind・壊れた payload）とは
+   * セットアップの形が異なるため。
+   *
+   * ⚠ この節の他の4つの歯（`CUSTOM_KIND` / prototype 名を使うもの）は時限式では**ない**
+   * ——`CUSTOM_KIND` は利用者が足した kind であり、`TICK_SUPPORTED_JOB_KINDS` に入ることは
+   * 無い。kind がいくつ増えても、それらは効き続ける（下の歯が実際にそれを壊していないことを
+   * 確認済み——この編集は上のブロックだけを書き換えている）。
    */
-  it.each(["consolidate", "reflect"])(
-    "⏳時限式の歯: '%s' はいまは tick に分岐が無く unsupported に出る（本体が入ったらこの歯を書き換えること）",
-    async (kind) => {
-      expect(TICK_SUPPORTED_JOB_KINDS).not.toContain(kind);
+  it("⭐ `TICK_SUPPORTED_JOB_KINDS` は 'consolidate'/'reflect' を含む（時限式の歯が役目を終えた証跡）", () => {
+    expect(TICK_SUPPORTED_JOB_KINDS).toContain("consolidate");
+    expect(TICK_SUPPORTED_JOB_KINDS).toContain("reflect");
+  });
 
+  it.each(["consolidate", "reflect"])(
+    "⭐ '%s' ジョブの payload が壊れている（memoryId が無い）と、unsupported ではなく failed で終端に落ちる",
+    async (kind) => {
       const { runtime, stores } = buildRuntime(llmReturning([]));
+      // `enqueueJobOfKind` は observation 用の outbox 経路を借りて payload を
+      // `{ observationId }` にする——`consolidate`/`reflect` が読む `memoryId` を持たない、
+      // 「payload が壊れている」ケースの具体例（ADR 0157 決定「payload が壊れていたときの
+      // 倒れ方を決める」）。
       const jobId = await enqueueJobOfKind(stores, kind);
 
       const tickResult = await runtime.tick(ctx, { kinds: [kind], leaseMs: TEST_LEASE_MS });
@@ -957,11 +970,124 @@ describe("runtime.tick — 対応していない outbox job kind（ADR 0082 / is
       expect(tickResult).toEqual({
         processed: 0,
         failed: 1,
-        unsupported: [{ jobId, kind }],
+        unsupported: [],
+        leaseConflicts: [],
+      });
+      const row = stores.outboxStore.listJobs(ctx).find((job) => job.id === jobId)!;
+      expect(row.failedAt).not.toBeNull();
+      expect(row.lastError).toBe(`runtime.tick: ${kind} job payload missing memoryId`);
+    },
+  );
+});
+
+/**
+ * Issue #204 / ADR 0157: `tick()` が `consolidate`/`reflect` の outbox ジョブを実際に処理する
+ * ことを、正常系（payload が正しい）で測る。上の describe（対応していない kind の節）は
+ * 「壊れた payload」の倒れ方を測っており、ここは「対応している」ことそのものを測る。
+ */
+describe("runtime.tick — consolidate/reflect ジョブを処理する（Issue #204 / ADR 0157）", () => {
+  it.each(["consolidate", "reflect"] as const)(
+    "⭐ payload `{ memoryId }` が正しければ、'%s' ジョブは unsupported にも failed にもならず処理される",
+    async (kind) => {
+      const { runtime, stores } = buildRuntime(llmReturning([]));
+      const { jobs } = await stores.memoryStore.createMemoryWithOutbox(
+        ctx,
+        {
+          tenantId: "tenant-1",
+          subjectId: null,
+          sourceObservationId: null,
+          extractorVersion: null,
+          content: "本文",
+          contentHash: "hash-1",
+          digest: "要旨",
+          digestSource: "llm",
+          provenance: {
+            kind: "stated",
+            sourceObservationId: "obs-standalone",
+            at: "2026-01-01T00:00:00.000Z",
+          },
+          tags: [],
+          occurredAt: null,
+          recordedAt: new Date(),
+          strength: 1,
+          halfLifeHours: 24,
+          decayFloorAt: new Date(),
+          embeddingStatus: "pending",
+        },
+        [kind],
+      );
+      expect(jobs).toHaveLength(1);
+      expect(jobs[0]!.payload).toEqual({ memoryId: jobs[0]!.payload.memoryId });
+
+      const tickResult = await runtime.tick(ctx, { kinds: [kind], leaseMs: TEST_LEASE_MS });
+
+      // `seedMemoryId` の近傍が無い（テナントにこの1件しかない）ため、`consolidate()`/
+      // `reflect()` は内部的には `nothing_to_consolidate`/`no_eligible_basis` 等で終わるが、
+      // **`tick()` の視点では「処理を試みて成功した」**——ジョブは完了として扱われる。
+      expect(tickResult).toEqual({
+        processed: 1,
+        failed: 0,
+        unsupported: [],
         leaseConflicts: [],
       });
     },
   );
+});
+
+/**
+ * Issue #204 / ADR 0157 決定4: 🔴 自動駆動は**既定で有効にならない**（北極星の問い2 /
+ * docs/roadmap.md §1.1）。この describe は両方向を測る——
+ * 「既定では1件も積まれない」と「opt-in すると積まれ、tick が処理する」。
+ */
+describe("runtime.observe(extract) が consolidate/reflect の種を積むのは opt-in のときだけ（Issue #204 / ADR 0157）", () => {
+  it("🔴 既定（config を渡さない）では、extract は embed 以外のジョブを1件も積まない", async () => {
+    const { runtime, stores } = buildRuntime(
+      llmReturning([{ content: "本文", digest: "要旨", provenanceKind: "stated" }]),
+    );
+
+    await runtime.observe(ctx, { kind: "utterance", text: "本文" });
+
+    // `extract: 'sync'`（既定）は監査/冪等性のための `extract` ジョブを常に積み、
+    // 同じ呼び出しの中で `complete()` する（`handleExtractableObservation` 参照。
+    // ADR 0157 の対象ではない、既存の挙動）——ここで測りたいのは
+    // `consolidate`/`reflect` が積まれないことだけなので、それ以外の kind は無視する。
+    const kinds = stores.outboxStore
+      .listJobs(ctx)
+      .map((job) => job.kind)
+      .filter((kind) => kind === "consolidate" || kind === "reflect");
+    expect(kinds).toEqual([]);
+  });
+
+  it("⭐ `autoQueueConsolidateReflectOnExtract: true` にすると、同じ memoryId を種にした consolidate/reflect のジョブも積まれ、tick が処理する", async () => {
+    const { runtime, stores } = buildRuntime(
+      llmReturning([{ content: "本文", digest: "要旨", provenanceKind: "stated" }]),
+      { config: { autoQueueConsolidateReflectOnExtract: true } },
+    );
+
+    const observeResult = await runtime.observe(ctx, { kind: "utterance", text: "本文" });
+    const memoryId = observeResult.memoryIds[0]!;
+
+    // `extract` ジョブも積まれるが（既存の挙動、上のテストのコメント参照）、sync 抽出の
+    // 中で既に `complete()` されているので、ここでは `consolidate`/`embed`/`reflect` の
+    // 3つだけを見る（ADR 0157 の対象）。
+    const jobsBeforeTick = stores.outboxStore.listJobs(ctx).filter((job) => job.kind !== "extract");
+    expect(
+      jobsBeforeTick
+        .map((job) => ({ kind: job.kind, payload: job.payload }))
+        .sort((a, b) => a.kind.localeCompare(b.kind)),
+    ).toEqual([
+      { kind: "consolidate", payload: { memoryId } },
+      { kind: "embed", payload: { memoryId } },
+      { kind: "reflect", payload: { memoryId } },
+    ]);
+
+    // 積まれるだけでなく、tick() が実際に処理する（unsupported にならない）ところまで測る
+    // ——「積む」と「処理できる」を別の歯で確かめないと、payload の形が食い違っていても
+    // 「積んだこと」だけで緑になってしまう。既に complete 済みの `extract` ジョブは
+    // `claimBatch` の対象外なので `processed` には含まれない。
+    const tickResult = await runtime.tick(ctx, { leaseMs: TEST_LEASE_MS });
+    expect(tickResult).toEqual({ processed: 3, failed: 0, unsupported: [], leaseConflicts: [] });
+  });
 });
 
 /**

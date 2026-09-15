@@ -169,5 +169,6 @@ alteroid (github.com/takecchi/alteroid) を根拠として引く箇所は、確�
 | [0154](./0154-reflect-seed-neighborhood.md) | `ReflectTarget` に `{ seedMemoryId }` を足す — `consolidate` と対称の土台選定、ただし帯は逆向き | 採用 (2026-09) |
 | [0155](./0155-recall-score-breakdown-persisted.md) | `recalls` にスコア内訳を永続化し、`MemoryStore.getRecall` で読み戻す | 採用 (2026-09) |
 | [0156](./0156-delegate-5-grade-judgment-and-breaking-changes.md) | 「§5 級の判断」と「公開 API の破壊的変更」の事前承認待ちを、担い手へ委譲する（`docs/autonomy.md` §3 の改定） | 採用 (2026-09) |
+| [0157](./0157-tick-drives-consolidate-and-reflect.md) | `tick()` が `consolidate()`/`reflect()` を駆動する — 事象駆動（outbox）、既定 off の opt-in | 採用 (2026-09) |
 
 <!-- ADR-INDEX:GENERATED:END -->
