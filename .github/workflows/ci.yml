@@ -42,6 +42,25 @@ jobs:
       - name: "配布物（packages/*/dist）が CommonJS として構文解析できること（Issue #110）"
         run: pnpm run check:cjs-parse
 
+      - name: "publish 梱包の門（pack:check）を毎PRのCIでも走らせる（Issue #241）"
+        # 六つの門（docs/autonomy.md §2）のうち pack:check だけが、これまで
+        # publish.yml（release / workflow_dispatch 経由）でしか走っていなかった
+        # ——毎 PR の CI（このジョブ）には一度も現れていなかった。
+        #
+        # このジョブに足す（独立ジョブにしない）理由: pack:check は各 publish
+        # 対象パッケージの `prepack`（`tsc -p tsconfig.build.json`）を経由して
+        # 自分で dist を作り直す（scripts/check-publish-pack.mjs 冒頭のコメント）ため、
+        # 直前の Build ステップの成果物に依存しない。だから独立ジョブにしても
+        # チェックアウト・install・build を丸ごとやり直すだけで意味が薄く、
+        # このジョブの末尾に1ステップ足すほうが CI 時間の増分が小さい。
+        # また、このジョブ名（`typecheck / lint / test / build`）は branch
+        # protection の required_status_checks に登録された文字列そのものである
+        # （`gh api repos/takecchi/mnemora/branches/main/protection` で確認済み）
+        # ため、ジョブ名を変えたり分割したりすると別途 branch protection の更新が
+        # 要る——それはこの PR の範囲外（オーナー権限の設定変更）とし、既存の
+        # ジョブへステップを足す形に留めた。
+        run: pnpm run pack:check
+
   postgres:
     name: packages/postgres (本物の Postgres + pgvector, server_encoding=${{ matrix.serverEncoding }})
     runs-on: ubuntu-latest

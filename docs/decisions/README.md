@@ -149,5 +149,6 @@ alteroid (github.com/takecchi/alteroid) を根拠として引く箇所は、確�
 | [0135](./0135-numeral-token-discriminator-probe-domain-design.md) | 主測定の被覆を広げる設計（第1弾）— 「単独トークンの数詞・記号インデックス」を弁別軸とする第4の probe 集合を置く。件数は行列から導き、margin の分布で読む | **提案 (2026-09)** |
 | [0136](./0136-contested-lone-dropped-not-returned-alone.md) | 片側だけの `contested`（`contestedWithId=null`）を、読み取り側で単独返却させない | 採用 (2026-09) |
 | [0137](./0137-adr-index-generated-from-source.md) | ADR 索引（`docs/decisions/README.md`）を `docs/decisions/*.md` から生成する — 案A、行位置の衝突そのものを消す | 採用 (2026-09) |
+| [0138](./0138-pack-check-in-ci.md) | 六つの門の `pack:check` を、毎PRの `ci.yml` でも走らせる | 採用 (2026-09) |
 
 <!-- ADR-INDEX:GENERATED:END -->
