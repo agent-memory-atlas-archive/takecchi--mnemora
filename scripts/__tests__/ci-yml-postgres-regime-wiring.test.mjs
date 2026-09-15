@@ -736,30 +736,35 @@ describe("値を作る側の歯が MNEMORA_LEXICAL_REGIME_JSON を参照して�
   });
 });
 
-describe("ci.yml の8本の pgvector ジョブが regime を宣言していること(Issue #148 ②/Issue #155/Issue #209/Issue #217)", () => {
-  // 🔴 この describe が固定しているのは「1本で測った regime が8本に効く」根拠そのもの
-  // ——`postgres` ジョブ1本だけが実際に regime を測るが、他7本は同じ
-  // `POSTGRES_INITDB_ARGS` を宣言することで「同じ regime のはず」を保証する設計である
-  // (ADR 0106「測ったこと」)。
+describe("ci.yml の pgvector ジョブが regime を宣言していること(Issue #148 ②/Issue #155/Issue #224)", () => {
+  // 🔴 この describe が固定しているのは「1本(いま1脚)で測った regime が他ジョブに効く」
+  // 根拠そのもの——`postgres` ジョブ1本(1脚)だけが実際に regime を測るが、他のジョブは
+  // 同じ `POSTGRES_INITDB_ARGS` を宣言することで「同じ regime のはず」を保証する設計である
+  // (ADR 0106「測ったこと」)。この根拠が技術的に要求するのは次の2つだけである
+  // (ADR 0127「この歯は何を守っているのか」):
+  //   1. matrix 配線(実測している側)がちょうど1本であること
+  //   2. matrix 配線されていない残り全部が、matrix の UTF8 脚と同じ
+  //      `POSTGRES_INITDB_ARGS` を宣言していること
+  // **どちらも「絶対何本あるか」を要求しない。**
   //
-  // ⚠ **Issue #155 で (b)(c) の主張を作り直した(弱めていない)。**`postgres` ジョブが
-  // matrix になったことで、8本のうち1本(`postgres` ジョブ)の `POSTGRES_INITDB_ARGS` は
-  // もはやリテラル文字列ではなく `${{ matrix.initdbArgs }}` という式になった——だから
-  // (b)「8本の値がすべて同一」という主張はそのままでは成立しなくなった(1本だけ式、
-  // 7本はリテラル)。
-  //
-  // ⚠ **Issue #209 の `archive-sweep-cost` と Issue #217 の `time-term` で 2本増え、
-  // 6本→8本になった。**どちらも同じ `POSTGRES_INITDB_ARGS: "--encoding=UTF8"` を宣言しており、
-  // この describe が固定する不変条件(「新しい pgvector ジョブは同じ regime を宣言する」)を
-  // そのまま満たす。**⚠ この2本は別々の PR(#220/#221)で並行に足され、どちらも自分の分だけを
-  // 数え直して 6本→7本に更新した**——先に着地した側の値が main に入るので、後から着地する側が
-  // 数え直さなければ main が赤くなる。**本数を固定値で持っていることの代償**であり、
-  // 現物を数える形へ変えるかは別の判断として開いている。
+  // 🔴 **2026-09-15、Issue #224(PR #220/#221 で実際に踏んだ)を受けて、絶対本数の固定
+  // (旧: services ブロック数 toHaveLength(8) / matrix化していない値の数 toHaveLength(7))
+  // を外した。** ADR 番号のような排他割当と違い、絶対本数は「複数の並行 PR がそれぞれ
+  // 独立に1本ずつ足し、どちらも自分の分だけを正しく数え直しても、結果が食い違いうる」
+  // 構造的な罠だった(#220 と #221 がそれぞれ 6→7 に更新し、実数の8と食い違った)。
+  // ⛔ **これは歯を黙らせただけではない**——絶対本数が捕まえていた「知らないうちに
+  // 増減したこと」という主張自体は、ADR 0106 の技術的主張(1本の実測が他に効く)には
+  // 元々不要だったと判断し、理由を ADR 0127 に書いた。捨てていないのは
+  // `matrixWired.length === 1`(条件1そのもの)——matrix 化は日常的に増減する対象ではなく
+  // 単発の設計判断(ADR 0105)であり、#220/#221 型の罠を受けない(理由は ADR 0127)。
   //
   // 作り直した主張:
-  // - (b): **matrix 化していない他7本の値は、matrix の UTF8 脚の initdbArgs と一致する**
-  //   ——UTF8 脚の値は Issue #148 由来の実測のまま1バイトも変えていないので、
-  //   「1本(いまは1脚)で測った regime が他7本に効く」という根拠は保たれる。
+  // - (a): **pgvector を持つ全ジョブが `POSTGRES_INITDB_ARGS` を宣言している**
+  //   (本数は問わない。0本だと以降の判定が空振りになるため「1本以上」だけ確かめる)。
+  // - (b): **matrix 配線はちょうど1本であり、matrix 化していない残り全部の値は、
+  //   matrix の UTF8 脚の initdbArgs と一致する**——UTF8 脚の値は Issue #148 由来の
+  //   実測のまま1バイトも変えていないので、「1本(いま1脚)で測った regime が他ジョブに
+  //   効く」という根拠は保たれる。**残り全部の本数そのものは問わない。**
   // - (c): **matrix の各脚について、--encoding= の値とその脚の serverEncoding が一致し
   //   (自己無矛盾)、かつ service env と summary 段がどちらも同じ matrix 変数へ
   //   直接配線されている**(値を書き写すのではなく、同じ変数を参照している——
@@ -873,10 +878,11 @@ describe("ci.yml の8本の pgvector ジョブが regime を宣言している�
   const serviceBlocks = extractPgvectorServiceEnvBlocks();
   const matrixLegs = extractMatrixLegs();
 
-  it("(a) image: pgvector/pgvector:pg17 の services ブロックが8本あり、8本すべてが POSTGRES_INITDB_ARGS を持つ", () => {
-    expect(serviceBlocks, "pgvector/pgvector:pg17 の services ブロックの数が変わった").toHaveLength(
-      8,
-    );
+  it("(a) image: pgvector/pgvector:pg17 の services ブロックが1本以上あり、全部が POSTGRES_INITDB_ARGS を持つ(Issue #224: 絶対本数は問わない)", () => {
+    expect(
+      serviceBlocks.length,
+      "pgvector/pgvector:pg17 の services ブロックが1本も無い(抽出が壊れたか、pgvector ジョブが全部消えた)。",
+    ).toBeGreaterThan(0);
     for (const block of serviceBlocks) {
       const env = parseEnvLines(block.envLines);
       expect(
@@ -894,7 +900,7 @@ describe("ci.yml の8本の pgvector ジョブが regime を宣言している�
     expect(jobBlock).toMatch(/fail-fast:\s*false/);
   });
 
-  it("(b) ⭐ matrix 化していない他7本の POSTGRES_INITDB_ARGS は、matrix の UTF8 脚の initdbArgs と一致する(Issue #155で作り直し・Issue #209/#217で7本に更新。『1本(いま1脚)で測った regime が他7本に効く』根拠そのもの)", () => {
+  it("(b) ⭐ matrix 配線はちょうど1本であり、matrix 化していない残り全部の POSTGRES_INITDB_ARGS は、matrix の UTF8 脚の initdbArgs と一致する(Issue #224: 本数そのものは問わない。『1本(いまは1脚)で測った regime が他ジョブに効く』根拠そのもの)", () => {
     const values = serviceBlocks.map((block) => parseEnvLines(block.envLines).POSTGRES_INITDB_ARGS);
     const matrixWired = values.filter((value) => value === "${{ matrix.initdbArgs }}");
     const fixedValues = values.filter((value) => value !== "${{ matrix.initdbArgs }}");
@@ -902,13 +908,13 @@ describe("ci.yml の8本の pgvector ジョブが regime を宣言している�
     expect(
       matrixWired,
       "postgres ジョブの POSTGRES_INITDB_ARGS が ${{ matrix.initdbArgs }} へ配線されていない" +
-        "(matrix 化が外れたか、postgres ジョブが増えた)。",
+        "(matrix 化が外れたか、matrix 配線されたジョブが2本以上になった——ADR 0127 は" +
+        "『matrix 配線はちょうど1本』を不変条件として残している)。",
     ).toHaveLength(1);
     expect(
-      fixedValues,
-      "matrix 化していないはずの7本の数が変わった(Issue #155 はpostgresジョブ1本だけをmatrix化する。" +
-        "Issue #209 の archive-sweep-cost と Issue #217 の time-term で 5本→7本になった)。",
-    ).toHaveLength(7);
+      fixedValues.length,
+      "matrix 化していない pgvector ジョブが1本も無い(全ジョブが matrix 配線されている?)。",
+    ).toBeGreaterThan(0);
 
     const utf8Leg = matrixLegs.find((leg) => leg.serverEncoding === "UTF8");
     expect(utf8Leg, "postgres ジョブの matrix に UTF8 脚が無い").toBeDefined();
@@ -916,7 +922,7 @@ describe("ci.yml の8本の pgvector ジョブが regime を宣言している�
     const distinctFixed = new Set(fixedValues);
     expect(
       distinctFixed.size,
-      `matrix 化していない7本の POSTGRES_INITDB_ARGS が同一でない: ${JSON.stringify(fixedValues)}。` +
+      `matrix 化していない pgvector ジョブの POSTGRES_INITDB_ARGS が同一でない: ${JSON.stringify(fixedValues)}。` +
         "packages/postgres ジョブでしか regime を実測していない前提が崩れる(ADR 0106)。",
     ).toBe(1);
     // `parseEnvLines` は `KEY: "value"` の右辺をクォート込みで返す(YAML の文字列表現を
@@ -925,8 +931,8 @@ describe("ci.yml の8本の pgvector ジョブが regime を宣言している�
     const fixedValueUnquoted = [...distinctFixed][0]?.replace(/^"(.*)"$/, "$1");
     expect(
       fixedValueUnquoted,
-      "他7本の値が、postgres ジョブの matrix の UTF8 脚と食い違う。UTF8 脚は過去の実測との" +
-        "比較可能性のため1バイトも変えない約束である。",
+      "matrix 化していない pgvector ジョブの値が、postgres ジョブの matrix の UTF8 脚と食い違う。" +
+        "UTF8 脚は過去の実測との比較可能性のため1バイトも変えない約束である。",
     ).toBe(utf8Leg?.initdbArgs);
   });
 
