@@ -3,10 +3,10 @@ import type { Ctx } from "../ctx.js";
 import type { LLMProvider, StructuredRequest } from "../interfaces/llm-provider.js";
 import type { MemoryStore } from "../interfaces/memory-store.js";
 import { defaultDecayStrategy } from "../strategies/decay.js";
-import { buildConsolidatedMemory } from "../strategies/consolidate.js";
+import { buildConsolidatedMemory, computeAffinity } from "../strategies/consolidate.js";
 import type { MemoryId } from "../ids.js";
 import type { Memory, MemoryStatus, NewMemory } from "../memory.js";
-import { createRuntime } from "../runtime.js";
+import { createRuntime, DEFAULT_CONSOLIDATE_MIN_AFFINITY } from "../runtime.js";
 import { createFakeRuntimeStores } from "./runtime-fakes.js";
 
 /**
@@ -536,6 +536,200 @@ describe("runtime.consolidate — target の { query } の形", () => {
       // ADR 0100: 書き込みを1件も試みていない。
       atomicity: "not_attempted",
     });
+  });
+});
+
+describe("runtime.consolidate — target の { seedMemoryId } の形（Issue #135）", () => {
+  it("既定の minAffinity（0.8）以上の近傍だけが種と一緒に統合される", async () => {
+    const { runtime, stores } = buildRuntime(llmConsolidatingTo({ content: "統合後" }));
+    // FakeEmbeddingProvider は文字列長・'a' の数からベクトルを作る（決定的）。
+    // "seed" → [4, 0]。recall({ text: seed.digest }) はこのベクトルで ANN する。
+    const seed = await stores.memoryStore.createMemory(
+      ctx,
+      newMemory({ content: "seed content", digest: "seed", embeddingStatus: "ready" }),
+    );
+    await stores.vectorStore.upsert(ctx, stores.embeddingProvider.space, seed.id, [4, 0]);
+    // [8, 0] は [4, 0] と同じ向き ⟹ cosine similarity = 1.0（≥ 0.8）。
+    const high = await stores.memoryStore.createMemory(
+      ctx,
+      newMemory({ content: "high affinity neighbor", digest: "hn", embeddingStatus: "ready" }),
+    );
+    await stores.vectorStore.upsert(ctx, stores.embeddingProvider.space, high.id, [8, 0]);
+    // [4, 4] は [4, 0] と45度 ⟹ cosine similarity ≈ 0.707（< 0.8）。
+    const low = await stores.memoryStore.createMemory(
+      ctx,
+      newMemory({ content: "low affinity neighbor", digest: "ln", embeddingStatus: "ready" }),
+    );
+    await stores.vectorStore.upsert(ctx, stores.embeddingProvider.space, low.id, [4, 4]);
+
+    const result = await runtime.consolidate(ctx, { target: { seedMemoryId: seed.id } });
+
+    expect(result.outcome).toBe("consolidated");
+    // low は候補にすら入らない——ids に無いので sources にも現れない。
+    expect(result.sources.map((s) => s.memoryId)).toEqual([seed.id, high.id]);
+    expect(result.sources.every((s) => s.kind === "superseded")).toBe(true);
+    const lowStored = await stores.memoryStore.get(ctx, low.id);
+    expect(lowStored?.status).toBe("active");
+  });
+
+  it("minAffinity を渡すと既定を上書きできる", async () => {
+    const { runtime, stores } = buildRuntime(llmConsolidatingTo({ content: "統合後" }));
+    const seed = await stores.memoryStore.createMemory(
+      ctx,
+      newMemory({ content: "seed content", digest: "seed", embeddingStatus: "ready" }),
+    );
+    await stores.vectorStore.upsert(ctx, stores.embeddingProvider.space, seed.id, [4, 0]);
+    const high = await stores.memoryStore.createMemory(
+      ctx,
+      newMemory({ content: "high affinity neighbor", digest: "hn", embeddingStatus: "ready" }),
+    );
+    await stores.vectorStore.upsert(ctx, stores.embeddingProvider.space, high.id, [8, 0]);
+    // 前のテストと同じ ≈0.707 の近傍——既定 (0.8) なら落ちるが、minAffinity: 0.5 なら通る。
+    const mid = await stores.memoryStore.createMemory(
+      ctx,
+      newMemory({ content: "mid affinity neighbor", digest: "mn", embeddingStatus: "ready" }),
+    );
+    await stores.vectorStore.upsert(ctx, stores.embeddingProvider.space, mid.id, [4, 4]);
+
+    const result = await runtime.consolidate(ctx, {
+      target: { seedMemoryId: seed.id, minAffinity: 0.5 },
+    });
+
+    expect(result.outcome).toBe("consolidated");
+    // recall のランク順（similarity が高い順）: high(1.0) → mid(≈0.707)。
+    expect(result.sources.map((s) => s.memoryId)).toEqual([seed.id, high.id, mid.id]);
+  });
+
+  it("種の embedding がまだ無く recall() の結果に現れなくても、種は先頭に足される", async () => {
+    const { runtime, stores } = buildRuntime(llmConsolidatingTo({ content: "統合後" }));
+    // 種の embeddingStatus は既定の 'pending'——vectorStore には一切 upsert しない。
+    const seed = await stores.memoryStore.createMemory(
+      ctx,
+      newMemory({ content: "seed content", digest: "seed" }),
+    );
+    const neighbor = await stores.memoryStore.createMemory(
+      ctx,
+      newMemory({ content: "neighbor", digest: "n", embeddingStatus: "ready" }),
+    );
+    await stores.vectorStore.upsert(ctx, stores.embeddingProvider.space, neighbor.id, [4, 0]);
+
+    const result = await runtime.consolidate(ctx, { target: { seedMemoryId: seed.id } });
+
+    expect(result.outcome).toBe("consolidated");
+    expect(result.sources.map((s) => s.memoryId)).toEqual([seed.id, neighbor.id]);
+  });
+
+  it("maxCandidates は種を残したまま [種, ...近傍] を先頭から切る", async () => {
+    const { runtime, stores } = buildRuntime(llmConsolidatingTo({ content: "統合後" }));
+    const seed = await stores.memoryStore.createMemory(
+      ctx,
+      newMemory({ content: "seed content", digest: "seed", embeddingStatus: "ready" }),
+    );
+    await stores.vectorStore.upsert(ctx, stores.embeddingProvider.space, seed.id, [4, 0]);
+    // similarity ≈ 1.0（[4,0] と同じ向き）。
+    const first = await stores.memoryStore.createMemory(
+      ctx,
+      newMemory({ content: "first neighbor", digest: "f1", embeddingStatus: "ready" }),
+    );
+    await stores.vectorStore.upsert(ctx, stores.embeddingProvider.space, first.id, [8, 0]);
+    // similarity ≈ 0.970（[8,0] と [4,0] の間、first よりわずかに離れている）。
+    const second = await stores.memoryStore.createMemory(
+      ctx,
+      newMemory({ content: "second neighbor", digest: "f2", embeddingStatus: "ready" }),
+    );
+    await stores.vectorStore.upsert(ctx, stores.embeddingProvider.space, second.id, [8, 2]);
+
+    const result = await runtime.consolidate(ctx, {
+      target: { seedMemoryId: seed.id, maxCandidates: 2 },
+    });
+
+    expect(result.outcome).toBe("consolidated");
+    expect(result.sources.map((s) => s.memoryId)).toEqual([seed.id, first.id]);
+    const secondStored = await stores.memoryStore.get(ctx, second.id);
+    expect(secondStored?.status).toBe("active");
+  });
+
+  it("種が見つからなければ recall を呼ばず、not_found・LLM を呼ばない", async () => {
+    const { runtime } = buildRuntime(notUsedLlm);
+
+    const result = await runtime.consolidate(ctx, {
+      target: { seedMemoryId: "does-not-exist" },
+    });
+
+    expect(result).toEqual({
+      outcome: "nothing_to_consolidate",
+      nothingReason: "no_eligible_sources",
+      consolidatedMemoryId: null,
+      sources: [{ memoryId: "does-not-exist", kind: "not_found" }],
+      llmCalls: 0,
+      llmFailure: null,
+      atomicity: "not_attempted",
+    });
+  });
+});
+
+describe("computeAffinity（純関数、strategies/consolidate.ts）", () => {
+  it("similarity と lexicalMatch の大きい方を返す", () => {
+    expect(
+      computeAffinity({
+        similarity: 0.3,
+        lexicalMatch: 0.7,
+        decay: 1,
+        tagMatch: 1,
+        freshness: 1,
+        strength: 1,
+        total: 1,
+      }),
+    ).toBe(0.7);
+    expect(
+      computeAffinity({
+        similarity: 0.9,
+        lexicalMatch: 0.2,
+        decay: 1,
+        tagMatch: 1,
+        freshness: 1,
+        strength: 1,
+        total: 1,
+      }),
+    ).toBe(0.9);
+  });
+
+  it("similarity だけのとき similarity をそのまま返す", () => {
+    expect(
+      computeAffinity({
+        similarity: 0.42,
+        decay: 1,
+        tagMatch: 1,
+        freshness: 1,
+        strength: 1,
+        total: 1,
+      }),
+    ).toBe(0.42);
+  });
+
+  it("lexicalMatch だけのとき lexicalMatch をそのまま返す", () => {
+    expect(
+      computeAffinity({
+        lexicalMatch: 0.55,
+        decay: 1,
+        tagMatch: 1,
+        freshness: 1,
+        strength: 1,
+        total: 1,
+      }),
+    ).toBe(0.55);
+  });
+
+  it("両方無い（mandatory_companion 経由など）なら -Infinity——どんな有限の minAffinity でも必ず落ちる", () => {
+    const affinity = computeAffinity({
+      decay: 1,
+      tagMatch: 1,
+      freshness: 1,
+      strength: 1,
+      total: 1,
+    });
+    expect(affinity).toBe(-Infinity);
+    expect(affinity >= DEFAULT_CONSOLIDATE_MIN_AFFINITY).toBe(false);
   });
 });
 

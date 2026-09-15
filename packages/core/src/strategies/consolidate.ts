@@ -3,6 +3,7 @@ import type { Ctx } from "../ctx.js";
 import { resolveDigest } from "../extraction.js";
 import type { PromptSpec } from "../interfaces/llm-provider.js";
 import type { Memory, NewMemory } from "../memory.js";
+import type { ScoreBreakdown } from "../recall.js";
 import { defaultDecayStrategy } from "./decay.js";
 
 /**
@@ -119,4 +120,23 @@ export function buildConsolidatedMemory(params: BuildConsolidatedMemoryParams): 
     decayFloorAt,
     embeddingStatus: "pending",
   };
+}
+
+/**
+ * `{ seedMemoryId }` 形（Issue #135、ADR 0152）が使う「似ている」の物差し。
+ *
+ * **新しく発明しない。**`recall()` が既に使っている物差しをそのまま流用する
+ * （`strategies/scoring.ts` の `affinity = max(similarity, lexicalMatch)`、ADR 0084 §5）。
+ * `consolidate` が別の「似ている」を持つと、recall が近いと言うものと consolidate が
+ * 近いと言うものが食い違う——同じ製品の中に「似ている」の定義が2つ立つことになる。
+ *
+ * `RecalledMemory.score` は候補がどの段を通って見つかったかによって `similarity`/
+ * `lexicalMatch` のどちらか・両方・どちらも無し、の3通りがある
+ * （`mandatory_companion` 経由は両方とも無い——矛盾の相手として同伴取得されただけで、
+ * クエリへの近さを測っていない）。**どちらも無い候補には -Infinity を渡し、
+ * どんな `minAffinity`（有限値である限り）でも必ず落ちるようにする**——
+ * 「似ているかどうか分からない」を「似ている」側へ倒さない。
+ */
+export function computeAffinity(score: ScoreBreakdown): number {
+  return Math.max(score.similarity ?? -Infinity, score.lexicalMatch ?? -Infinity);
 }

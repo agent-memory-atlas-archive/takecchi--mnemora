@@ -55,6 +55,7 @@ import type { ReextractSkip } from "./strategies/reextract.js";
 import {
   buildConsolidatedMemory,
   buildConsolidationPrompt,
+  computeAffinity,
   ConsolidationLLMResultSchema,
 } from "./strategies/consolidate.js";
 import type { ConsolidationLLMResult } from "./strategies/consolidate.js";
@@ -374,14 +375,55 @@ export interface ForgetResult {
 }
 
 /**
- * `runtime.consolidate` の対象（Issue #103、ADR 0089）。
+ * `runtime.consolidate` の対象（Issue #103、ADR 0089。`{ seedMemoryId }` は
+ * Issue #135、ADR 0152）。
  *
  * `{ memoryIds }` は `forget` の `ForgetTarget` と同じ規律——正規化せず、**重複も入力順も
  * そのまま保つ**。`{ query, maxCandidates }` は `recall(ctx, query)` を1回呼んで得られた
  * `memories` の id を順に採る（`maxCandidates` があれば先頭からその件数で切る）。
+ *
+ * `{ seedMemoryId }` は「この記憶に似ているものを mnemora 自身が集めて、1つに畳め」という
+ * 意味である（ADR 0152）。`{ query, maxCandidates }` と違い、**「似ている」の判定
+ * そのものを呼び手ではなく mnemora 側が行う**。ただし ADR 0089 却下案7・
+ * `docs/roadmap.md` §5.7 が拒んだ「対象を自分で*列挙して*選ぶ」（active な記憶を走査して
+ * どれから畳むかを決める）ことはしない——**起点（`seedMemoryId`）は必ず呼び手が渡す。**
+ * mnemora が自分で決めるのは「起点に似ているものをどう集めるか」だけである。
+ *
+ * - 実装（`consolidate()` 内）: `seedMemoryId` の Memory を `get` し、その `digest` を
+ *   `RecallQuery.text` にして `recall(ctx, { text })` を1回呼ぶ——`{ query }` 形と
+ *   まったく同じ経路（同じ `recall()`）を通す。**新しい「似ている」の判定を作らない。**
+ * - 「似ている」は `recall()` が既に使っている `affinity`
+ *   （`strategies/scoring.ts`: `affinity = max(similarity, lexicalMatch)`）をそのまま使う
+ *   （{@link computeAffinity}）。`minAffinity` 未満の候補は落とす。**既定は
+ *   {@link DEFAULT_CONSOLIDATE_MIN_AFFINITY}。**
+ * - **種（`seedMemoryId` そのもの）は `minAffinity` の判定を受けず、必ず候補に含める。**
+ *   種の embedding がまだ無ければ ANN 段に載らず `recall()` の結果に現れないため
+ *   （`embeddingStatus: 'pending'`。`consolidate` 自身が作る統合先の産物と同じ窓、
+ *   ADR 0089「引き受けた負債」4）、`recall()` の結果に種が見つからなければ先頭に足す。
+ *   見つかった場合も、`minAffinity` で弾かれないよう先頭に固定する（`affinity` の判定対象は
+ *   種以外の候補だけ）。
+ * - `maxCandidates` は「1回の統合に入れる上限」——`{ query }` 形と同じ意味。
+ *   `[seedMemoryId, ...minAffinity を満たした近傍]` の順に並べたあと、先頭から切る
+ *   （種は常に先頭にいるため、`maxCandidates >= 1` である限り必ず残る）。
+ * - `seedMemoryId` が指す Memory が無い場合、`recall()` は呼ばない——
+ *   対象は `[seedMemoryId]` の1件のみとなり、後続の `getMany` が `not_found` に分類する
+ *   （新しい `nothingReason` を発明しない。下記 {@link ConsolidateNothingReason} 参照）。
  */
 export type ConsolidateTarget =
-  { memoryIds: MemoryId[] } | { query: RecallQuery; maxCandidates?: number };
+  | { memoryIds: MemoryId[] }
+  | { query: RecallQuery; maxCandidates?: number }
+  | { seedMemoryId: MemoryId; maxCandidates?: number; minAffinity?: number };
+
+/**
+ * `{ seedMemoryId }` 形（Issue #135、ADR 0152）が使う `minAffinity` の既定値。
+ *
+ * 🔴 **この値は実測していない。**保守側（畳まない側）に倒した理由——統合元は
+ * `superseded` へ動く（ADR 0089 決定1）ため、**取り違えて畳んだときの damage は
+ * 「畳まなかった」より大きい。**緩めるのは `examples/chat` の `consolidation-cost`
+ * （Issue #136、着地済み）で実際に測ってから判断する。`ConsolidateOptions.dryRun` が
+ * あるので、呼び手は本番へ入れる前に何が畳まれるはずかを見られる。
+ */
+export const DEFAULT_CONSOLIDATE_MIN_AFFINITY = 0.8;
 
 /**
  * `runtime.consolidate` の任意オプション（Issue #103、ADR 0089）。
@@ -1414,6 +1456,15 @@ export interface Runtime {
    *    store に一切触れず `outcome: 'not_examined'`。`{ query, maxCandidates }` は
    *    `recall(ctx, query)` を1回呼び、返った `memories` の id を順に採る
    *    （`maxCandidates` があれば先頭からその件数で切る）。0件も `not_examined`。
+   *    `{ seedMemoryId, maxCandidates?, minAffinity? }`（Issue #135、ADR 0152）は
+   *    種の Memory を `get` し、その `digest` を `text` にして `recall()` を1回呼ぶ
+   *    （`{ query }` とまったく同じ経路）。`recall()` が返した候補のうち、
+   *    `RecalledMemory.score` から `computeAffinity`（`max(similarity, lexicalMatch)`、
+   *    `strategies/consolidate.ts`）が `minAffinity`（既定
+   *    {@link DEFAULT_CONSOLIDATE_MIN_AFFINITY}）未満のものは落とす。**種そのものは
+   *    この判定を受けず、必ず先頭に含める**（種の embedding がまだ無いと ANN に
+   *    載らないため）。`maxCandidates` は結果の配列全体（種＋近傍）を先頭から切る。
+   *    種が見つからなければ `recall()` を呼ばず、対象は種の id 1件のみになる。
    * 2. `getMany` で一括読み。無ければ `not_found`、`status !== 'active'` なら
    *    `status_not_active`、`active` なら eligible。
    * 3. eligible が0件なら `nothing_to_consolidate`/`no_eligible_sources`、1件だけなら
@@ -2728,6 +2779,30 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
     let ids: MemoryId[];
     if ("memoryIds" in target) {
       ids = target.memoryIds;
+    } else if ("seedMemoryId" in target) {
+      // Issue #135（ADR 0152）: 「この記憶に似ているものを mnemora 自身が集めて、
+      // 1つに畳め」。ConsolidateTarget の doc コメント参照。
+      const seed = await deps.memoryStore.get(ctx, target.seedMemoryId);
+      if (seed === null) {
+        // 種が無い——recall を呼ばない。対象は種の id 1件のみとなり、後続の getMany が
+        // not_found に分類する（新しい nothingReason は発明しない）。
+        ids = [target.seedMemoryId];
+      } else {
+        // 種の digest を text にして recall() を1回呼ぶ——{ query } 形とまったく同じ
+        // 経路を通す（新しい「似ている」の判定を作らない）。
+        const recallResult = await recall(ctx, { text: seed.digest });
+        const minAffinity = target.minAffinity ?? DEFAULT_CONSOLIDATE_MIN_AFFINITY;
+        const neighborIds = recallResult.memories
+          .filter((m) => m.memoryId !== target.seedMemoryId)
+          .filter((m) => computeAffinity(m.score) >= minAffinity)
+          .map((m) => m.memoryId);
+        // 種は minAffinity の判定を受けず、必ず先頭に置く（種の embedding がまだ無いと
+        // recall() の結果に現れないため——ConsolidateTarget の doc コメント参照）。
+        ids = [target.seedMemoryId, ...neighborIds];
+        if (target.maxCandidates !== undefined) {
+          ids = ids.slice(0, target.maxCandidates);
+        }
+      }
     } else {
       const recallResult = await recall(ctx, target.query);
       const recalledIds = recallResult.memories.map((m) => m.memoryId);

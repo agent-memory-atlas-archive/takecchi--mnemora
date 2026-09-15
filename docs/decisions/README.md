@@ -162,5 +162,6 @@ alteroid (github.com/takecchi/alteroid) を根拠として引く箇所は、確�
 | [0148](./0148-bench-lexical-channel-selectable-default-unchanged.md) | `examples/chat` の `Runtime` に `LexicalStore` を配線する — ただし既定構成は変えず、語彙チャンネルは「選べるもの」として足す | 採用 (2026-09) |
 | [0149](./0149-japanese-lexical-no-required-extension.md) | 日本語の語を語彙チャンネルで引けるようにするため `REQUIRED_EXTENSIONS` を増やさない — 「引けない」を明記する | 採用 (2026-09) |
 | [0150](./0150-resolve-contested-explicit-operation.md) | 矛盾の解決 — `Runtime.resolveContested` で `contested → active \| superseded` を閉じ、段3の発火を変異試験で測る | 採用 (2026-09) |
+| [0152](./0152-consolidate-seed-neighborhood.md) | `ConsolidateTarget` に `{ seedMemoryId }` を足す — 「似ている」は recall の `affinity` を流用し、対象の列挙はしない | 採用 (2026-09) |
 
 <!-- ADR-INDEX:GENERATED:END -->
