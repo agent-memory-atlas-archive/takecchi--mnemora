@@ -30,6 +30,13 @@ npm i @mnemora/postgres @mnemora/core
   `mnemora-postgres-migrate`（後述）の `migrations/0001_init.sql` が
   `CREATE EXTENSION IF NOT EXISTS` で作成を試みるが、接続ロールに拡張を作る権限が無い
   環境ではあらかじめ DBA 側で作っておくこと。
+  **この3つで足りる——`pg_trgm` 等の追加の拡張は要求しない**
+  （[ADR 0084](../../docs/decisions/0084-lexical-recall-channel.md) §3・
+  [ADR 0149](../../docs/decisions/0149-japanese-lexical-no-required-extension.md)）。
+  **⚠ ただしその代償として、`recall()` の語彙(lexical)チャンネルは日本語の文に埋もれた
+  日本語の語（人名を含む）を引けない。**日本語表記のチャンネル名・社内システム名に
+  ついても、人名と同じ穴に落ちる可能性が高いが確かめていない
+  （[ADR 0149](../../docs/decisions/0149-japanese-lexical-no-required-extension.md)）。
 - 接続文字列は環境変数 `DATABASE_URL` で渡す。
 
 ## マイグレーション（`mnemora-postgres-migrate`）

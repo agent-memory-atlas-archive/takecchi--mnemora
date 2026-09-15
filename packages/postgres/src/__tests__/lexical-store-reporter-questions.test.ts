@@ -232,9 +232,17 @@ describe("PostgresLexicalStore.search — Issue #106 の報告者が挙げた5�
     // （`mnemora_lexical_query_terms`）。このクエリは全体が日本語（非 ASCII）なので、
     // クエリ側の語彙は1つも残らず、`mnemora_lexical_query_or` は空の tsquery を返し、
     // 何が本文に在っても一致しない。日本語の語（人名を含む）を語彙チャンネルで
-    // 引けないのは ADR 0084 §2/§8 が引き受けた負債であり、ADR 0092（この PR）は
+    // 引けないのは ADR 0084 §2/§8 が引き受けた負債であり、ADR 0092 は
     // クエリ語彙を OR で結ぶ・被覆率を計算するという変更だけを行っており、
     // この負債を塞いでいない。
+    //
+    // ⭐ この歯は Issue #139 の閉じる条件そのものである
+    // （ADR 0149: `REQUIRED_EXTENSIONS` を増やして日本語を引けるようにするかどうかを
+    // 検討し、増やさないと決めた。全導入者への条件追加と、`pg_trgm` が `C` ロケールで
+    // 黙って0件になる代償が釣り合わないため）。**この歯が赤くなったら、それは
+    // ADR 0149 の前提が変わったことを意味する**——ADR 0149「これが覆るとしたら」を見て、
+    // 歯とドキュメント（docs/recall.md・packages/postgres/README.md）を揃えて更新すること。
+    // 消す・緩めるだけで済ませないこと。
     expect(hits.map((h) => h.memoryId)).not.toContain(target.id);
     expect(hits).toEqual([]);
   });
