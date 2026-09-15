@@ -171,5 +171,6 @@ alteroid (github.com/takecchi/alteroid) を根拠として引く箇所は、確�
 | [0156](./0156-delegate-5-grade-judgment-and-breaking-changes.md) | 「§5 級の判断」と「公開 API の破壊的変更」の事前承認待ちを、担い手へ委譲する（`docs/autonomy.md` §3 の改定） | 採用 (2026-09) |
 | [0157](./0157-tick-drives-consolidate-and-reflect.md) | `tick()` が `consolidate()`/`reflect()` を駆動する — 事象駆動（outbox）、既定 off の opt-in | 採用 (2026-09) |
 | [0158](./0158-association-probes-bench.md) | 連想枠（ADR 0151）が想起の質を動かすかを測る `association-probes` ベンチを足す — この測定はまだ信頼できる状態にない（Issue #291 / #316 / #317） | 採用 (2026-09) |
+| [0159](./0159-omission-kind-generation-registry.md) | `Omission.kind` の11値に「本番コードが実際に生成する」歯を置く — レジストリ＋駆動、grep でも型だけでもなく | 採用 (2026-09) |
 
 <!-- ADR-INDEX:GENERATED:END -->
