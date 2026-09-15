@@ -87,12 +87,25 @@ const ARM_NUMBER_FIELDS = [
   "returnedMemoryTotal",
   "memoryCharsTotal",
   "associationCharsTotal",
+  // ⭐ Issue #291 フォローアップ: 同じストア・同じクエリで recall() を引き直したときの
+  // 一致件数(`examples/chat/src/association-arm.ts` の `AssociationArmReport` 参照)。
+  "repeatFrameIdenticalCount",
+  "repeatGoldRankSameCount",
 ];
 const ARM_BOOLEAN_FIELDS = ["associationEnabled"];
 
 const PROBE_STRING_FIELDS = ["probeId"];
 const PROBE_NUMBER_FIELDS = ["returnedCount", "memoryChars", "associationChars", "reciprocalRank"];
-const PROBE_BOOLEAN_FIELDS = ["hit1", "hit10", "goldReturned", "goldAnchoredOnProbeAnchor"];
+const PROBE_BOOLEAN_FIELDS = [
+  "hit1",
+  "hit10",
+  "goldReturned",
+  "goldAnchoredOnProbeAnchor",
+  // ⭐ Issue #291 フォローアップ: 同じストア・同じクエリでの recall() 引き直しが
+  // 一致したか(probe 単位。`AssociationProbeOutcome` 参照)。
+  "repeatFrameIdentical",
+  "repeatGoldRankSame",
+];
 
 /** `AssociationFrameEntry.role`(`examples/chat/src/association-arm.ts`)の既知の値。 */
 const ASSOCIATION_FRAME_ROLE_VALUES = [
@@ -771,6 +784,39 @@ function buildAssociationFrameRolesTable(measured) {
   return lines.join("\n");
 }
 
+/**
+ * ⭐ **同じストア・同じクエリで `recall()` を引き直したとき、連想枠/goldRank が
+ * 一致した probe 数**(Issue #291 フォローアップ)。
+ *
+ * CI で同一 commit を再実行したところ、12 probe 中 10 件で連想枠の構成員が
+ * 入れ替わった(一方 `off` arm は probe 別の値まで完全一致した)。原因の候補は2つ:
+ * (甲) ingest ごとの差(CI は毎回まっさらな Postgres へ入れ直すため、memory id・
+ * 物理配置・HNSW 索引の構築が毎回違う。近似索引である HNSW の誤差が最も大きい帯を
+ * 段3.5(連想枠)は定義上採る)、(乙) **同じストアへの引き直しでも変わる**(こちらなら
+ * 北極星の問い3「なぜ思い出したかを説明できるか」に直接刺さる)。
+ *
+ * この表は(甲)/(乙)を切り分けるための計測であって、CI 再実行間の非決定性そのものは
+ * 測っていない——**同じ ingest 結果の中で** 2回 `recall()` を呼んだときの一致率を見る。
+ * ここで不一致(`repeatFrameIdenticalCount < probeCount`)が出れば(乙)が確定する。
+ * 一致し続けるなら、非決定性は ingest 側(甲)に局在している可能性が高い、と読める
+ * (ただし「CI 再実行間でも一致するはず」までは、この表だけでは主張できない)。
+ */
+function buildRepeatConsistencyTable(measured) {
+  const header =
+    "| armLabel | 連想枠 | 枠が一致した probe 数 | goldRank が一致した probe 数 |";
+  const divider = "|---|---|---|---|";
+  const lines = [header, divider];
+  for (const arm of measured.arms) {
+    const assocLabel = arm.associationEnabled ? `on(maxCount=${arm.associationMaxCount})` : "off";
+    lines.push(
+      `| ${arm.armLabel} | ${assocLabel} | ` +
+        `${formatFraction(arm.repeatFrameIdenticalCount, arm.probeCount)} | ` +
+        `${formatFraction(arm.repeatGoldRankSameCount, arm.probeCount)} |`,
+    );
+  }
+  return lines.join("\n");
+}
+
 /** `associationMaxCount` が最大の(連想枠が on の)arm を返す。無ければ undefined。 */
 function findMaxAssociationCountArm(measured) {
   let best;
@@ -858,6 +904,14 @@ export function buildSummaryMarkdown({ measured, baseline }) {
     "## 連想枠の中身(role 別。北極星の問い3「なぜそれを思い出したのかを説明できるか」)",
     "",
     buildAssociationFrameRolesTable(measured),
+    "",
+    "## 同一ストアで引き直したとき枠が一致した probe 数(Issue #291 フォローアップ)",
+    "",
+    "同じ ingest 結果に対して同じクエリで `recall()` をもう一度呼び、連想枠/goldRank が" +
+      "一致したかを見る(CI 再実行間の非決定性が、ingest 側(HNSW 索引の構築など)に" +
+      "局在するのか、同じストアへの引き直しでも起きるのかを切り分けるための計測)。",
+    "",
+    buildRepeatConsistencyTable(measured),
   );
 
   const missedGoldFrameSection = buildMissedGoldFrameSection(measured);

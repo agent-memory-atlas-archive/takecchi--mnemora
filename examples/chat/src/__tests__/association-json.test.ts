@@ -26,6 +26,8 @@ function minimalArmReport(overrides: Partial<AssociationArmReport> = {}): Associ
     associationCharsTotal: 0,
     stageSkippedReasons: {},
     associationFrameRoles: {},
+    repeatFrameIdenticalCount: 0,
+    repeatGoldRankSameCount: 0,
     probes: [],
     ...overrides,
   };
@@ -90,6 +92,36 @@ describe("buildAssociationProbeRunJson", () => {
       commit: null,
     });
     expect(json.arms).toEqual([off, on3, on5, on10]);
+  });
+
+  it("⭐ arm ごとの repeatFrameIdenticalCount/repeatGoldRankSameCount がそのまま乗る(Issue #291 フォローアップ)", () => {
+    const off = minimalArmReport({
+      armLabel: "off",
+      repeatFrameIdenticalCount: 0,
+      repeatGoldRankSameCount: 12,
+    });
+    const on3 = minimalArmReport({
+      armLabel: "on3",
+      repeatFrameIdenticalCount: 2,
+      repeatGoldRankSameCount: 5,
+    });
+    const on5 = minimalArmReport({ armLabel: "on5" });
+    const on10 = minimalArmReport({ armLabel: "on10" });
+    const json = buildAssociationProbeRunJson({
+      offReport: off,
+      on3Report: on3,
+      on5Report: on5,
+      on10Report: on10,
+      embeddingSpace: { provider: "local", model: "ruri-v3-30m/sym", dimensions: 256 },
+      recallLimit: 10,
+      warmup: { ok: true, detail: "ok" },
+      measuredAt: new Date("2026-09-16T00:00:00.000Z"),
+      commit: null,
+    });
+    expect(json.arms[0]!.repeatFrameIdenticalCount).toBe(0);
+    expect(json.arms[0]!.repeatGoldRankSameCount).toBe(12);
+    expect(json.arms[1]!.repeatFrameIdenticalCount).toBe(2);
+    expect(json.arms[1]!.repeatGoldRankSameCount).toBe(5);
   });
 
   it("deltas: on(3)/on(5)/on(10) それぞれの対 off。charsPerAdditionalGold は goldReturnedCount<=0 なら null", () => {
