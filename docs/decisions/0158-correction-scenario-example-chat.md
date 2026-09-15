@@ -1,4 +1,4 @@
-# ADR 0157: `examples/chat` に訂正シナリオを足す — `contestedPair` は構造としての宣言、判定はしない
+# ADR 0158: `examples/chat` に訂正シナリオを足す — `contestedPair` は構造としての宣言、判定はしない
 
 - **状態**: 採用 (2026-09)
 - **日付**: 2026-09-16
