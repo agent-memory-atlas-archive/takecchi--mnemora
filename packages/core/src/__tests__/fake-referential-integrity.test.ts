@@ -71,7 +71,7 @@ function newRecallRecord(): NewRecallRecord {
     },
     indexBand: { groups: [], totalInScope: 0, countKind: "exact" },
     explain: { stages: [] },
-    returnedMemoryIds: [],
+    returnedMemories: [],
   };
 }
 

@@ -574,7 +574,13 @@ describe("runtime.purge — tick()/observe() から呼ばれない", () => {
       },
       indexBand: { groups: [], totalInScope: 0, countKind: "exact" },
       explain: { stages: [] },
-      returnedMemoryIds: [memory.id],
+      returnedMemories: [
+        {
+          memoryId: memory.id,
+          score: { decay: 1, tagMatch: 0, freshness: 1, strength: 1, total: 1 },
+          retrievedVia: "ann",
+        },
+      ],
     });
 
     await runtime.observe(ctx, { kind: "memory_usage", recallId, usedMemoryIds: [memory.id] });

@@ -1263,7 +1263,17 @@ export async function runRecall(
     usage,
     indexBand,
     explain: { stages },
-    returnedMemoryIds: finalMemories.map((m) => m.memoryId),
+    // Issue #298 / ADR 0155: 「後から再現できないもの」だけを運ぶ。`digest`/`provenanceKind`
+    // は `MemoryStore.get()` から再現できるため含めない（下の draft.memories は
+    // 引き続き finalMemories をそのまま使う——`RecallResult`（プロンプトへ向かう側）は
+    // 1バイトも太らせない。この変更は記録側だけに閉じている）。
+    returnedMemories: finalMemories.map((m) => ({
+      memoryId: m.memoryId,
+      score: m.score,
+      retrievedVia: m.retrievedVia,
+      ...(m.companionOf !== undefined ? { companionOf: m.companionOf } : {}),
+      ...(m.associationOf !== undefined ? { associationOf: m.associationOf } : {}),
+    })),
   });
 
   // -------------------------------------------------------------------

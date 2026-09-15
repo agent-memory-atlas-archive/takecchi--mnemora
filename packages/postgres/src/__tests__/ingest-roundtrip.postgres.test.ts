@@ -159,9 +159,15 @@ describe("observe → recall 前段の往復（roadmap.md 段階3、本物の Po
 
     // `recall_usages.recall_id` は `recalls(id)` への外部キー。recall() 自体は
     // roadmap.md 段階4の範囲であり、ここでは使用報告を試すための行を直接用意する。
+    // Issue #298 / ADR 0155: `returned_memories` は NOT NULL・DEFAULT 無し（意図的）。
+    // ここは外部キーの相手が要るだけで内訳の中身は問わないため、
+    // 「内訳ありの新規行」の最小形を渡す。
     const recallRow = await db.execute(sql`
-      INSERT INTO recalls (id, tenant_id, query, usage, index_band)
-      VALUES (gen_random_uuid(), ${ctx.tenantId}, '{}'::jsonb, '{}'::jsonb, '{}'::jsonb)
+      INSERT INTO recalls (id, tenant_id, query, usage, index_band, returned_memories)
+      VALUES (
+        gen_random_uuid(), ${ctx.tenantId}, '{}'::jsonb, '{}'::jsonb, '{}'::jsonb,
+        '{"breakdownCaptured":true,"memories":[]}'::jsonb
+      )
       RETURNING id
     `);
     const recallId = (recallRow.rows[0] as unknown as { id: string }).id;

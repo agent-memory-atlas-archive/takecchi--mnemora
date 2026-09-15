@@ -840,7 +840,7 @@ CREATE TABLE recalls (
   usage                jsonb       NOT NULL,              -- RecallUsage のスナップショット
   index_band           jsonb       NOT NULL,              -- 第3階の群カウント（目次帯）
   explain              jsonb       NOT NULL DEFAULT '{}', -- 各段の実行/未実行トレース
-  returned_memory_ids  uuid[]      NOT NULL DEFAULT '{}',
+  returned_memories    jsonb       NOT NULL,              -- { breakdownCaptured, memories } — 内訳つき（[ADR 0155](./decisions/0155-recall-score-breakdown-persisted.md)）
   created_at           timestamptz NOT NULL DEFAULT now()
 );
 
@@ -851,6 +851,12 @@ CREATE INDEX idx_recalls_by_subject ON recalls (tenant_id, subject_id, created_a
 いるからである——(a) 「候補に出たが LLM が使わなかった」を後から判定するには recall 自体が
 `recallId` を持ち帰れる必要がある（explainability）。(b) 強化（§6）は `recall_usages` を
 通じて `recall_id` を参照する。**一つの機構（recall を記録すること）が二つの要求を満たす。**
+
+`returned_memories` は当初 `returned_memory_ids uuid[]`（memoryId だけ）だったが、
+[ADR 0155](./decisions/0155-recall-score-breakdown-persisted.md) で「後から再現できないもの」
+（`score`/`retrievedVia`/`companionOf`/`associationOf`）を含む jsonb 1列へ置き換えた
+（列を足すのではなく置き換えている——理由は ADR 0155 参照）。`MemoryStore.getRecall(ctx,
+recallId)` がこの行を読み戻す口である。
 
 ### `recall_usages`（Phase 1）
 
