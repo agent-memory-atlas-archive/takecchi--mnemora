@@ -412,12 +412,20 @@ describe("idx_memories_recall_gate (誤り1の修正)", () => {
     expect(statusesReturned.has("forgotten")).toBe(false);
   }, 60_000);
 
-  it("decay_floor_at は Phase 1 では読み取りフィルタに使わない（roadmap.md、誤り3の整理）が、索引の3列目としては持つ", async () => {
-    // Phase 1 は decay_floor_at を書き込むだけで、段1の WHERE には使わない
-    // （roadmap.md「Phase 2 で WHERE decay_floor_at > now() を使い始めるだけ」）。
+  it("decay_floor_at は ADR 0153（PR #286）で recall() の既定の読み取りフィルタになった——ここで見るのは書き込み時に値が計算されていることだけ", async () => {
+    // ⚠ このテストはかつて「decay_floor_at は Phase 1 では読み取りフィルタに使わない
+    // （roadmap.md、誤り3の整理）」という it 名と、「Phase 1 は decay_floor_at を書き込む
+    // だけで、段1の WHERE には使わない」というコメントを持っていた。**これは今は事実と逆
+    // である**（Issue #302 の指摘）——ADR 0153（Issue #196、PR #286）が
+    // `packages/core/src/recall-runtime.ts` の `decayGateActive`
+    // （`RecallQuery.includeFullyDecayed !== true`、既定で有効）を通じて、段1の ANN 候補
+    // 生成に `VectorFilter.decayFloorAtAfter` を渡すようになっている。つまり
+    // `decay_floor_at` は Phase 2 を待たず、**既に**読み取りフィルタとして使われている
+    // （実測は `recall-decay-cross-day.postgres.test.ts`、Issue #302）。
     // 索引が (tenant_id, status, decay_floor_at) の3列構成であることは歯1が catalog で
-    // 見ている。ここで見るのは「書き込み時に decay_floor_at が計算されている」ことだけ
-    // ——列が在っても値が入っていなければ、Phase 2 の WHERE は何も刈れない。
+    // 見ている。ここで見ているのは元から「書き込み時に decay_floor_at が計算されている」
+    // ことだけであり、それ自体は変わっていない——列が在っても値が入っていなければ、
+    // 読み取り側の WHERE は何も刈れない。
     const ctx: Ctx = { tenantId: TENANT };
     const { db } = await getTestClient();
     const store = new PostgresMemoryStore(db);
