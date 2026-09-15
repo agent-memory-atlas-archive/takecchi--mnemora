@@ -1,4 +1,8 @@
-import { assertValidEventRetentionDays, DEFAULT_HALF_LIFE_HOURS } from "@mnemora/core";
+import {
+  assertValidEventRetentionDays,
+  DEFAULT_HALF_LIFE_HOURS,
+  isHalfLifeHoursInRange,
+} from "@mnemora/core";
 import type {
   Ctx,
   EventRetention,
@@ -24,8 +28,18 @@ export class InMemoryTenantSettingsStore implements TenantSettingsStore {
     { defaultHalfLifeHours: number; eventRetentionDays: number | null }
   >();
 
-  /** 設定行を作る（テスト用フック）。既存の行があれば half-life だけ上書きする。 */
+  /**
+   * 設定行を作る（テスト用フック）。既存の行があれば half-life だけ上書きする。
+   *
+   * 値域（ADR 0125）: `packages/postgres` は `tenant_settings_default_half_life_range` の
+   * CHECK 制約でこれを強制する。この in-memory 実装にも同じ検査を置く——
+   * ここで放置すると「本番では落ちる書き込みが手元では黙って成功する」（ADR 0047 と
+   * 同じ理由。`isStrengthInRange` の使われ方を参照）。
+   */
   setDefaultHalfLifeHours(tenantId: string, hours: number): void {
+    if (!isHalfLifeHoursInRange(hours)) {
+      throw new Error(`InMemoryTenantSettingsStore: halfLifeHours out of range (0, ∞): ${hours}`);
+    }
     const row = this.rows.get(tenantId);
     if (row) {
       row.defaultHalfLifeHours = hours;

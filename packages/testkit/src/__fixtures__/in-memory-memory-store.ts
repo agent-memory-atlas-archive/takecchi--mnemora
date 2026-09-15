@@ -1,6 +1,7 @@
 import {
   defaultDecayStrategy,
   isEmbeddingStatusRollback,
+  isHalfLifeHoursInRange,
   isStrengthInRange,
   MAX_STRENGTH,
   MemoryPurgeConflictError,
@@ -191,6 +192,15 @@ export class InMemoryMemoryStore implements MemoryStore {
       if (!isStrengthInRange(input.strength)) {
         throw new Error(
           `InMemoryMemoryStore: strength out of range (0, ${MAX_STRENGTH}]: ${input.strength}`,
+        );
+      }
+      // 値域（ADR 0125）: `packages/postgres` は `memories_half_life_range` の CHECK 制約で
+      // これを強制する。`decay`/`freshness` は `elapsedHours / halfLifeHours` として
+      // この値で割るため、`0`・負・`NaN`・`Infinity` は決して通してはならない
+      // （Issue #231。`isHalfLifeHoursInRange` の doc に実測を記録した）。
+      if (!isHalfLifeHoursInRange(input.halfLifeHours)) {
+        throw new Error(
+          `InMemoryMemoryStore: halfLifeHours out of range (0, ∞): ${input.halfLifeHours}`,
         );
       }
 

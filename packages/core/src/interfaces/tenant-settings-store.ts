@@ -9,6 +9,53 @@ import type { Ctx } from "../ctx.js";
 export const DEFAULT_HALF_LIFE_HOURS = 720;
 
 /**
+ * `halfLifeHours` の値域は **`(0, ∞)`（有限の正の実数）**である（ADR 0125）。
+ *
+ * この値は2箇所で同じ意味を持つ——`Memory.halfLifeHours`（`memories.half_life_hours`）と
+ * `tenant_settings.default_half_life_hours`（前者の既定値の元になる）。どちらも
+ * `defaultDecayStrategy`（`strategies/decay.ts`）の割り算 `elapsedHours / halfLifeHours` に
+ * 直接入るため、値域が同じでなければならない。だからこの関数を1箇所に置き、
+ * 両方の adapter（`packages/testkit` の in-memory 実装）がここを呼ぶ。
+ *
+ * **0 を含めない**: `halfLifeHours = 0` は「即座に消える」を意味するが、それは
+ * `strength` を下げる・`status: 'forgotten'` にする、という既存の経路が既に表せる。
+ * `decay` の式を「0 で割る」経路に落とす理由が無い。
+ *
+ * **負を含めない**: half-life は「半分になるまでの時間」であり、負の時間は定義されない。
+ * 実測（`decay.ts` の式を直接呼んだ）: `halfLifeHours` が負（あるいは負の0）だと、
+ * 経過時間が正の Memory では `decay = strength * 0.5 ** (elapsed / halfLifeHours)` の
+ * 指数が負に振れ、`decay` が `+Infinity` に発散する——**この issue が名指しした「必ず
+ * 想起の1位に来る」壊れ方は、`0` そのものよりもこちらの経路で起きる**（下記「確かめた
+ * こと」参照）。
+ *
+ * **有限に限る（`Infinity` を含めない）**: `Infinity` 自体は式の中では `decay` を
+ * 常に `1`（減衰しない）に固定するだけで、`NaN`/`Infinity` には発散しない——**しかし
+ * 「半減期」という語の意味上、有限でない half-life は矛盾した値であり、他に使う理由が
+ * 無い**。ADR 0078 が「迷ったら厳しい側に置く（緩めるのは後から非破壊、締めるのは
+ * 後から破壊的）」と決めた判断をそのまま踏襲する。
+ *
+ * **確かめたこと（`node` で `decay.ts` の式をそのまま評価した。この関数自体の変更ではない）**:
+ *
+ * | `halfLifeHours` | `strengthAt(elapsed=100h)` | `strengthAt(elapsed=0h)` |
+ * |---|---|---|
+ * | `0`（+0） | `0` | `NaN` |
+ * | `-0` | `+Infinity` | `NaN` |
+ * | `-1` | `+Infinity`（実測値は `1.2676506002282294e+30`、指数が大きいほど発散） | `1` |
+ * | `NaN` | `NaN` | `NaN` |
+ * | `Infinity` | `1`（発散しない） | `1` |
+ *
+ * ⟹ **Issue #231 の「`halfLifeHours` が `0` または `NaN` だと `decay = +Infinity` になる」
+ * という記述は、`0` については不正確である**（`0` は `elapsed > 0` のとき `decay = 0` に、
+ * `elapsed = 0` のとき `NaN` になる。`+Infinity` に発散するのは負の `halfLifeHours` の
+ * ときである）。**`NaN` は式全体を `NaN` に伝播させ、`+Infinity` にはならない。**
+ * どちらにせよ、`0`・負・`NaN` の**いずれも**この関数が拒む値域の外にあり、
+ * 個別の壊れ方の違いはこの関数の設計を変えない——**すべて拒む**。
+ */
+export function isHalfLifeHoursInRange(value: number): boolean {
+  return value > 0 && Number.isFinite(value);
+}
+
+/**
  * `tenant_settings.event_retention_days` が取りうる3つの状態（`docs/memory-model.md`
  * §9「保持方針」）。
  *

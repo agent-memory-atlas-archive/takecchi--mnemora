@@ -168,6 +168,14 @@ export const MemorySchema = z.object({
   // in-memory 実装の検査）である。ここを締めるのは**公開された型の契約**としてであって、
   // これが防波堤なのではない。
   strength: z.number().gt(0).max(MAX_STRENGTH),
+  // ADR 0125: 値域は `(0, ∞)`（有限の正の実数、`isHalfLifeHoursInRange` と同じ域）。
+  // `z.number().positive()` は実測（zod v4、`safeParse`）で `0`・負・`NaN`・`±Infinity` を
+  // 既にすべて拒んでいる——zod は NaN を `invalid_type`（"expected number, received nan"）
+  // として扱うため、`.positive()` だけで境界を正しく塞げている。
+  // ⚠ ただし ADR 0078 の実測3と同じ理由で、**この schema は書き込み経路では走らない**
+  // （`MemorySchema` / `NewMemorySchema` を `.parse()` している箇所は0件）。
+  // 実際に値域を強制するのは store の層（`packages/postgres` の CHECK 制約と、
+  // in-memory 実装の `isHalfLifeHoursInRange` 検査）である。
   halfLifeHours: z.number().positive(),
   decayFloorAt: z.date(),
 

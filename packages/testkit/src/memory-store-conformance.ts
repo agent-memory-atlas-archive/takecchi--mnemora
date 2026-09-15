@@ -1177,6 +1177,63 @@ export function describeMemoryStoreConformance(options: MemoryStoreConformanceOp
       }
     });
 
+    it("⚠ createMemory は値域の外の halfLifeHours を拒む（ADR 0125 / Issue #231）", async () => {
+      // **`halfLifeHours` は `decay`/`freshness` の式 `elapsedHours / halfLifeHours` の
+      // 分母である。`0`・負・`NaN`・`Infinity` はこの式を壊し、`decay` が `NaN` や
+      // `+Infinity` になる**（Issue #231。実測は `isHalfLifeHoursInRange` の doc に
+      // 記録した——issue 本文の「`0` で `+Infinity` になる」という記述は不正確で、
+      // 実際に `+Infinity` に発散するのは負の `halfLifeHours` のときである。
+      // ただしどちらにせよ拒むべき値であることは変わらない）。
+      //
+      // ⚠ **強制の責任は store の層に在る。**`MemorySchema` / `NewMemorySchema`（zod）の
+      // `halfLifeHours: z.number().positive()` は `.parse()` される箇所が0件なので、
+      // 型を締めても実行時には何も起きない（ADR 0078 実測3と同じ理由）。
+      const store = await createStore();
+      const ctx: Ctx = { tenantId: "tenant-1" };
+
+      const outOfRange: Array<[string, number]> = [
+        ["ちょうど 0", 0],
+        ["負の 0", -0],
+        ["負", -1],
+        ["NaN", Number.NaN],
+        ["Infinity", Number.POSITIVE_INFINITY],
+        ["-Infinity", Number.NEGATIVE_INFINITY],
+      ];
+
+      // 🔴 `decayFloorAt` を明示的に上書きする。`buildNewMemoryFixture` は
+      // `defaultDecayStrategy.floorAt()` で `decayFloorAt` を計算するが、
+      // `halfLifeHours` が `NaN`/`Infinity` のとき `floorAt` は `Invalid Date` を返す
+      // （strength 版のテスト（ADR 0078）と同じ形の実測）。それをそのまま渡すと
+      // `packages/postgres` は `timestamptz` 列のほうで落ち、「値域の歯が無くても赤く
+      // なる」状態になる。ここでは妥当な `decayFloorAt` を与え、落ちる理由を
+      // `halfLifeHours` だけに絞る。
+      const validFloorAt = new Date("2026-06-01T00:00:00.000Z");
+
+      for (const [label, halfLifeHours] of outOfRange) {
+        await expect(
+          store.createMemory(
+            ctx,
+            buildNewMemoryFixture({
+              tenantId: "tenant-1",
+              halfLifeHours,
+              decayFloorAt: validFloorAt,
+            }),
+          ),
+          `halfLifeHours=${halfLifeHours}（${label}）は拒まれなければならない`,
+        ).rejects.toThrow();
+      }
+
+      // 前提: 値域の内側なら通る（「何を渡しても落ちる」実装を弾く）。
+      // 上限は無い（有限であれば大きい値も許す）ことを `1e6` で確かめる。
+      for (const halfLifeHours of [720, 1, 1e6]) {
+        const memory = await store.createMemory(
+          ctx,
+          buildNewMemoryFixture({ tenantId: "tenant-1", halfLifeHours }),
+        );
+        expect(memory.halfLifeHours).toBeCloseTo(halfLifeHours, 6);
+      }
+    });
+
     it("reinforce は存在しない Memory に対して失敗する", async () => {
       const store = await createStore();
       const ctx: Ctx = { tenantId: "tenant-1" };
