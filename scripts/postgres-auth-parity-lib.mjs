@@ -32,7 +32,7 @@
  *
  * ## 対象ジョブ
  *
- * `NON_MATRIX_POSTGRES_JOBS` に列挙した7ジョブ。`postgres` ジョブ（matrix）は
+ * `NON_MATRIX_POSTGRES_JOBS` に列挙した8ジョブ。`postgres` ジョブ（matrix）は
  * 除外する——`POSTGRES_INITDB_ARGS` が `${{ matrix.initdbArgs }}` という式であり、
  * 脚によって `SQL_ASCII` になるため、他ジョブと単純比較すると誤って赤くなる
  * （この歯の関心は encoding regime ではなく認証方式であり、`POSTGRES_PASSWORD`/
@@ -49,6 +49,7 @@ export const NON_MATRIX_POSTGRES_JOBS = Object.freeze([
   "consolidation-cost",
   "archive-sweep-cost",
   "time-term",
+  "association-probes",
 ]);
 
 /** 比較する env キー。`POSTGRES_INITDB_ARGS` も含む——非 matrix ジョブ同士は全員 `--encoding=UTF8` で揃っているはずである。 */

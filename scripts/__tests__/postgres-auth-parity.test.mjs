@@ -22,7 +22,7 @@ const COMPOSE_PATH = fileURLToPath(new URL("../../docker-compose.yml", import.me
  * 持ち続けているかどうか。**どちらか片方だけを変えると、この歯が赤くなる**
  * ——それが Issue #232 が求めた「非対称が再発したら赤くなる歯」である。
  *
- * 合わせて、CI 側の7ジョブが**互いに**同じ値を宣言していることも見る
+ * 合わせて、CI 側の8ジョブが**互いに**同じ値を宣言していることも見る
  * （`crossJobMismatches`）——`docker-compose.yml` が正しくても、CI 側のどれか1本が
  * こっそり値を変えていたら、それも非対称の再発である。
  */
@@ -30,7 +30,7 @@ describe("docker-compose.yml と ci.yml の Postgres 認証まわりの値が揃
   const ciYamlText = readFileSync(CI_YML_PATH, "utf8");
   const composeText = readFileSync(COMPOSE_PATH, "utf8");
 
-  it("対象7ジョブが ci.yml に実在する", () => {
+  it("対象8ジョブが ci.yml に実在する", () => {
     const result = findPostgresAuthAsymmetry({ ciYamlText, composeText });
     expect(result.missingJobs).toEqual([]);
   });
@@ -45,7 +45,7 @@ describe("docker-compose.yml と ci.yml の Postgres 認証まわりの値が揃
     expect(result.mismatches).toEqual([]);
   });
 
-  it("ci.yml の非 matrix な7ジョブが、互いに同じ値を宣言している", () => {
+  it("ci.yml の非 matrix な8ジョブが、互いに同じ値を宣言している", () => {
     const result = findPostgresAuthAsymmetry({ ciYamlText, composeText });
     expect(result.crossJobMismatches).toEqual([]);
   });
@@ -166,6 +166,7 @@ describe("postgres-auth-parity-lib の純関数（合成入力）", () => {
         "consolidation-cost",
         "archive-sweep-cost",
         "time-term",
+        "association-probes",
       ],
       composeMissing: false,
       mismatches: [],
@@ -228,6 +229,6 @@ describe("postgres-auth-parity-lib の純関数（合成入力）", () => {
 
   it("COMPARED_ENV_KEYS / NON_MATRIX_POSTGRES_JOBS は空でない（歯の対象が消えていない）", () => {
     expect(COMPARED_ENV_KEYS.length).toBeGreaterThan(0);
-    expect(NON_MATRIX_POSTGRES_JOBS.length).toBe(7);
+    expect(NON_MATRIX_POSTGRES_JOBS.length).toBe(8);
   });
 });
