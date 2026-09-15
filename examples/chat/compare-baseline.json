@@ -1,0 +1,216 @@
+{
+  "_readme": "compare ベンチ(examples/chat の `compare` サブコマンド、北極星の物差し=mnemora/naive比)の基準値。scripts/compare-summary.mjs --baseline がこれを読む。retrieval-baseline.json / time-term-baseline.json と同じ考え方(『基準値をrepoにコミットし出所を添える』)を踏襲している。⚠ このベンチは他5本と違い、実測で2回のCI run(同一commit)が measuredAt を除いて完全一致したため(ADR 0133「測ったこと」)、⭐ 門にしている——mnemoraShareOfNaiveCharsの悪化とfactStatementSurvivedの退行(true→false)を検知するとexit 1になる(scripts/compare-summary-lib.mjs の computeRegressions)。⚠ CIのジョブがこのファイルを更新することはない(意図的な手作業のみ。ADR 0133参照)。",
+  "schemaVersion": 1,
+  "provenance": {
+    "commit": "d6a0092e8cdc31f821c0d89770080b5bd7d154d2",
+    "measuredAt": "2026-09-15T05:49:03.698Z",
+    "how": "gh run download 34934113298 -n compare で、この PR 自身の CI(example-chat ジョブ)が実際に生成した artifact compare.json を取得した。この作業環境には DATABASE_URL(本物の Postgres + pgvector)が無く、この bench をこの PR の作業者は一度も自分の手で実行していない(docs/autonomy.md §1.1)。この値は捏造ではなく、CI が実測した値である。",
+    "ciJob": "example-chat(pgvector/pgvector:pg17 の service container 上、本作業者はアクセスしていない)",
+    "providers": "llmMode=recorded / embeddingMode=recorded。⚠ ci.yml の compare ステップの当初のコメントは「OPENAI_API_KEYが無いためdeterministicで走る」としていたが、これは誤りだった(実測で判明。ADR 0133)——examples/chat/cassettes/compare.json が存在するため、OPENAI_API_KEY 無しでも decideProviderSource が『no-key』理由でrecorded(カセット再生)を選ぶ(examples/chat/src/providers.ts)。deterministic ではない。",
+    "repeatRuns": 2,
+    "note": "同一commit(d6a0092e8cdc31f821c0d89770080b5bd7d154d2)のCI runを2回実行し(run 34934113298のattempt1・attempt2)、measuredAtを除いてJSONが完全一致した(実際にdiffを取って確認済み。12行すべて含む)。⟹ 他5本のベンチ(decay/freshnessが実行ごとに揺れる、標本が小さい)と異なり、このベンチはrun間で揺れないことを実測した。だから⛔門にしない他5本とは異なり、このベンチは⭐門にしている。"
+  },
+  "llmMode": "recorded",
+  "embeddingMode": "recorded",
+  "rowCount": 12,
+  "rows": [
+    {
+      "fillerPairs": 0,
+      "turnCount": 2,
+      "naiveChars": 49,
+      "naiveTokens": 32,
+      "mnemoraChars": 205,
+      "mnemoraTokens": 60,
+      "mnemoraShareOfNaiveChars": 4.183673469387755,
+      "totalInScope": 2,
+      "omitted": [],
+      "returnedCount": 2,
+      "annCandidateCount": 2,
+      "factStatementSurvived": true
+    },
+    {
+      "fillerPairs": 1,
+      "turnCount": 4,
+      "naiveChars": 97,
+      "naiveTokens": 62,
+      "mnemoraChars": 216,
+      "mnemoraTokens": 70,
+      "mnemoraShareOfNaiveChars": 2.2268041237113403,
+      "totalInScope": 3,
+      "omitted": [],
+      "returnedCount": 3,
+      "annCandidateCount": 3,
+      "factStatementSurvived": true
+    },
+    {
+      "fillerPairs": 2,
+      "turnCount": 6,
+      "naiveChars": 150,
+      "naiveTokens": 98,
+      "mnemoraChars": 216,
+      "mnemoraTokens": 70,
+      "mnemoraShareOfNaiveChars": 1.44,
+      "totalInScope": 3,
+      "omitted": [],
+      "returnedCount": 3,
+      "annCandidateCount": 3,
+      "factStatementSurvived": true
+    },
+    {
+      "fillerPairs": 3,
+      "turnCount": 8,
+      "naiveChars": 197,
+      "naiveTokens": 128,
+      "mnemoraChars": 216,
+      "mnemoraTokens": 70,
+      "mnemoraShareOfNaiveChars": 1.0964467005076142,
+      "totalInScope": 3,
+      "omitted": [],
+      "returnedCount": 3,
+      "annCandidateCount": 3,
+      "factStatementSurvived": true
+    },
+    {
+      "fillerPairs": 4,
+      "turnCount": 10,
+      "naiveChars": 243,
+      "naiveTokens": 157,
+      "mnemoraChars": 232,
+      "mnemoraTokens": 85,
+      "mnemoraShareOfNaiveChars": 0.9547325102880658,
+      "totalInScope": 4,
+      "omitted": [],
+      "returnedCount": 4,
+      "annCandidateCount": 4,
+      "factStatementSurvived": true
+    },
+    {
+      "fillerPairs": 5,
+      "turnCount": 12,
+      "naiveChars": 294,
+      "naiveTokens": 190,
+      "mnemoraChars": 249,
+      "mnemoraTokens": 100,
+      "mnemoraShareOfNaiveChars": 0.8469387755102041,
+      "totalInScope": 5,
+      "omitted": [],
+      "returnedCount": 5,
+      "annCandidateCount": 5,
+      "factStatementSurvived": true
+    },
+    {
+      "fillerPairs": 10,
+      "turnCount": 22,
+      "naiveChars": 552,
+      "naiveTokens": 361,
+      "mnemoraChars": 295,
+      "mnemoraTokens": 142,
+      "mnemoraShareOfNaiveChars": 0.5344202898550725,
+      "totalInScope": 8,
+      "omitted": [],
+      "returnedCount": 8,
+      "annCandidateCount": 8,
+      "factStatementSurvived": true
+    },
+    {
+      "fillerPairs": 20,
+      "turnCount": 42,
+      "naiveChars": 1048,
+      "naiveTokens": 684,
+      "mnemoraChars": 647,
+      "mnemoraTokens": 293,
+      "mnemoraShareOfNaiveChars": 0.6173664122137404,
+      "totalInScope": 14,
+      "omitted": [
+        {
+          "kind": "over_limit",
+          "count": 4,
+          "countKind": "exact"
+        }
+      ],
+      "returnedCount": 10,
+      "annCandidateCount": 14,
+      "factStatementSurvived": true
+    },
+    {
+      "fillerPairs": 40,
+      "turnCount": 82,
+      "naiveChars": 2064,
+      "naiveTokens": 1351,
+      "mnemoraChars": 1537,
+      "mnemoraTokens": 635,
+      "mnemoraShareOfNaiveChars": 0.7446705426356589,
+      "totalInScope": 25,
+      "omitted": [
+        {
+          "kind": "over_limit",
+          "count": 15,
+          "countKind": "exact"
+        }
+      ],
+      "returnedCount": 10,
+      "annCandidateCount": 25,
+      "factStatementSurvived": true
+    },
+    {
+      "fillerPairs": 80,
+      "turnCount": 162,
+      "naiveChars": 4083,
+      "naiveTokens": 2674,
+      "mnemoraChars": 3459,
+      "mnemoraTokens": 1366,
+      "mnemoraShareOfNaiveChars": 0.8471711976487877,
+      "totalInScope": 49,
+      "omitted": [
+        {
+          "kind": "over_limit",
+          "count": 30,
+          "countKind": "exact"
+        }
+      ],
+      "returnedCount": 10,
+      "annCandidateCount": 49,
+      "factStatementSurvived": true
+    },
+    {
+      "fillerPairs": 160,
+      "turnCount": 322,
+      "naiveChars": 8134,
+      "naiveTokens": 5332,
+      "mnemoraChars": 4307,
+      "mnemoraTokens": 1698,
+      "mnemoraShareOfNaiveChars": 0.5295057782149004,
+      "totalInScope": 95,
+      "omitted": [
+        {
+          "kind": "over_limit",
+          "count": 30,
+          "countKind": "exact"
+        }
+      ],
+      "returnedCount": 10,
+      "annCandidateCount": 95,
+      "factStatementSurvived": true
+    },
+    {
+      "fillerPairs": 320,
+      "turnCount": 642,
+      "naiveChars": 16223,
+      "naiveTokens": 10636,
+      "mnemoraChars": 4306,
+      "mnemoraTokens": 1695,
+      "mnemoraShareOfNaiveChars": 0.26542563027800037,
+      "totalInScope": 189,
+      "omitted": [
+        {
+          "kind": "over_limit",
+          "count": 30,
+          "countKind": "exact"
+        }
+      ],
+      "returnedCount": 10,
+      "annCandidateCount": 189,
+      "factStatementSurvived": true
+    }
+  ]
+}

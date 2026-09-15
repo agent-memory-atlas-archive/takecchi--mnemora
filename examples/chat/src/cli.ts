@@ -17,6 +17,7 @@ import {
   formatRecallQualityTable,
   runComparison,
 } from "./compare.js";
+import { buildCompareJson } from "./compare-json.js";
 import { parseConsolidationCostOptions } from "./consolidation-cost-options.js";
 import { runConsolidationCost } from "./consolidation-cost.js";
 import { formatConsolidationCostReport } from "./consolidation-cost-format.js";
@@ -318,6 +319,29 @@ async function runCompare(): Promise<void> {
             embeddingMode: handle.embeddingMode,
           }),
     );
+
+    // ---------------------------------------------------------------------------
+    // 機械可読な出力口（Issue #242。`retrieval`/`time-term` と同じ層の env 規約）
+    //
+    // **`MNEMORA_COMPARE_JSON` が設定されたときだけ書く。未設定なら1バイトも
+    // 挙動を変えない**——既存の `MNEMORA_RETRIEVAL_JSON`/`MNEMORA_TIME_TERM_JSON` と
+    // 同じ規約（cli.ts 冒頭の各関数のコメント参照）。
+    //
+    // 組み立ては `compare-json.ts` の純関数 `buildCompareJson` に委ねる——
+    // ここでの役割は「どこに書くか」だけである。
+    // ---------------------------------------------------------------------------
+    const compareJsonPath = process.env.MNEMORA_COMPARE_JSON;
+    if (compareJsonPath) {
+      const json = buildCompareJson({
+        rows,
+        llmMode: handle.llmMode,
+        embeddingMode: handle.embeddingMode,
+        measuredAt: new Date(),
+        commit: tryGitRevParseHead(process.cwd()),
+      });
+      writeFileSync(compareJsonPath, `${JSON.stringify(json, null, 2)}\n`, "utf-8");
+      console.log(`\n[compare] 機械可読な結果を書き出した: ${compareJsonPath}`);
+    }
   } finally {
     await handle.close();
   }

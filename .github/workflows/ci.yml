@@ -315,8 +315,13 @@ jobs:
         run: pnpm --filter @mnemora/example-chat run test:db
 
       - name: 北極星の物差し（会話ログを全部積むのをやめても答えが残るか）を compare で実測しログに残す
-        # このジョブで唯一 OPENAI_API_KEY を設定していないため、擬似 provider で走る
-        # （オーナーが CI に OPENAI_API_KEY が無いことを確認済み）。`compare` は
+        # 🔴 このステップは `OPENAI_API_KEY` を設定していないが、**擬似(deterministic)
+        # provider では走らない**——`examples/chat/cassettes/compare.json`
+        # （ADR 0052 の `record:compare`）が存在するため、`resolveCassetteForRun`
+        # （`cli.ts`）経由の `decideProviderSource` が「no-key」理由で `recorded`
+        # （記録した実 API 応答の再生）を選ぶ。このコメントは以前「擬似 provider で
+        # 走る」と書いていたが、それは誤りだった——実測（ADR 0133）で判明し、この
+        # コメントは実際の挙動に合わせて訂正した。`compare` は
         # 「量を削れたか」（naive/mnemora の文字数比）だけでなく、本 PR で追加した
         # 「冒頭の事実が削った後にも残っているか」「スコープ内の何件が実際に ANN の
         # 候補になれたか（= 何件と競って絞ったか）」を表にして出力する
@@ -325,7 +330,41 @@ jobs:
         # これまでこの数値は手元で測ったきり CI では実測していなかった
         # （ADR 0021 参照）——このステップはそれを埋め、以後の変更で
         # 「削れたが答えが落ちた」への回帰をログから読めるようにする。
+        #
+        # 🔴 Issue #242 / ADR 0133: `MNEMORA_COMPARE_JSON` で機械可読な出力口を足した
+        # （`retrieval`/`time-term` と同じ規約、`examples/chat/src/compare-json.ts`）。
+        # 基準値ファイル `examples/chat/compare-baseline.json` は、この機構を配線した
+        # 最初の CI run（同一 commit を2回実行し、`measuredAt` を除いて完全一致した
+        # ことを確認した run）の artifact をそのままコミットしたものである
+        # （詳細は基準値ファイルの `provenance` / ADR 0133「測ったこと」参照）。
+        env:
+          MNEMORA_COMPARE_JSON: ${{ github.workspace }}/compare.json
         run: pnpm --filter @mnemora/example-chat run compare
+
+      - name: 北極星の物差しが基準値から悪化していないかを判定する（⭐ 門。ADR 0133）
+        # 🔴 このステップは他5本の summary 段と違い、**門である**。
+        # `scripts/compare-summary.mjs` は、同一 commit の CI 2回実行が
+        # `measuredAt` を除いて完全一致した（ADR 0133「測ったこと」）ことを踏まえ、
+        # `mnemoraShareOfNaiveChars` の悪化・`factStatementSurvived` の
+        # true→false 退行を検知すると非0で終わる（`compare-summary-lib.mjs` の
+        # `computeRegressions`）。それ以外の入力異常（JSON が読めない/parse
+        # できない/形が想定と違う）でも非0になる。このステップは常に走る
+        # （`if: always()`）——`compare` 自体が壊れて JSON を書けなかった場合も、
+        # その理由を Job Summary に残す。
+        if: always()
+        run: |
+          node scripts/compare-summary.mjs \
+            --measured "${{ github.workspace }}/compare.json" \
+            --baseline examples/chat/compare-baseline.json \
+            >> "$GITHUB_STEP_SUMMARY"
+
+      - name: compare の実測値そのもの（機械可読）を成果物として残す
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: compare
+          path: ${{ github.workspace }}/compare.json
+          if-no-files-found: ignore
 
   root-gate-db-stage:
     name: ルートの test 門の DB 段（DATABASE_URL 在りで順方向に実測、ADR 0015）
