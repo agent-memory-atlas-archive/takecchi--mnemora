@@ -149,6 +149,38 @@ API キーは要らない——**実 API が返した埋め込みの記録を再
 
 ---
 
+## ローカルでの開発（手元で CI と同じ認証方式を踏む）
+
+`packages/postgres` / `examples/chat` の検査は本物の Postgres + pgvector を要求する
+（擬似物へのフォールバックは無い）。**CI の service container は `POSTGRES_PASSWORD`
+を設定しており、これは公式 postgres イメージの host 認証を既定で `scram-sha-256`
+にする。** 手元でパスワード無し（`trust` 認証）の Postgres を使っていると、
+認証方式に依存する壊れ方（パスワード付け忘れ等）が手元の門を素通りしうる
+（[Issue #232](https://github.com/takecchi/mnemora/issues/232) /
+[ADR 0130](./docs/decisions/0130-postgres-auth-parity-docker-compose.md)）。
+
+手元でも CI と同じ認証方式を踏みたい場合は、repo ルートの
+[`docker-compose.yml`](./docker-compose.yml)（CI の service container と値を
+揃えてある）を使う:
+
+```bash
+docker compose up -d
+# health になるまで少し待つ（`docker compose ps` で確認できる）
+DATABASE_URL=postgresql://postgres:postgres@localhost:5432/mnemora_ci \
+  pnpm --filter @mnemora/postgres run migrate
+DATABASE_URL=postgresql://postgres:postgres@localhost:5432/mnemora_ci pnpm run test
+docker compose down
+```
+
+**使うかどうかは任意である。** `DATABASE_URL` を渡さない既定の `pnpm run test` の
+挙動は変えていない——DB テストは「実行していません」と告知して緑のまま通る
+（[ADR 0015](./docs/decisions/0015-root-test-gate-reports-skipped-db-tests.md)）。
+
+`docker-compose.yml` と `.github/workflows/ci.yml` の値が食い違うと、
+`scripts/__tests__/postgres-auth-parity.test.mjs` が赤くなる。
+
+---
+
 ## インストール
 
 ```bash

@@ -1,0 +1,46 @@
+# 手元で CI と同じ Postgres + pgvector（と同じ認証方式）を再現するための compose。
+#
+# ⭐ なぜあるか（Issue #232 / ADR 0130）
+#
+# `.github/workflows/ci.yml` の各ジョブの `services.postgres` は `POSTGRES_PASSWORD` を
+# 設定している。公式 postgres イメージ（`pgvector/pgvector:pg17` はこれを土台にしている）
+# は、パスワードが設定された時点で host 認証を既定で `scram-sha-256` にする。
+# 一方、手元でパスワード無しの Postgres（`trust` 認証）を使っていると、パスワードに
+# 依存する壊れ方（`CREATE ROLE` へのパスワード付け忘れ、接続文字列がパスワードを
+# 落とす、等 — ADR 0017 が実際に踏んだ）は手元では一切検出できない。
+#
+# このファイルは、`.github/workflows/ci.yml` の非 matrix なジョブ（`root-gate-db-stage` /
+# `example-chat` / `retrieval-quality` / `identifier-probes` / `consolidation-cost` /
+# `archive-sweep-cost` / `time-term`）が使う `services.postgres` の値と**意図的に揃えて
+# ある**。ここでの値が CI とずれると `scripts/__tests__/postgres-auth-parity.test.mjs`
+# が赤くなる（歯の詳細は ADR 0130）。
+#
+# ## 使い方
+#
+# ```bash
+# docker compose up -d
+# # health になるまで少し待つ（`docker compose ps` で確認できる）
+# DATABASE_URL=postgresql://postgres:postgres@localhost:5432/mnemora_ci \
+#   pnpm --filter @mnemora/postgres run migrate
+# DATABASE_URL=postgresql://postgres:postgres@localhost:5432/mnemora_ci pnpm run test
+# docker compose down
+# ```
+#
+# ⛔ 使うかどうかは任意である。既定の `pnpm run test`（DATABASE_URL 無し）の挙動は
+# 1バイトも変えていない（ADR 0015）——このファイルは「手元でも CI と同じ認証方式を
+# 踏める経路」を新設するだけで、既存の門を書き換えるものではない。
+services:
+  postgres:
+    image: pgvector/pgvector:pg17
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: mnemora_ci
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8"
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
