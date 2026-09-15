@@ -333,6 +333,26 @@ export async function runRecall(
     return wallAxisAlive(memory) || activityAxisAlive(memory);
   };
 
+  /**
+   * 段2の再スコア（`strategies/scoring.ts`）へ渡す、活動時計まわりの入力（ADR 0157
+   * 決めたこと12）。`decayClock`/`nowSeq` はテナント単位、`decayBaseSeq`/`halfLifeRecalls` は
+   * Memory 単位——`computeDecay`（scoring.ts）が「揃っていなければ壁時計へフォールバック」
+   * するので、ここでは単に Memory の値をそのまま渡すだけでよい。
+   */
+  const decayScoringExtras = (
+    memory: Memory,
+  ): {
+    decayClock: DecayClock;
+    nowSeq: number | undefined;
+    decayBaseSeq: number | null | undefined;
+    halfLifeRecalls: number | null | undefined;
+  } => ({
+    decayClock,
+    nowSeq,
+    decayBaseSeq: memory.decayBaseSeq,
+    halfLifeRecalls: memory.halfLifeRecalls,
+  });
+
   // 🔴 配線されていない語彙チャンネルを明示的に要求されたら、ここで投げる（ADR 0084 §4）。
   // **黙って0件を返さない。**理由は RecallQuery.channels の doc に書いてある——
   // これは「探したが無かった」ではなく「探せる状態になっていない」であり、
@@ -405,7 +425,20 @@ export async function runRecall(
         // 段1の候補集合そのものから外す——over-fetch の窓（k'）を、まだ生きている記憶で
         // 埋める方向に働く。`includeFullyDecayed: true` を渡すと `undefined` になり、
         // ADR 0153 より前の挙動（decayFloorAtAfter を渡さない）に戻る。
-        decayFloorAtAfter: decayGateActive ? now : undefined,
+        //
+        // ADR 0157 決めたこと1・12: `decay_clock` に応じて2軸を押し下げる。
+        // - 'wall': decayFloorAtAfter のみ（従来どおり）。
+        // - 'activity': decayFloorSeqAfter のみ。
+        // - 'either': 両方 + decayFloorAnyAxis（OR で結ぶ、最も緩い）。
+        decayFloorAtAfter:
+          decayGateActive && (decayClock === "wall" || decayClock === "either")
+            ? now
+            : undefined,
+        decayFloorSeqAfter:
+          decayGateActive && (decayClock === "activity" || decayClock === "either")
+            ? nowSeq
+            : undefined,
+        decayFloorAnyAxis: decayGateActive && decayClock === "either",
       },
       // subjectId は等値一致なので段1に降ろす（ADR 0023）。excludeProvenanceKinds も
       // 離散5値の独立列への等値比較なので同じ理由で段1に降ろす（ADR 0056）。period は
@@ -434,6 +467,8 @@ export async function runRecall(
         kPrime,
         hits: annHits.length,
         decayGate: decayGateActive ? "pushed_down" : "disabled",
+        // ADR 0157 決めたこと1・12（北極星の問い3）: 実際に使った時計を名乗る。
+        clock: decayClock,
       },
     });
   }
@@ -476,6 +511,8 @@ export async function runRecall(
         kPrime,
         hits: lexicalHits.length,
         decayGate: decayGateActive ? "post_filtered" : "disabled",
+        // ADR 0157 決めたこと1・12（北極星の問い3）: 実際に使った時計を名乗る。
+        clock: decayClock,
       },
     });
   }
@@ -557,13 +594,15 @@ export async function runRecall(
     if (scope.occurredAfter && effectiveTime < scope.occurredAfter) continue;
     if (scope.occurredBefore && effectiveTime > scope.occurredBefore) continue;
     if (excludeKinds.has(memory.provenance.kind)) continue;
-    // 忘却ゲート（ADR 0153）: `LexicalFilter` に decayFloorAtAfter を足さず（マネージャー決定3）、
-    // ここで**全チャンネル共通**の述語を適用する——ANN の候補にも同じ述語が掛かる。
-    // 既定で押し下げている ANN の候補は `memory.decayFloorAt > now` を段1で既に満たして
-    // いるはずなので、通常はここでは何も落とさない（実際に落ちないことを歯で検算する。
-    // マネージャー決定「押し下げと後置が同じ述語であることの検算になる」）。
-    // 境界は `VectorFilter.decayFloorAtAfter` と同じ狭義の `>`（ちょうど境界の Memory は除外）。
-    if (decayGateActive && !(memory.decayFloorAt > now)) {
+    // 忘却ゲート（ADR 0153、ADR 0157 決めたこと12）: `LexicalFilter` に decayFloorAtAfter を
+    // 足さず（マネージャー決定3）、ここで**全チャンネル共通**の述語を適用する——ANN の候補にも
+    // 同じ述語が掛かる。既定で押し下げている ANN の候補は `survivesDecayGate` を段1で
+    // 既に満たしているはずなので、通常はここでは何も落とさない（実際に落ちないことを歯で
+    // 検算する。マネージャー決定「押し下げと後置が同じ述語であることの検算になる」）。
+    // ⭐ ADR 0157: `decay_clock` が 'activity'/'either' のテナントでは、この述語が
+    // 壁時計だけでなく活動時計の軸も見る（`survivesDecayGate` の doc コメント参照）——
+    // これを忘れると、語彙チャンネルだけ壁時計のまま残る（ADR 0157 決めたこと12 の表）。
+    if (decayGateActive && !survivesDecayGate(memory)) {
       decayFilteredCount += 1;
       continue;
     }
@@ -612,6 +651,7 @@ export async function runRecall(
         lastReinforcedAt: memory.lastReinforcedAt,
         strength: memory.strength,
         halfLifeHours: memory.halfLifeHours,
+        ...decayScoringExtras(memory),
       });
       return {
         memory,
@@ -760,6 +800,7 @@ export async function runRecall(
             lastReinforcedAt: companionMemory.lastReinforcedAt,
             strength: companionMemory.strength,
             halfLifeHours: companionMemory.halfLifeHours,
+            ...decayScoringExtras(companionMemory),
           });
           return {
             memory: companionMemory,
@@ -974,6 +1015,7 @@ export async function runRecall(
             lastReinforcedAt: memory.lastReinforcedAt,
             strength: memory.strength,
             halfLifeHours: memory.halfLifeHours,
+            ...decayScoringExtras(memory),
           });
           associationUnits.push({
             members: [
@@ -1326,6 +1368,11 @@ export async function runRecall(
       ...(m.companionOf !== undefined ? { companionOf: m.companionOf } : {}),
       ...(m.associationOf !== undefined ? { associationOf: m.associationOf } : {}),
     })),
+    // ADR 0157 決めたこと5: `decay_clock != 'wall'` のテナントに限り、この recall で
+    // `tenant_activity.activity_seq` を進める。「1単位 = recall() 1回」——この呼び出し
+    // そのものが1回の recall なので、既定のテナント（'wall'）では false のまま渡り、
+    // `activity_seq` は1本も UPDATE が増えない。
+    advanceActivityClock: decayClock !== "wall",
   });
 
   // -------------------------------------------------------------------
