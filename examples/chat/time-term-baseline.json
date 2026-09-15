@@ -1,0 +1,261 @@
+{
+  "_readme": "時間項(freshness/decay)が順位を動かすかの基準値（ADR 0058 / Issue #217 / ADR 0120 / ADR 0121）。\n⛔ これは門ではない。基準値と違っても CI は落ちない（ADR 0088 §2.1 と同じ判断）。\n⚠ 比較に使うのは outcome/totalInScope/omittedKinds という離散値だけであり、freshnessRatio/decayRatio/totalRatio 等の連続値は比較しない(scripts/time-term-summary-lib.mjs)。\n⚠ 標本は probe 8件である。ここから失敗率も成功率も主張しない（ADR 0033 §3）。\n⚠ この値は CI（本作業者がアクセスできない環境）が実測したものであり、この基準値ファイルを作った作業者自身は一度もこの bench を実行していない（下記 provenance.how）。",
+  "provenance": {
+    "runId": "34911117399",
+    "headSha": "fd6ee53296f63c053fedf3706d2ba831b6d8e655",
+    "measuredAt": "2026-09-14T23:57:42.686Z",
+    "how": "gh run download 34911117399 -n time-term で、main の CI ジョブ time-term（.github/workflows/ci.yml）が実際に生成した artifact time-term.json を取得した。この作業環境には DATABASE_URL（本物の Postgres + pgvector）が無く、この bench をこの PR の作業者は一度も自分の手で実行していない（ADR 0120 §5 / docs/autonomy.md §1.1）。この値は捏造ではなく、CI が実測した値である。",
+    "ciJob": "time-term（pgvector/pgvector:pg17 の service container 上、本作業者はアクセスしていない）",
+    "providers": "LLM=deterministic（擬似）/ Embedding=deterministic（擬似）。cli.ts の runTimeTerm() が明示的に固定している。@mnemora/local-embedding は使わない（重み取得の失敗モードが構造上存在しない）。",
+    "repeatRuns": "1回のみ（CI のこの1 run）。⚠ 他の run と比較しておらず、run 間の揺れ幅は測っていない（consolidation-baseline.json / identifier-probe-baseline.json / retrieval-baseline.json の repeatRuns=2 とは異なり、この基準値は複数回の一致を確認していない。ADR 0121「引き受けた負債」参照）。",
+    "note": "probes 配列は基準値の主要な比較単位であり(scripts/time-term-summary-lib.mjs の diff は probe ごとの outcome/totalInScope/omittedKinds を比べる)、consolidation-baseline.json / archive-sweep-baseline.json とは異なり削らずそのまま残す。newer/older の連続値(total/decay/freshness 等)・freshnessRatio/decayRatio/totalRatio は比較には使われないが(壁時計時間に依存して揺れるため。scripts/time-term-summary-lib.mjs 冒頭 docstring)、artifact を見比べたい人のために丸めず残す。"
+  },
+  "schemaVersion": 1,
+  "measuredAt": "2026-09-14T23:57:42.686Z",
+  "commit": "fd6ee53296f63c053fedf3706d2ba831b6d8e655",
+  "armLabel": "time-term",
+  "llmMode": "deterministic",
+  "embeddingMode": "deterministic",
+  "probeCount": 8,
+  "probes": [
+    {
+      "probeId": "half-life",
+      "outcome": "newer-ranked-higher",
+      "totalInScope": 2,
+      "omittedKinds": [],
+      "similarityGapWithinPair": 0,
+      "freshnessGapWithinPair": 0.49999999572131376,
+      "freshnessRatio": 0.49999999999999994,
+      "decayRatio": 1,
+      "totalRatio": 0.49999999999999994,
+      "newer": {
+        "rank": 1,
+        "total": 0.775176390524709,
+        "similarity": 0.7751764037916555,
+        "decay": 0.9999999914426274,
+        "tagMatch": 1,
+        "freshness": 0.9999999914426274,
+        "strength": 1,
+        "digest": "毎週日曜の朝、ベランダの多肉植物に水をやることにしています。"
+      },
+      "older": {
+        "rank": 2,
+        "total": 0.38758819526235444,
+        "similarity": 0.7751764037916555,
+        "decay": 0.9999999914426274,
+        "tagMatch": 1,
+        "freshness": 0.49999999572131365,
+        "strength": 1,
+        "digest": "毎週日曜の朝、ベランダの多肉植物に水をやることにしています。"
+      }
+    },
+    {
+      "probeId": "realistic",
+      "outcome": "newer-ranked-higher",
+      "totalInScope": 2,
+      "omittedKinds": [],
+      "similarityGapWithinPair": 0,
+      "freshnessGapWithinPair": 0.06543747859859095,
+      "freshnessRatio": 0.9330329915368074,
+      "decayRatio": 1,
+      "totalRatio": 0.9330329915368074,
+      "newer": {
+        "rank": 1,
+        "total": 0.7815489219534997,
+        "similarity": 0.7998167806534591,
+        "decay": 0.9999999962561495,
+        "tagMatch": 1,
+        "freshness": 0.9771599493586117,
+        "strength": 1,
+        "digest": "通勤電車の中で英単語アプリを開いて毎日十個ずつ覚えています。"
+      },
+      "older": {
+        "rank": 2,
+        "total": 0.7292109286826406,
+        "similarity": 0.7998167806534591,
+        "decay": 0.9999999962561495,
+        "tagMatch": 1,
+        "freshness": 0.9117224707600208,
+        "strength": 1,
+        "digest": "通勤電車の中で英単語アプリを開いて毎日十個ずつ覚えています。"
+      }
+    },
+    {
+      "probeId": "same-occurred-at",
+      "outcome": "tied",
+      "totalInScope": 2,
+      "omittedKinds": [],
+      "similarityGapWithinPair": 0,
+      "freshnessGapWithinPair": 0,
+      "freshnessRatio": 1,
+      "decayRatio": 1,
+      "totalRatio": 1,
+      "newer": {
+        "rank": 1,
+        "total": 0.7595758449175739,
+        "similarity": 0.8929178204224991,
+        "decay": 0.9999999970584031,
+        "tagMatch": 1,
+        "freshness": 0.8506671384299775,
+        "strength": 1,
+        "digest": "週末は近所のジムでキックボクシングのクラスに参加しています。"
+      },
+      "older": {
+        "rank": 2,
+        "total": 0.7595758449175739,
+        "similarity": 0.8929178204224991,
+        "decay": 0.9999999970584031,
+        "tagMatch": 1,
+        "freshness": 0.8506671384299775,
+        "strength": 1,
+        "digest": "週末は近所のジムでキックボクシングのクラスに参加しています。"
+      }
+    },
+    {
+      "probeId": "absent",
+      "outcome": "tied",
+      "totalInScope": 2,
+      "omittedKinds": [],
+      "similarityGapWithinPair": 0,
+      "freshnessGapWithinPair": 0,
+      "freshnessRatio": 1,
+      "decayRatio": 1,
+      "totalRatio": 1,
+      "newer": {
+        "rank": 1,
+        "total": 0.8850172984388314,
+        "similarity": 0.8850173036455595,
+        "decay": 0.9999999970584031,
+        "tagMatch": 1,
+        "freshness": 0.9999999970584031,
+        "strength": 1,
+        "digest": "自宅の本棚を整理してミステリー小説だけを一段にまとめました。"
+      },
+      "older": {
+        "rank": 2,
+        "total": 0.8850172984388314,
+        "similarity": 0.8850173036455595,
+        "decay": 0.9999999970584031,
+        "tagMatch": 1,
+        "freshness": 0.9999999970584031,
+        "strength": 1,
+        "digest": "自宅の本棚を整理してミステリー小説だけを一段にまとめました。"
+      }
+    },
+    {
+      "probeId": "far-past",
+      "outcome": "older-not-returned",
+      "totalInScope": 2,
+      "omittedKinds": ["below_threshold"],
+      "similarityGapWithinPair": null,
+      "freshnessGapWithinPair": null,
+      "freshnessRatio": null,
+      "decayRatio": null,
+      "totalRatio": null,
+      "newer": {
+        "rank": 1,
+        "total": 0.5782119647023582,
+        "similarity": 0.5917270543511749,
+        "decay": 0.9999999967909853,
+        "tagMatch": 1,
+        "freshness": 0.9771599292377376,
+        "strength": 1,
+        "digest": "毎朝出勤前にベランダで育てているハーブの葉を摘んでいます。"
+      },
+      "older": null
+    },
+    {
+      "probeId": "decay-half-life",
+      "outcome": "newer-ranked-higher",
+      "totalInScope": 2,
+      "omittedKinds": [],
+      "similarityGapWithinPair": 0,
+      "freshnessGapWithinPair": 0,
+      "freshnessRatio": 1,
+      "decayRatio": 0.5,
+      "totalRatio": 0.5,
+      "newer": {
+        "rank": 1,
+        "total": 0.5306427382668694,
+        "similarity": 0.6237960176719357,
+        "decay": 0.9999999537367055,
+        "tagMatch": 1,
+        "freshness": 0.8506671215961903,
+        "strength": 1,
+        "digest": "週に一度、水槽の熱帯魚に専用のエサを多めにあげています。"
+      },
+      "older": {
+        "rank": 2,
+        "total": 0.2653213691334347,
+        "similarity": 0.6237960176719357,
+        "decay": 0.49999997686835274,
+        "tagMatch": 1,
+        "freshness": 0.8506671215961903,
+        "strength": 1,
+        "digest": "週に一度、水槽の熱帯魚に専用のエサを多めにあげています。"
+      }
+    },
+    {
+      "probeId": "decay-realistic",
+      "outcome": "newer-ranked-higher",
+      "totalInScope": 2,
+      "omittedKinds": [],
+      "similarityGapWithinPair": 0,
+      "freshnessGapWithinPair": 0,
+      "freshnessRatio": 1,
+      "decayRatio": 0.9330329915368073,
+      "totalRatio": 0.9330329915368074,
+      "newer": {
+        "rank": 1,
+        "total": 0.6239141367202773,
+        "similarity": 0.7505844063250516,
+        "decay": 0.9771599166948554,
+        "tagMatch": 1,
+        "freshness": 0.8506671159091,
+        "strength": 1,
+        "digest": "毎晩お風呂上がりに白い毛糸でマフラーを編んでいます。"
+      },
+      "older": {
+        "rank": 2,
+        "total": 0.582132473446225,
+        "similarity": 0.7505844063250516,
+        "decay": 0.9117224402836583,
+        "tagMatch": 1,
+        "freshness": 0.8506671159091,
+        "strength": 1,
+        "digest": "毎晩お風呂上がりに白い毛糸でマフラーを編んでいます。"
+      }
+    },
+    {
+      "probeId": "decay-same-recorded-at",
+      "outcome": "tied",
+      "totalInScope": 2,
+      "omittedKinds": [],
+      "similarityGapWithinPair": 0,
+      "freshnessGapWithinPair": 0,
+      "freshnessRatio": 1,
+      "decayRatio": 1,
+      "totalRatio": 1,
+      "newer": {
+        "rank": 2,
+        "total": 0.6932149112631409,
+        "similarity": 0.833954992653428,
+        "decay": 0.9771599104234142,
+        "tagMatch": 1,
+        "freshness": 0.8506671104494935,
+        "strength": 1,
+        "digest": "週末の午後に習字教室で楷書の練習をしています。"
+      },
+      "older": {
+        "rank": 1,
+        "total": 0.6932149112631409,
+        "similarity": 0.833954992653428,
+        "decay": 0.9771599104234142,
+        "tagMatch": 1,
+        "freshness": 0.8506671104494935,
+        "strength": 1,
+        "digest": "週末の午後に習字教室で楷書の練習をしています。"
+      }
+    }
+  ]
+}

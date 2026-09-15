@@ -4,26 +4,31 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { validateBaseline, validateMeasured } from "../time-term-summary-lib.mjs";
 import { blankOutWorkflowComments } from "../workflow-comment-blank-lib.mjs";
 
 /**
  * ⭐ **この歯が測っているもの（消す前に読むこと）**
  *
  * **`.github/workflows/ci.yml` の `time-term` ジョブが、実際に
- * `scripts/time-term-summary.mjs` へ `--measured` を渡して配線されていること
- * （Issue #217）。**
+ * `scripts/time-term-summary.mjs` へ、`--measured` と `--baseline` の両方を渡して
+ * 配線されていること（Issue #217 / ADR 0121）。**
  *
  * ⚠ **これは `time-term-summary.test.mjs`/`time-term-summary-lib.test.mjs` の
  * 重複ではない**（`ci-yml-identifier-probes-wiring.test.mjs` の docstring と同じ理由）。
  * その2本は**入力を自分で作って**要約の中身と exit code を測る——**どちらも `ci.yml` を
- * 1バイトも読まない。**⟹ 誰かが `ci.yml` から測定段の JSON 書き先をずらしても、
- * summary 段の `--measured` の読み先をずらしても、**その2本は緑のまま通る。**
+ * 1バイトも読まない。**⟹ 誰かが `ci.yml` から `--baseline` を落としても、パスを
+ * 打ち間違えても、測定段の JSON 書き先をずらしても、summary 段の `--measured` の
+ * 読み先をずらしても、**その2本は緑のまま通る。**この歯だけが `ci.yml` を入力に取る。
  *
- * ⚠ **`--baseline` はまだ渡していない**（`examples/chat/time-term-baseline.json` が
- * 存在しないため。冒頭の ADR/PR 参照）。⟹ この歯は「`--baseline` を渡していないこと」
- * ではなく「`--measured` が正しく繋がっていること」を固定する。基準値ファイルを
- * 後続 PR で足すときは、`identifier-probes`/`retrieval-quality`/`consolidation-cost` の
- * 対応する歯（`--baseline` の配線を固定している行）をこのファイルにも足すこと。
+ * 🔴 **`--baseline` は `examples/chat/time-term-baseline.json`（ADR 0121）へ渡っている。**
+ * この基準値ファイルは main の初回 CI（run 34911117399、headSha
+ * fd6ee53296f63c053fedf3706d2ba831b6d8e655）が出した artifact をそのままコミットした
+ * ものである（ADR 0120 §5 が予告し、ADR 0121 が塞いだ）。**基準値ファイルが本物として
+ * 存在する**ので、`ci-yml-consolidation-wiring.test.mjs`（基準値ファイルがまだ無い時点で
+ * 書かれ、一時ファイルへ差し替えて走らせている）ではなく、
+ * `ci-yml-identifier-probes-wiring.test.mjs`（基準値ファイルが実在する）の形をそのまま
+ * 踏襲する——本物のファイルを `cwd: repoRoot` からそのまま読ませて実行する。
  *
  * ⚠ **YAML は構造として解析していない（文字列で見ている）。**
  * `ci-yml-identifier-probes-wiring.test.mjs` と同じ判断で、歯のために YAML パーサの
@@ -183,6 +188,12 @@ function benchStepMeasuredPath() {
   return benchStep.env.MNEMORA_TIME_TERM_JSON;
 }
 
+/** `--baseline <path>` を yml から読む（引用符あり・なしの両方を拾う）。 */
+function summaryStepBaselinePath() {
+  const matched = /--baseline\s+(?:"([^"]+)"|([^\s\\]+))/.exec(summaryStep?.run ?? "");
+  return matched ? (matched[1] ?? matched[2]) : undefined;
+}
+
 function runSummaryStepFromWorkflow(measured) {
   if (!summaryStep) {
     throw new Error(
@@ -246,6 +257,28 @@ function makeMeasured() {
   };
 }
 
+/** 基準値ファイル（本物）。差分の有無を作り分けるための土台に使う。 */
+const baselineRelativePath = "examples/chat/time-term-baseline.json";
+const baseline = JSON.parse(readFileSync(join(repoRoot, baselineRelativePath), "utf8"));
+
+/**
+ * 本物の基準値ファイルから、実測 JSON（`status` を持たない `TimeTermRunJson` の形）を
+ * 組み立てる。`probes` は基準値のものをそのまま複製する——順番に依存しない
+ * （`diffProbe` は `probeId` で突き合わせる）。
+ */
+function measuredFromBaseline() {
+  return {
+    schemaVersion: 1,
+    measuredAt: "2026-09-15T00:00:00.000Z",
+    commit: "0".repeat(40),
+    armLabel: baseline.armLabel,
+    llmMode: baseline.llmMode,
+    embeddingMode: baseline.embeddingMode,
+    probeCount: baseline.probeCount,
+    probes: structuredClone(baseline.probes),
+  };
+}
+
 describe("ci.yml の time-term ジョブの配線", () => {
   it("⭐ bench が JSON を書く先と、要約が読む先が同じ場所を指している", () => {
     const measuredFlag = /--measured\s+(?:"([^"]+)"|([^\s\\]+))/.exec(summaryStep?.run ?? "");
@@ -253,11 +286,43 @@ describe("ci.yml の time-term ジョブの配線", () => {
     expect(measuredFlag?.[1] ?? measuredFlag?.[2]).toBe(benchStepMeasuredPath());
   });
 
-  it("⚠ --baseline はまだ渡していない（基準値ファイルが本 PR には無いため）", () => {
-    // このジョブの意図した現状を固定する。基準値ファイルを足すときは、この歯を
-    // identifier-probes/retrieval-quality/consolidation-cost 側の対応する歯
-    // （--baseline の配線を固定している行）に置き換えること。
-    expect(summaryStep?.run ?? "").not.toContain("--baseline");
+  it("🔴 要約の段が --baseline をコミット済みの基準値ファイルへ渡している（ADR 0121）", () => {
+    // ⭐ **これが「輪が閉じている」ことの固定点。**この行が消えると、outcome が動いても
+    // 誰も気づかず、誰も基準値を更新せず、新しい値が PR の diff に現れなくなる
+    // （ADR 0088 §3 / ADR 0094 §8 と同じ理由）。
+    expect(summaryStepBaselinePath(), "要約の段に --baseline の指定が無い").toBe(
+      baselineRelativePath,
+    );
+  });
+
+  it("🔴 --baseline が指すファイルが、実際に validateBaseline を通る", () => {
+    const result = validateBaseline(baseline);
+    expect(result.ok, result.ok ? "" : result.error).toBe(true);
+  });
+
+  it("🔴 基準値から組み立てた実測 JSON が validateMeasured を通る（2つの形が食い違っていない）", () => {
+    const result = validateMeasured(measuredFromBaseline());
+    expect(result.ok, result.ok ? "" : result.error).toBe(true);
+  });
+
+  it("基準値と一致していれば、その旨が Job Summary に出る（1行で黙る）", () => {
+    const result = runSummaryStepFromWorkflow(measuredFromBaseline());
+    expect(result.status, `stderr: ${result.stderr}`).toBe(0);
+    expect(result.summary).toContain("一致(差分なし)");
+    expect(result.summary).not.toContain("| 項目 | 基準値 | 実測 |");
+  });
+
+  it("🔴 基準値と相違しても緑のまま（⛔ このジョブは門ではない。標本が小さい。ADR 0033 §3）", () => {
+    const measured = measuredFromBaseline();
+    // half-life の outcome を反転させる——「時間項の効きが壊れた」に相当する変化。
+    // **それでも落ちてはいけない。**落ちるようになったら、この repo は probe 8件の
+    // 標本で偽陽性を出す門を持ってしまったことになる。
+    const halfLife = measured.probes.find((p) => p.probeId === "half-life");
+    halfLife.outcome = "older-ranked-higher";
+    const result = runSummaryStepFromWorkflow(measured);
+    expect(result.status, `stderr: ${result.stderr}`).toBe(0);
+    expect(result.summary).toContain("### half-life");
+    expect(result.summary).toContain("outcome");
   });
 
   it("要約段は実際に走り、Job Summary に probe と outcome を出す", () => {
@@ -265,7 +330,6 @@ describe("ci.yml の time-term ジョブの配線", () => {
     expect(result.status, `stderr: ${result.stderr}`).toBe(0);
     expect(result.summary).toContain("half-life");
     expect(result.summary).toContain("newer-ranked-higher");
-    expect(result.summary).toContain("基準値ファイルがまだ無い");
   });
 
   it("🔴 実測 JSON が壊れていたら要約段は非0で落ちる（bench が壊れた＝赤、outcome が動いた＝赤ではない）", () => {

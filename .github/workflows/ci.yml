@@ -827,10 +827,12 @@ jobs:
     # どう動くか」であって、`deterministic` LLM が作る抽出結果の意味的な良し悪しではない
     # （AGENTS.md「`deterministic` で測った想起の質は、性能について何も言っていない」）。
     #
-    # 🔴 **基準値ファイルはこの PR ではコミットしていない**（ADR 0119「測ったこと」参照。
-    # この作業環境に DB が無く、捏造した数値を基準値として残さないため）。
-    # `archive-sweep-cost-summary.mjs` は `--baseline` を省略しても動く——
-    # 初回 CI の artifact を後続 PR で基準値にする。
+    # 🔴 **基準値ファイル `examples/chat/archive-sweep-baseline.json`（ADR 0121）は、
+    # ADR 0119 決定6が予告したとおり、初回 CI（main の run 34911117399、headSha
+    # fd6ee53296f63c053fedf3706d2ba831b6d8e655）が出した artifact をそのまま基準値に
+    # コミットしたものである。この作業環境に DB が無いため、基準値の作業者自身は
+    # この bench を一度も自分の手で実行していない——値は CI が実測したものである
+    # （基準値ファイルの `provenance` 参照）。
     timeout-minutes: 15
     services:
       postgres:
@@ -903,7 +905,7 @@ jobs:
           MNEMORA_LOCAL_EMBEDDING_CACHE_DIR: ${{ github.workspace }}/.cache/local-embedding
         run: pnpm --filter @mnemora/example-chat run archive-sweep-cost
 
-      - name: 実測値を Job Summary に残す（⛔ 門ではない。--baseline は未指定＝この PR ではまだ基準値が無い）
+      - name: 実測値と基準値の差分を Job Summary に残す（⛔ 門ではない）
         # このステップは常に走る（`if: always()`）——measure ステップが重み取得失敗で
         # 落ちても、その理由を Job Summary へ出すのはこのステップの役目である。
         # `archive-sweep-cost-summary.mjs` 自体は「入力そのものが壊れている」ときだけ
@@ -912,6 +914,7 @@ jobs:
         run: |
           node scripts/archive-sweep-cost-summary.mjs \
             --measured "${{ github.workspace }}/archive-sweep-cost.json" \
+            --baseline examples/chat/archive-sweep-baseline.json \
             >> "$GITHUB_STEP_SUMMARY"
 
       - name: 実測値そのもの（機械可読）を成果物として残す
@@ -941,10 +944,12 @@ jobs:
     # 「重みを取得できなかった」という失敗モードも、このジョブには無い
     # （`identifier-probes`/`consolidation-cost` との違い）。
     #
-    # ⚠ **基準値ファイルはまだコミットしていない**（`examples/chat/time-term-baseline.json`
-    # は存在しない）。値を捏造しないため——最初にこのジョブが走って得られる artifact を、
-    # 後続 PR で基準値にする。それまでは summary の段に `--baseline` を渡さない
-    # （`scripts/time-term-summary.mjs` は `--baseline` 省略でも動く）。
+    # 🔴 **基準値ファイル `examples/chat/time-term-baseline.json`（ADR 0121）は、
+    # ADR 0120 §5 が予告したとおり、初回 CI（main の run 34911117399、headSha
+    # fd6ee53296f63c053fedf3706d2ba831b6d8e655）が出した artifact をそのまま基準値に
+    # コミットしたものである。この作業環境に DB が無いため、基準値の作業者自身は
+    # この bench を一度も自分の手で実行していない——値は CI が実測したものである
+    # （基準値ファイルの `provenance` 参照）。
     timeout-minutes: 15
     services:
       postgres:
@@ -1004,15 +1009,15 @@ jobs:
           MNEMORA_TIME_TERM_JSON: ${{ github.workspace }}/time-term.json
         run: pnpm --filter @mnemora/example-chat run time-term
 
-      - name: 実測値を Job Summary に残す（⛔ 門ではない。基準値ファイルはまだ無い）
+      - name: 実測値と基準値の差分を Job Summary に残す（⛔ 門ではない）
         # このステップは常に走る（`if: always()`）。`time-term-summary.mjs` 自体は
         # 「入力そのものが壊れている」ときだけ非0で終わる（JSON が読めない/parse
-        # できない/形が想定と違う）。`--baseline` はまだ渡さない——コミット済みの
-        # 基準値ファイルが無いため（上のジョブ全体コメント参照）。
+        # できない/形が想定と違う）。
         if: always()
         run: |
           node scripts/time-term-summary.mjs \
             --measured "${{ github.workspace }}/time-term.json" \
+            --baseline examples/chat/time-term-baseline.json \
             >> "$GITHUB_STEP_SUMMARY"
 
       - name: 実測値そのもの（機械可読）を成果物として残す
