@@ -194,7 +194,7 @@ type CountKind = 'exact' | 'lower_bound' | 'unknown'
 type Omission =
   | { kind: 'stage_skipped'
       stage: 'candidate_generation' | 'rescore' | 'index_band'
-      reason: 'embedding_provider_unavailable' | 'empty_query_content' | 'budget_exhausted' }
+      reason: 'embedding_provider_unavailable' | 'empty_query_content' }
   | { kind: 'filtered'
       condition: 'tenant' | 'superseded' | 'forgotten' | 'archived' | 'taxonomy' | 'period'
       count: number; countKind: CountKind }
@@ -219,6 +219,12 @@ type Omission =
   | { kind: 'unit_assembly_dropped'
       count: number; countKind: CountKind }
 ```
+
+**⚠ 2026-09-16 追記**: `reason` は以前 `'budget_exhausted'` も持っていたが、
+生成するコードが一度も無かった（Issue #206 / [ADR 0117](./decisions/0117-unreachable-union-values-inventory.md)
+の分類3）。オーナー判断を受けて
+[ADR 0144](./decisions/0144-drop-unreachable-classification-3-union-values.md) で落とした
+——`RecallBudget` を使い切ったときの実際の落とし方は `budget_dropped` である。
 
 **`ann_truncated` と `ann_unreached` の違い（2026-09 追記、[ADR 0025](./decisions/0025-ann-underfill-is-not-reported-in-omitted.md)・[ADR 0026](./decisions/0026-ann-unreached-omission.md)）**:
 `ann_truncated` は「k' に達した＝もっと在るはずだが LIMIT で打ち切った」という**打ち切り**であり、
@@ -318,13 +324,18 @@ type IndexBand = {
 }
 
 type GroupCount = {
-  axis: 'subject' | 'taxonomy' | 'time_window'
+  axis: 'subject' | 'taxonomy'
   key: string | null   // D12（2026-09 追記）: subject_id IS NULL の群は null で表す。
                         // '(none)' のような番兵文字列は実在する subject 名と衝突しうるため採らない。
   count: number
   countKind: CountKind
 }
 ```
+
+**⚠ 2026-09-16 追記**: `axis` は以前 `'time_window'` も持っていたが、生成するコードが
+一度も無かった（Issue #206 / [ADR 0117](./decisions/0117-unreachable-union-values-inventory.md)
+の分類3）。オーナー判断を受けて
+[ADR 0144](./decisions/0144-drop-unreachable-classification-3-union-values.md) で落とした。
 
 ### 正直に書くべき限界
 
@@ -390,7 +401,7 @@ PostgreSQL 17 + pgvector、`packages/postgres/src/bench/scale-bench.ts`、擬似
 
 ### Phase 1 の範囲
 
-**Phase 1 では第3階(群カウント)のみを実装する。digest 帯(第2階)は Phase 2 に送る。** 理由は、digest 帯が taxonomy(分類語彙)を要するのに対し、群カウントは `subject` 単位だけでも成立するからである。Phase 1 の `IndexBand.groups` の既定 `axis` は `'subject'` とする。`taxonomy` 軸によるグルーピングは、taxonomy の `registered` / `proposed` 状態(`./memory-model.md` の taxonomy strict/open の節を参照)を扱う必要があり、digest 帯と合わせて Phase 2 に含める。`time_window` 軸は型として持つが Phase 1 で既定にはしない。
+**Phase 1 では第3階(群カウント)のみを実装する。digest 帯(第2階)は Phase 2 に送る。** 理由は、digest 帯が taxonomy(分類語彙)を要するのに対し、群カウントは `subject` 単位だけでも成立するからである。Phase 1 の `IndexBand.groups` の既定 `axis` は `'subject'` とする。`taxonomy` 軸によるグルーピングは、taxonomy の `registered` / `proposed` 状態(`./memory-model.md` の taxonomy strict/open の節を参照)を扱う必要があり、digest 帯と合わせて Phase 2 に含める。**`time_window` 軸は当時型として持っていたが、生成するコードが一度も無く、[ADR 0144](./decisions/0144-drop-unreachable-classification-3-union-values.md)（2026-09-16）で型からも落とした。**
 
 最も価値のある性質——「0件でも何が在るか言える」——は、digest を持たなくても群カウントだけで既に得られる。これが Phase 1 の範囲をこう切った理由である。
 
@@ -559,7 +570,7 @@ core はモデル固有のトークナイザに依存しない。`TokenCounter` 
 type RecalledMemory = {
   memoryId: string
   digest: string
-  retrievedVia: 'ann' | 'tag_match' | 'recency' | 'mandatory_companion'
+  retrievedVia: 'ann' | 'lexical' | 'mandatory_companion'
   companionOf?: string          // 矛盾の相手として同伴取得された場合、その相手の memoryId
   provenanceKind: ProvenanceKind // 本人が述べた事実か、AI の推論か（オーナーの原則7）
   score: ScoreBreakdown
@@ -574,6 +585,13 @@ type ScoreBreakdown = {
   total: number           // 段2で使った最終スコア
 }
 ```
+
+**⚠ 2026-09-16 追記**: `retrievedVia` は以前 `'tag_match'` / `'recency'` も持っていたが、
+生成するコードが一度も無かった（Issue #206 /
+[ADR 0117](./decisions/0117-unreachable-union-values-inventory.md) の分類3）。オーナー判断を
+受けて [ADR 0144](./decisions/0144-drop-unreachable-classification-3-union-values.md) で落とした。
+**また、上のスニペットはこの追記の前まで `'lexical'`（[ADR 0084](./decisions/0084-lexical-recall-channel.md)
+で実装済み）を欠いたまま放置されていた——ここで併せて直した。**
 
 Memory 本体(内容・provenance の詳細・状態)の型は `./memory-model.md` に譲る。ここで持つのは recall という文脈固有の付加情報——「どの経路で拾われたか」「スコアの内訳」「同伴取得ならどの矛盾の相手として来たか」、そして**「本人が述べた事実か、AI の推論か」**である。
 

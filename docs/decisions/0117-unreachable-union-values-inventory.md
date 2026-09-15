@@ -1,7 +1,29 @@
 # ADR 0117: 型に在って一度も生成されない union の値の棚卸し — 落とすのは提起までにする
 
-- **状態**: 採用（棚卸しと非破壊の明示のみ。分類3の「実装する/落とす」はオーナー判断待ち）
+- **状態**: 採用（棚卸しと非破壊の明示のみ。**分類3は 2026-09-16、[ADR 0144](./0144-drop-unreachable-classification-3-union-values.md) で解決——落とす。下記「追記」参照**）
 - **日付**: 2026-09-15
+
+---
+
+## ⚠ 追記（2026-09-16、Issue #206 分類3の決着）
+
+本 ADR の「これが覆るとしたら」節が予告していたとおり、**分類3についてオーナーが「落とす」と
+判断した**。中身は書き換えず、ここに追記する（ADR 0072 の「初版に穴が1つ在った」節・
+ADR 0064 の「約2.5倍」の訂正と同じ、既存 ADR への追記という慣行に倣う）。
+
+- **承認の出所**: [ADR 0144](./0144-drop-unreachable-classification-3-union-values.md) の
+  「§3 の手続きについて」節を見ること——オーナー本人の発言（`v0.x` 段階についての一般論）と、
+  クローンが明示した射程（`docs/autonomy.md` §3 の破壊的変更条項という条項単位）と、
+  マネージャーによる Issue #206 への援用を、出所ごとに分けて記録してある。**「オーナーが
+  Issue #206 を承認した」という意味では読まないこと。**
+- **実施 PR**: [ADR 0144](./0144-drop-unreachable-classification-3-union-values.md) を見ること
+  （ADR とその実装は同一 PR）。
+- **実施内容**: `RecalledMemory.retrievedVia` から `"tag_match"`/`"recency"`、
+  `StageSkippedOmission.reason` から `"budget_exhausted"`、`GroupCount.axis` から
+  `"time_window"` を落とした。`FilteredOmission.condition` の `"tenant"`（分類1）・
+  `"taxonomy"`（分類2）、`GroupCount.axis` の `"taxonomy"`（分類2）、`MemoryEventKind` の
+  `"purged"`/`"events_purged"`（分類2。うち `"purged"` は [ADR 0124](./0124-purge-physical-delete.md)
+  で既に実装済み）は本 PR の対象外であり、1バイトも変えていない。
 
 **⚠ 各主張の出所を分ける**（ADR 0084 の体裁を踏む）。
 

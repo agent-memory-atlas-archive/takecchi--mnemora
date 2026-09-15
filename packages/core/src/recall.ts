@@ -23,14 +23,14 @@ export interface StageSkippedOmission {
   kind: "stage_skipped";
   stage: "candidate_generation" | "rescore" | "index_band";
   /**
-   * **⚠ `"budget_exhausted"` は、この union に在るが生成するコードが無い**
-   * （`recall-runtime.ts` はこの値を一度も push しない。Issue #206 / [ADR 0117](../../../docs/decisions/0117-unreachable-union-values-inventory.md) で棚卸し済み）。
-   * `RecallBudget` を使い切ったときの実際の落とし方は `budget_dropped`（`BudgetDroppedOmission`）
-   * であり、`stage_skipped` の理由としては使われていない。
-   * **実装するか、`@mnemora/core` の公開 API 破壊的変更として落とすかは、
-   * ADR 0117 の分類3としてオーナー判断待ちである——このリポジトリの作業者は落とさない。**
+   * **`"budget_exhausted"` は、この union に存在していたが、2026-09-16 に落とした**
+   * （Issue #206 / [ADR 0117](../../../docs/decisions/0117-unreachable-union-values-inventory.md)
+   * の分類3、[ADR 0144](../../../docs/decisions/0144-drop-unreachable-classification-3-union-values.md)
+   * で実施。`@mnemora/core` の公開 API の破壊的変更）。`recall-runtime.ts` はこの値を
+   * 一度も push しておらず、`RecallBudget` を使い切ったときの実際の落とし方は
+   * `budget_dropped`（`BudgetDroppedOmission`）である。
    */
-  reason: "embedding_provider_unavailable" | "empty_query_content" | "budget_exhausted";
+  reason: "embedding_provider_unavailable" | "empty_query_content";
 }
 
 export interface FilteredOmission {
@@ -244,7 +244,7 @@ export type Omission =
 const StageSkippedOmissionSchema = z.object({
   kind: z.literal("stage_skipped"),
   stage: z.enum(["candidate_generation", "rescore", "index_band"]),
-  reason: z.enum(["embedding_provider_unavailable", "empty_query_content", "budget_exhausted"]),
+  reason: z.enum(["embedding_provider_unavailable", "empty_query_content"]),
 }) satisfies z.ZodType<StageSkippedOmission>;
 
 const FilteredOmissionSchema = z.object({
@@ -341,19 +341,20 @@ export const OmissionSchema = z.discriminatedUnion("kind", [
  * **⚠ `axis` は現在 `"subject"` でしか生成されない**（Issue #206 /
  * [ADR 0117](../../../docs/decisions/0117-unreachable-union-values-inventory.md) で棚卸し済み）。
  * - `"taxonomy"`: labels テーブルが Phase 2（Issue #201）で入るまで来ない。
- * - `"time_window"`: 実装が消えたのに union に値だけ残っている
- *   （ADR 0117 の分類3。実装するか、`@mnemora/core` の公開 API 破壊的変更として
- *   落とすかはオーナー判断待ちであり、このリポジトリの作業者は落とさない）。
+ * - `"time_window"`: 2026-09-16 に落とした（ADR 0117 の分類3、
+ *   [ADR 0144](../../../docs/decisions/0144-drop-unreachable-classification-3-union-values.md)
+ *   で実施。`@mnemora/core` の公開 API の破壊的変更）。実装が消えたのに union に値だけ
+ *   残っていたもので、生成するコードは一度も無かった。
  */
 export interface GroupCount {
-  axis: "subject" | "taxonomy" | "time_window";
+  axis: "subject" | "taxonomy";
   key: string | null;
   count: number;
   countKind: CountKind;
 }
 
 export const GroupCountSchema = z.object({
-  axis: z.enum(["subject", "taxonomy", "time_window"]),
+  axis: z.enum(["subject", "taxonomy"]),
   key: z.string().nullable(),
   count: z.number().int().nonnegative(),
   countKind: CountKindSchema,
@@ -747,19 +748,18 @@ export interface RecalledMemory {
   /**
    * どの経路でこの記憶が候補に入ったか。
    *
-   * **⚠ `"tag_match"` と `"recency"` は、この union に在るが実装が無い**——
-   * `recall-runtime.ts` はこの2値を一度も書かない。**新しく足す値を、同じ形にしないこと**
-   * （[ADR 0084](../../../docs/decisions/0084-lexical-recall-channel.md) の決定）。
-   * **これが Issue #106 の報告者が踏んだ罠そのものである**——型に名前が在るので
-   * 呼び出し側は「使える」と読むが、実装が無いので黙って何も起きない。
-   * `"lexical"` は実装を伴って足した値である。
-   *
-   * **Issue #206 / [ADR 0117](../../../docs/decisions/0117-unreachable-union-values-inventory.md)**:
-   * `"tag_match"`/`"recency"` は ADR 0084 の方針（実装を伴わない値を union に置かない）より前に
-   * 置かれた値であり、設計だけが消えて型に残った。**実装するか、`@mnemora/core` の公開 API
-   * 破壊的変更として落とすかはオーナー判断待ちであり、このリポジトリの作業者は落とさない。**
+   * **`"tag_match"` と `"recency"` は、この union に存在していたが、2026-09-16 に落とした**
+   * （Issue #206 / [ADR 0117](../../../docs/decisions/0117-unreachable-union-values-inventory.md)
+   * の分類3、[ADR 0144](../../../docs/decisions/0144-drop-unreachable-classification-3-union-values.md)
+   * で実施。`@mnemora/core` の公開 API の破壊的変更）。`recall-runtime.ts` はこの2値を
+   * 一度も書いておらず、ADR 0084 の方針（実装を伴わない値を union に置かない）より前に
+   * 置かれた値であり、設計だけが消えて型に残っていた。**これが Issue #106 の報告者が
+   * 踏んだ罠そのものだった**——型に名前が在るので呼び出し側は「使える」と読むが、実装が
+   * 無いので黙って何も起きない。`"lexical"` は実装を伴って足した値である。**新しく足す
+   * 値を、`"tag_match"`/`"recency"` だった形（実装より先に型だけ置く）にしないこと**
+   * （ADR 0084 の決定）。
    */
-  retrievedVia: "ann" | "lexical" | "tag_match" | "recency" | "mandatory_companion";
+  retrievedVia: "ann" | "lexical" | "mandatory_companion";
   /** 矛盾の相手として同伴取得された場合、その相手の memoryId。 */
   companionOf?: MemoryId;
   /**
@@ -784,7 +784,7 @@ export interface RecalledMemory {
 export const RecalledMemorySchema = z.object({
   memoryId: z.string().min(1),
   digest: z.string(),
-  retrievedVia: z.enum(["ann", "lexical", "tag_match", "recency", "mandatory_companion"]),
+  retrievedVia: z.enum(["ann", "lexical", "mandatory_companion"]),
   companionOf: z.string().min(1).optional(),
   provenanceKind: ProvenanceKindSchema,
   score: ScoreBreakdownSchema,
@@ -900,8 +900,11 @@ export interface RecallQuery {
  *
  * **⚠ ここに `"recent"` は無い。**Issue #106 の提案は
  * `Array<"ann" | "lexical" | "recent">` だったが、**実装を伴わない値をユニオンに置かない**
- * ——それは `RecalledMemory.retrievedVia` の `"tag_match"` / `"recency"` が既に作っている
- * 欠陥（型に名前が在るのに何も起きない）を、新規に1つ増やすことになる。
+ * ——それは当時 `RecalledMemory.retrievedVia` に居た `"tag_match"` / `"recency"` が
+ * 作っていた欠陥（型に名前が在るのに何も起きない）を、新規に1つ増やすことになる。
+ * この2値は Issue #206 / ADR 0117 の分類3として棚卸しされ、
+ * [ADR 0144](../../../docs/decisions/0144-drop-unreachable-classification-3-union-values.md)
+ * で `retrievedVia` から落ちている。
  * **⟹ 必要になったときに、実装と一緒に足す。**リクエスト側のユニオンを広げても
  * 既存の呼び出し側は壊れない。
  */

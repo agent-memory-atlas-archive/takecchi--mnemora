@@ -32,6 +32,15 @@ import { describe, expect, it } from "vitest";
  * `kind: "purged"`（分類2「後続 Phase 待ち」）を棚卸しの対象から外した。`Runtime.purge` が
  * 実際にこの値を生成するようになったため——この歯自身が「生成された」ことを検知して
  * 赤くなった（後述の変異試験と同じ仕組みが、今回は実装漏れではなく実装完了を検知した）。
+ *
+ * **2026-09-16 追記（Issue #206、[ADR 0144](../../../../docs/decisions/0144-drop-unreachable-classification-3-union-values.md)）**:
+ * 分類3（「設計が消えたのに値だけ残った」）の4値
+ * （`retrievedVia: "tag_match"`/`"recency"`、`reason: "budget_exhausted"`、
+ * `axis: "time_window"`）を棚卸しの対象から外した。オーナー判断（`docs/autonomy.md` §3の
+ * 破壊的変更条項が解けたこと）を受けて union そのものから落としたため——他の分類（1・2）と
+ * 違い、「まだ来ない値を監視し続ける」対象ではなくなった。**この歯がこれらの値について
+ * 主張していたこと（「生成されない」）は、値そのものが型に無くなったことでより強く
+ * 成立している**（型検査そのものが、これらの値を持つオブジェクトリテラルを拒む）。
  */
 
 const PACKAGES_ROOT = join(__dirname, "../../../");
@@ -52,33 +61,8 @@ const UNREACHABLE_VALUES: {
   field: string;
   value: string;
   declaredAt: string;
-  classification:
-    "1: 意図的に発火しない" | "2: 後続 Phase 待ち" | "3: 設計が消えた（オーナー判断待ち）";
+  classification: "1: 意図的に発火しない" | "2: 後続 Phase 待ち";
 }[] = [
-  {
-    field: "retrievedVia",
-    value: "tag_match",
-    declaredAt: "packages/core/src/recall.ts (RecalledMemory)",
-    classification: "3: 設計が消えた（オーナー判断待ち）",
-  },
-  {
-    field: "retrievedVia",
-    value: "recency",
-    declaredAt: "packages/core/src/recall.ts (RecalledMemory)",
-    classification: "3: 設計が消えた（オーナー判断待ち）",
-  },
-  {
-    field: "reason",
-    value: "budget_exhausted",
-    declaredAt: "packages/core/src/recall.ts (StageSkippedOmission)",
-    classification: "3: 設計が消えた（オーナー判断待ち）",
-  },
-  {
-    field: "axis",
-    value: "time_window",
-    declaredAt: "packages/core/src/recall.ts (GroupCount)",
-    classification: "3: 設計が消えた（オーナー判断待ち）",
-  },
   {
     field: "condition",
     value: "tenant",
