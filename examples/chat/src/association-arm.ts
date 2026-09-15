@@ -1,4 +1,10 @@
-import type { Ctx, MemoryStore, RecallAssociationQuery, Runtime } from "@mnemora/core";
+import type {
+  Ctx,
+  MemoryStore,
+  RecallAssociationQuery,
+  RecalledMemory,
+  Runtime,
+} from "@mnemora/core";
 import {
   ASSOCIATION_PROBES,
   associationAnchorExternalId,
@@ -65,6 +71,22 @@ export interface AssociationProbeOutcome {
    * 説明できるようにするために記録する**（北極星の問い3）。
    */
   associationFrame: AssociationFrameEntry[];
+  /**
+   * ⭐ **同じストア・同じクエリで `recall()` をもう一度呼び直したとき、連想枠
+   * （`retrievedVia === "association"` の候補列、externalId の並びとして）が
+   * 完全一致したか**（Issue #291 フォローアップ）。
+   *
+   * CI で同一 commit を再実行したところ、12 probe 中 10 件で連想枠の構成員が
+   * 入れ替わった。原因の候補は2つ: (甲) ingest ごとの差（毎回まっさらな Postgres へ
+   * 入れ直すため memory id・物理配置・HNSW 索引の構築が毎回違う）、(乙) 同じストアへの
+   * 引き直しでも変わる（こちらなら北極星の問い3「なぜ思い出したかを説明できるか」に
+   * 直接刺さる）。この欄は、**同じ ingest 結果の中でだけ**この非決定性を切り分ける
+   * ——`false` が出れば(乙)が確定し、`true` ばかりが出れば非決定性は ingest 側
+   * （(甲)）に局在している可能性が高い、と読める。
+   */
+  repeatFrameIdentical: boolean;
+  /** 2回目の `recall()` で `goldRank`（`null` を含む）が一致したか。 */
+  repeatGoldRankSame: boolean;
 }
 
 export interface AssociationFrameEntry {
@@ -126,6 +148,27 @@ function classifyAssociationFrameRole(
   return "unknown";
 }
 
+/**
+ * `retrievedVia === "association"` の候補だけを、返った順のまま externalId の配列にする
+ * （`resolvedExternalIds[i]` が引けなければ `memoryId` のまま——`associationFrame` を
+ * 組み立てる本処理と同じフォールバック）。1回目・2回目の `recall()` 結果を同じロジックで
+ * 比べるための共通処理（Issue #291 フォローアップ）。
+ */
+function associationExternalIdSequence(
+  memories: readonly RecalledMemory[],
+  resolvedExternalIds: readonly (string | null)[],
+): string[] {
+  const ids: string[] = [];
+  for (let i = 0; i < memories.length; i += 1) {
+    const memory = memories[i]!;
+    if (memory.retrievedVia !== "association") {
+      continue;
+    }
+    ids.push(resolvedExternalIds[i] ?? memory.memoryId);
+  }
+  return ids;
+}
+
 export interface AssociationArmReport {
   armLabel: string;
   /** `options.association` を渡したかどうか。 */
@@ -148,6 +191,14 @@ export interface AssociationArmReport {
   stageSkippedReasons: Record<string, number>;
   /** 連想枠に入ったものの `role` 別の件数(全 probe の合計)。 */
   associationFrameRoles: Record<string, number>;
+  /**
+   * `repeatFrameIdentical` が `true` だった probe の件数(Issue #291 フォローアップ、
+   * 上の docstring 参照)。`probeCount` 件中いくつが「同じストアへの引き直しでも
+   * 連想枠が変わらなかった」かを示す。
+   */
+  repeatFrameIdenticalCount: number;
+  /** `repeatGoldRankSame` が `true` だった probe の件数。 */
+  repeatGoldRankSameCount: number;
   probes: AssociationProbeOutcome[];
 }
 
@@ -266,6 +317,30 @@ export async function runAssociationArm(
       });
     }
 
+    // ⭐ 同じストア・同じクエリでもう一度 recall() を呼び直す(Issue #291
+    // フォローアップ、`AssociationProbeOutcome.repeatFrameIdentical` の docstring
+    // 参照)。⛔ text/association 以外を渡さない、という規律は一回目とまったく
+    // 同じ引数を繰り返すことで保たれる。
+    const resultRepeat = await options.runtime.recall(ctx, {
+      text: probe.query,
+      ...(association ? { association } : {}),
+    });
+    const resolvedExternalIdsRepeat = await Promise.all(
+      resultRepeat.memories.map((m) => resolveExternalId(options.memoryStore, ctx, m.memoryId)),
+    );
+    const goldIndexRepeat = resolvedExternalIdsRepeat.indexOf(goldExternalIdValue);
+    const goldRankRepeat = goldIndexRepeat === -1 ? null : goldIndexRepeat + 1;
+    const repeatGoldRankSame = goldRank === goldRankRepeat;
+
+    const associationFrameExternalIds = associationFrame.map((entry) => entry.externalId);
+    const associationFrameExternalIdsRepeat = associationExternalIdSequence(
+      resultRepeat.memories,
+      resolvedExternalIdsRepeat,
+    );
+    const repeatFrameIdentical =
+      associationFrameExternalIds.length === associationFrameExternalIdsRepeat.length &&
+      associationFrameExternalIds.every((id, i) => id === associationFrameExternalIdsRepeat[i]);
+
     probes.push({
       probeId: probe.id,
       category: probe.category,
@@ -284,6 +359,8 @@ export async function runAssociationArm(
       reciprocalRank: goldRank !== null ? 1 / goldRank : 0,
       stageSkipped,
       associationFrame,
+      repeatFrameIdentical,
+      repeatGoldRankSame,
     });
   }
 
@@ -314,6 +391,8 @@ export async function runAssociationArm(
     associationCharsTotal: probes.reduce((sum, p) => sum + p.associationChars, 0),
     stageSkippedReasons,
     associationFrameRoles,
+    repeatFrameIdenticalCount: probes.filter((p) => p.repeatFrameIdentical).length,
+    repeatGoldRankSameCount: probes.filter((p) => p.repeatGoldRankSame).length,
     probes,
   };
 }

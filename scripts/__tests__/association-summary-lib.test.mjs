@@ -51,6 +51,8 @@ function makeProbe(overrides = {}) {
     reciprocalRank: 0,
     stageSkipped: null,
     associationFrame: [],
+    repeatFrameIdentical: true,
+    repeatGoldRankSame: true,
     ...overrides,
   };
 }
@@ -124,6 +126,8 @@ function makeArm(overrides = {}) {
     associationCharsTotal: 0,
     stageSkippedReasons: {},
     associationFrameRoles: {},
+    repeatFrameIdenticalCount: 12,
+    repeatGoldRankSameCount: 12,
     probes: makeOffProbes(),
     ...overrides,
   };
@@ -199,6 +203,8 @@ function baselineFrom(measured) {
       returnedMemoryTotal: arm.returnedMemoryTotal,
       memoryCharsTotal: arm.memoryCharsTotal,
       associationCharsTotal: arm.associationCharsTotal,
+      repeatFrameIdenticalCount: arm.repeatFrameIdenticalCount,
+      repeatGoldRankSameCount: arm.repeatGoldRankSameCount,
     })),
   };
 }
@@ -369,6 +375,38 @@ describe("validateMeasured", () => {
     expect(result.ok).toBe(false);
     expect(result.error).toContain("associationFrameRoles.own-gold");
   });
+
+  it("⭐ Issue #291 フォローアップ: arm.repeatFrameIdenticalCount が欠けていれば落ちる", () => {
+    const broken = makeMeasured();
+    delete broken.arms[0].repeatFrameIdenticalCount;
+    const result = validateMeasured(broken);
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain("repeatFrameIdenticalCount");
+  });
+
+  it("⭐ Issue #291 フォローアップ: arm.repeatGoldRankSameCount が数値でなければ落ちる", () => {
+    const broken = makeMeasured();
+    broken.arms[0].repeatGoldRankSameCount = "12";
+    const result = validateMeasured(broken);
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain("repeatGoldRankSameCount");
+  });
+
+  it("⭐ Issue #291 フォローアップ: probe.repeatFrameIdentical が真偽値でなければ落ちる", () => {
+    const broken = makeMeasured();
+    broken.arms[0].probes[0].repeatFrameIdentical = "true";
+    const result = validateMeasured(broken);
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain("repeatFrameIdentical");
+  });
+
+  it("⭐ Issue #291 フォローアップ: probe.repeatGoldRankSame が真偽値でなければ落ちる", () => {
+    const broken = makeMeasured();
+    broken.arms[0].probes[0].repeatGoldRankSame = null;
+    const result = validateMeasured(broken);
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain("repeatGoldRankSame");
+  });
 });
 
 describe("validateBaseline", () => {
@@ -412,6 +450,14 @@ describe("validateBaseline", () => {
     const result = validateBaseline(baseline);
     expect(result.ok).toBe(false);
     expect(result.error).toContain("2件以上");
+  });
+
+  it("⭐ Issue #291 フォローアップ: arm.repeatFrameIdenticalCount が欠けていれば落ちる", () => {
+    const baseline = baselineFrom(makeMeasured());
+    delete baseline.arms[0].repeatFrameIdenticalCount;
+    const result = validateBaseline(baseline);
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain("repeatFrameIdenticalCount");
   });
 });
 
@@ -546,5 +592,18 @@ describe("buildSummaryMarkdown", () => {
     }
     const markdown = buildSummaryMarkdown({ measured });
     expect(markdown).not.toContain("maxCount 最大の arm");
+  });
+
+  it("⭐ Issue #291 フォローアップ: 同一ストアで引き直したとき枠が一致した probe 数の節が、arm ごとの件数入りで出る", () => {
+    const measured = makeMeasured();
+    measured.arms[0].repeatFrameIdenticalCount = 12;
+    measured.arms[0].repeatGoldRankSameCount = 12;
+    measured.arms[1].repeatFrameIdenticalCount = 2;
+    measured.arms[1].repeatGoldRankSameCount = 5;
+    const markdown = buildSummaryMarkdown({ measured });
+    expect(markdown).toContain("同一ストアで引き直したとき枠が一致した probe 数");
+    expect(markdown).toContain("12/12");
+    expect(markdown).toContain("2/12");
+    expect(markdown).toContain("5/12");
   });
 });

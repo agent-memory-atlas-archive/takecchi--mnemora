@@ -57,6 +57,8 @@ function makeProbe(overrides = {}) {
     reciprocalRank: 0,
     stageSkipped: null,
     associationFrame: [],
+    repeatFrameIdentical: true,
+    repeatGoldRankSame: true,
     ...overrides,
   };
 }
@@ -130,6 +132,8 @@ function makeArm(overrides = {}) {
     associationCharsTotal: 0,
     stageSkippedReasons: {},
     associationFrameRoles: {},
+    repeatFrameIdenticalCount: 12,
+    repeatGoldRankSameCount: 12,
     probes: makeOffProbes(),
     ...overrides,
   };
@@ -204,6 +208,8 @@ function baselineFrom(measured) {
       returnedMemoryTotal: arm.returnedMemoryTotal,
       memoryCharsTotal: arm.memoryCharsTotal,
       associationCharsTotal: arm.associationCharsTotal,
+      repeatFrameIdenticalCount: arm.repeatFrameIdenticalCount,
+      repeatGoldRankSameCount: arm.repeatGoldRankSameCount,
     })),
   };
 }

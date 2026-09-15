@@ -383,6 +383,8 @@ describe("ci.yml の association-probes ジョブの配線(Issue #291)", () => {
       reciprocalRank: 0,
       stageSkipped: null,
       associationFrame: [],
+      repeatFrameIdentical: true,
+      repeatGoldRankSame: true,
     });
     const makeArm = (armLabel, associationEnabled, associationMaxCount) => ({
       armLabel,
@@ -400,6 +402,8 @@ describe("ci.yml の association-probes ジョブの配線(Issue #291)", () => {
       associationCharsTotal: 0,
       stageSkippedReasons: {},
       associationFrameRoles: {},
+      repeatFrameIdenticalCount: 12,
+      repeatGoldRankSameCount: 12,
       probes: PROBE_IDS.map(makeProbe),
     });
     const offArm = makeArm("off: 連想枠なし（既定の recall）", false, null);
