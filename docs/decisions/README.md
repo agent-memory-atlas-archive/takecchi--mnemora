@@ -158,5 +158,6 @@ alteroid (github.com/takecchi/alteroid) を根拠として引く箇所は、確�
 | [0143](./0143-analyze-memories-after-seed.md) | 新規インストール後に `ANALYZE memories;` を明示的に実行できるようにする — `runMigrations`/migrate CLI 末尾での自動実行は構造的に効かないため、独立コマンドにする | 採用 (2026-09) |
 | [0144](./0144-drop-unreachable-classification-3-union-values.md) | ADR 0117 分類3の4値を union から落とす — `retrievedVia`/`reason`/`axis` の破壊的変更（Issue #206） | 採用 (2026-09) |
 | [0145](./0145-valid-from-until-storage.md) | `Memory.validFrom`/`validUntil` を配線する — 型・`packages/postgres` の読み書きだけを実装する（Issue #202 第1弾） | 採用 (2026-09) |
+| [0146](./0146-compare-quality-claim-reason-replaced.md) | `compare` が想起の質を主張しない理由を「擬似だから」から「正解集合を持たない器だから」へ差し替える — ADR 0022 決定2 の結論は維持する（Issue #263） | 採用 (2026-09) |
 
 <!-- ADR-INDEX:GENERATED:END -->

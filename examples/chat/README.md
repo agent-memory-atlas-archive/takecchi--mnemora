@@ -516,6 +516,15 @@ decay/freshness/strength の再スコアは考慮していない）。
 [ADR 0051](../../docs/decisions/0051-recorded-provider-cassette.md) の性質どおり
 擬似物ではない）ということである。
 
+**追記 (2026-09-16、Issue #263): 上で保留していた判断に、
+[ADR 0146](../../docs/decisions/0146-compare-quality-claim-reason-replaced.md) が答えた。**
+**結論（`compare` は想起の質の主張をここに載せない）は維持し、理由だけを差し替えた**
+——「擬似 provider だから」ではなく、**「`compare` が正解集合(ground truth)を持たない
+測定器だから」**である。`compare` の `buildConversation`(`scenario.ts`) は単一の
+`FACT_STATEMENT` の有無しか判定できず `MRR`/`hit@k` を定義できないが、`retrieval` の
+`probe-set.ts` は probe ごとに gold/distractor を持ち定義できる——**同じ `recorded` 層でも、
+片方が質を主張してよく片方がいけないのは、層ではなく正解集合の有無による**線引きである。
+
 ### この実測の限界
 
 - **（測定当時、2026-09-05/06 時点）擬似 embedding は意味的な類似度を表現しない。**
@@ -545,6 +554,11 @@ decay/freshness/strength の再スコアは考慮していない）。
   という以前の役割分担も、この点では前提が変わっている（この変化を ADR 0022 の
   決定にどう反映するかは、この訂正の範囲では判断していない。上記「⚠⚠ 2026-09-15
   追記」参照）。
+  **追記 (2026-09-16、Issue #263): [ADR 0146](../../docs/decisions/0146-compare-quality-claim-reason-replaced.md)
+  が判断した——`compare` から想起の質を主張しないという結論は維持し、理由を
+  「`compare` は正解集合を持たない測定器だから」に差し替えた。**上の役割分担
+  （`compare` は検証していない／`retrieval` が検証する）はこの意味では変わっていない
+  ——検証できるのは正解集合を持つ `retrieval` のほうである。
   **⚠ そして `retrieval` の標本は probe 7 件である**（ADR 0033 §3）——これは変わらない。
 - **naive path はシステムプロンプト・ツール定義を含まない生の transcript だけを測る。**
   実際のアプリケーションはこれらが上乗せされる分、絶対値としての削減幅はさらに
@@ -743,6 +757,13 @@ arm B → arm C（LLM も本物に）の上積みは 0.714 → 0.743 と小さ�
 `compare` では ❌」という記述はもう `compare` の挙動を表していない。**「擬似と本物で
 答えが割れる」という対比自体が、`compare` については前提から崩れている——`compare` が
 今使っているのは擬似物ではなく、記録した本物の応答である。
+
+**追記 (2026-09-16、Issue #263): それでも、この物差しへの主張の根拠は今も `retrieval` に
+置く。** [ADR 0146](../../docs/decisions/0146-compare-quality-claim-reason-replaced.md) が
+検討した通り——`compare` は今 `recorded` で走るが、`factStatementSurvived` は「見つかったか」
+の1点(真偽値)しか判定できず、`retrieval` の `probe-set.ts` のような正解集合(gold/distractor
+の順位)を持たない。**「意味で引いた上で落ちなかった」まで言えるのは、正解集合を持つ
+`retrieval` のほうである。**
 
 #### 読み方3: ⚠ 悪い結果もそのまま——「話題は合うが、答えが違う」
 

@@ -304,3 +304,15 @@ examples/chat/compare-baseline.json` は「⚠ 相違した会話長が1件あ�
 - マネージャーからの作業指示(本 PR の背景・作業場所・報告様式)——委譲文として
   受け取った。技術的な決定(門にするかどうか・判定基準)はこの ADR が実測に基づき
   自分で決めたものであり、指示そのものではない。
+
+---
+
+## 追記 (2026-09-16): ADR 0022 への相互参照を足す(Issue #263)
+
+**この ADR が実測した「`compare` は `deterministic` ではなく `recorded` で走る」という
+事実は、[ADR 0022](./0022-fake-provider-compare-does-not-claim-recall-quality.md) 決定2 の
+前提（「`compare` は擬似 provider である」）を崩していたが、公開時の本文はその ADR に
+一度も言及していなかった**（Issue #263 が指摘）。**⟹ ここに相互参照を足す。**
+理由の差し替え自体は [ADR 0146](./0146-compare-quality-claim-reason-replaced.md) が行った
+——`compare` から想起の質の主張をしないという結論は維持しつつ、理由を「擬似だから」から
+「`compare` が正解集合を持たない測定器だから」へ差し替えている。
