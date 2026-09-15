@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Ctx } from "../ctx.js";
 import type { LLMProvider, StructuredRequest } from "../interfaces/llm-provider.js";
+import { OutboxLeaseConflictError } from "../interfaces/outbox-store.js";
 import {
   TICK_SUPPORTED_JOB_KINDS,
   UNSUPPORTED_KIND_ERROR_PREFIX,
@@ -425,7 +426,7 @@ describe("runtime.observe — extract: 'deferred'", () => {
     expect(result.memoryIds).toEqual([]);
 
     const tickResult = await runtime.tick(ctx, { kinds: ["extract"], leaseMs: TEST_LEASE_MS });
-    expect(tickResult).toEqual({ processed: 1, failed: 0, unsupported: [] });
+    expect(tickResult).toEqual({ processed: 1, failed: 0, unsupported: [], leaseConflicts: [] });
 
     const aggregate = await stores.memoryStore.aggregateScope(ctx, {});
     expect(aggregate.totalInScope).toBe(1);
@@ -557,7 +558,7 @@ describe("runtime.tick — embed ジョブ（embeddingStatus の遷移）", () =
     const memoryId = observeResult.memoryIds[0]!;
 
     const tickResult = await runtime.tick(ctx, { kinds: ["embed"], leaseMs: TEST_LEASE_MS });
-    expect(tickResult).toEqual({ processed: 1, failed: 0, unsupported: [] });
+    expect(tickResult).toEqual({ processed: 1, failed: 0, unsupported: [], leaseConflicts: [] });
 
     const memory = await stores.memoryStore.get(ctx, memoryId);
     expect(memory?.embeddingStatus).toBe("ready");
@@ -573,7 +574,7 @@ describe("runtime.tick — embed ジョブ（embeddingStatus の遷移）", () =
 
     stores.embeddingProvider.shouldFail = true;
     const tickResult = await runtime.tick(ctx, { kinds: ["embed"], leaseMs: TEST_LEASE_MS });
-    expect(tickResult).toEqual({ processed: 0, failed: 1, unsupported: [] });
+    expect(tickResult).toEqual({ processed: 0, failed: 1, unsupported: [], leaseConflicts: [] });
 
     const memory = await stores.memoryStore.get(ctx, memoryId);
     expect(memory?.embeddingStatus).toBe("failed");
@@ -634,13 +635,13 @@ describe("runtime.reembed（ADR 0079: provider が直った後に、索引へ戻
       healed,
       vectorsAfterHealingTick: stores.vectorStore.entries.size,
     }).toEqual({
-      failedTick: { processed: 0, failed: 1, unsupported: [] },
+      failedTick: { processed: 0, failed: 1, unsupported: [], leaseConflicts: [] },
       afterFailure: "failed",
-      uselessTick: { processed: 0, failed: 0, unsupported: [] },
+      uselessTick: { processed: 0, failed: 0, unsupported: [], leaseConflicts: [] },
       stillFailed: "failed",
       reembedResult: { requeued: 1, memoryIds: [memoryId] },
       vectorsRightAfterReembed: 0,
-      healingTick: { processed: 1, failed: 0, unsupported: [] },
+      healingTick: { processed: 1, failed: 0, unsupported: [], leaseConflicts: [] },
       healed: "ready",
       vectorsAfterHealingTick: 1,
     });
@@ -654,7 +655,7 @@ describe("runtime.reembed（ADR 0079: provider が直った後に、索引へ戻
 
     expect({ result, tickResult }).toEqual({
       result: { requeued: 0, memoryIds: [] },
-      tickResult: { processed: 0, failed: 0, unsupported: [] },
+      tickResult: { processed: 0, failed: 0, unsupported: [], leaseConflicts: [] },
     });
   });
 });
@@ -824,6 +825,7 @@ describe("runtime.tick — 対応していない outbox job kind（ADR 0082 / is
       processed: 0,
       failed: 1,
       unsupported: [{ jobId, kind: CUSTOM_KIND }],
+      leaseConflicts: [],
     });
   });
 
@@ -849,6 +851,7 @@ describe("runtime.tick — 対応していない outbox job kind（ADR 0082 / is
       processed: 0,
       failed: 2,
       unsupported: [{ jobId: unsupportedJobId, kind: CUSTOM_KIND }],
+      leaseConflicts: [],
     });
   });
 
@@ -868,7 +871,7 @@ describe("runtime.tick — 対応していない outbox job kind（ADR 0082 / is
 
     // 2回目は claim されない（`fail` は終端。ADR 0032）。lease が切れて再び拾われる形ではない。
     const second = await runtime.tick(ctx, { kinds: [CUSTOM_KIND], leaseMs: TEST_LEASE_MS });
-    expect(second).toEqual({ processed: 0, failed: 0, unsupported: [] });
+    expect(second).toEqual({ processed: 0, failed: 0, unsupported: [], leaseConflicts: [] });
     expect(stores.outboxStore.listJobs(ctx).find((job) => job.id === jobId)!.attempts).toBe(1);
   });
 
@@ -889,7 +892,12 @@ describe("runtime.tick — 対応していない outbox job kind（ADR 0082 / is
 
       const tickResult = await runtime.tick(ctx, { kinds: [kind], leaseMs: TEST_LEASE_MS });
 
-      expect(tickResult).toEqual({ processed: 0, failed: 1, unsupported: [{ jobId, kind }] });
+      expect(tickResult).toEqual({
+        processed: 0,
+        failed: 1,
+        unsupported: [{ jobId, kind }],
+        leaseConflicts: [],
+      });
     },
   );
 
@@ -902,7 +910,7 @@ describe("runtime.tick — 対応していない outbox job kind（ADR 0082 / is
 
     const tickResult = await runtime.tick(ctx, { leaseMs: TEST_LEASE_MS });
 
-    expect(tickResult).toEqual({ processed: 0, failed: 0, unsupported: [] });
+    expect(tickResult).toEqual({ processed: 0, failed: 0, unsupported: [], leaseConflicts: [] });
     const row = stores.outboxStore.listJobs(ctx).find((job) => job.id === jobId)!;
     expect({ claimedAt: row.claimedAt, failedAt: row.failedAt, attempts: row.attempts }).toEqual({
       claimedAt: null,
@@ -946,9 +954,214 @@ describe("runtime.tick — 対応していない outbox job kind（ADR 0082 / is
 
       const tickResult = await runtime.tick(ctx, { kinds: [kind], leaseMs: TEST_LEASE_MS });
 
-      expect(tickResult).toEqual({ processed: 0, failed: 1, unsupported: [{ jobId, kind }] });
+      expect(tickResult).toEqual({
+        processed: 0,
+        failed: 1,
+        unsupported: [{ jobId, kind }],
+        leaseConflicts: [],
+      });
     },
   );
+});
+
+/**
+ * ADR 0142 / Issue #233: `OutboxStore.complete`/`fail` を CAS にする。
+ *
+ * `packages/testkit` の `outbox-store-conformance.ts` が `InMemoryOutboxStore`/
+ * `PostgresOutboxStore` の両方に対して同じ契約を検査しているが、`FakeOutboxStore`
+ * （このファイルが使う `packages/core` 自身の私的なテストダブル）はその適合スイートの
+ * 対象外である（`core` は `testkit` に依存しない、docs/architecture.md §4）。
+ * ⚠ **この節が無いと、`FakeOutboxStore` の CAS 判定は「実装されているが、どの歯からも
+ * 呼ばれない」まま残る**——ADR 0053 が「Mu5a 変異が生存」として残した穴と同じ形
+ * （実装だけあって、それを壊す変異を検出する歯が無い）を、ここで自分から開けないための節。
+ */
+describe("OutboxStore.complete/fail の CAS（ADR 0142 / Issue #233、FakeOutboxStore）", () => {
+  async function enqueueJob(stores: ReturnType<typeof buildRuntime>["stores"]): Promise<string> {
+    const { jobs } = await stores.memoryStore.createObservationWithOutbox(
+      ctx,
+      { tenantId: "tenant-1", subjectId: null, externalId: null, kind: "utterance", payload: {} },
+      ["extract"],
+    );
+    expect(jobs).toHaveLength(1);
+    return jobs[0]!.id;
+  }
+
+  it("complete は claim 時の attempts と一致すれば成功する", async () => {
+    const { stores } = buildRuntime(llmReturning([]));
+    const jobId = await enqueueJob(stores);
+
+    const claimed = await stores.outboxStore.claimBatch(ctx, {
+      limit: 10,
+      now: new Date(),
+      claimedBy: "worker-1",
+      leaseMs: TEST_LEASE_MS,
+    });
+    const job = claimed.find((j) => j.id === jobId)!;
+
+    await expect(stores.outboxStore.complete(ctx, jobId, job.attempts)).resolves.not.toThrow();
+    expect(
+      stores.outboxStore.listJobs(ctx).find((j) => j.id === jobId)!.completedAt,
+    ).not.toBeNull();
+  });
+
+  it("complete は attempts が一致しないと OutboxLeaseConflictError を投げる", async () => {
+    const { stores } = buildRuntime(llmReturning([]));
+    const jobId = await enqueueJob(stores);
+
+    const claimed = await stores.outboxStore.claimBatch(ctx, {
+      limit: 10,
+      now: new Date(),
+      claimedBy: "worker-1",
+      leaseMs: TEST_LEASE_MS,
+    });
+    const job = claimed.find((j) => j.id === jobId)!;
+
+    await expect(stores.outboxStore.complete(ctx, jobId, job.attempts - 1)).rejects.toBeInstanceOf(
+      OutboxLeaseConflictError,
+    );
+  });
+
+  it("fail は attempts が一致しないと OutboxLeaseConflictError を投げる", async () => {
+    const { stores } = buildRuntime(llmReturning([]));
+    const jobId = await enqueueJob(stores);
+
+    const claimed = await stores.outboxStore.claimBatch(ctx, {
+      limit: 10,
+      now: new Date(),
+      claimedBy: "worker-1",
+      leaseMs: TEST_LEASE_MS,
+    });
+    const job = claimed.find((j) => j.id === jobId)!;
+
+    await expect(
+      stores.outboxStore.fail(ctx, jobId, "boom", job.attempts - 1),
+    ).rejects.toBeInstanceOf(OutboxLeaseConflictError);
+  });
+
+  it("⭐ 再現(Issue #233): リース切れ後に別ワーカーが再claim・completeした結果を、遅れたワーカーのfailが上書きできない", async () => {
+    const { stores } = buildRuntime(llmReturning([]));
+    const jobId = await enqueueJob(stores);
+    const leaseMs = 1000;
+    const base = new Date();
+
+    // ワーカーA が claim する。
+    const claimA = await stores.outboxStore.claimBatch(ctx, {
+      limit: 10,
+      now: base,
+      claimedBy: "worker-A",
+      leaseMs,
+    });
+    const jobAsClaimedByA = claimA.find((j) => j.id === jobId)!;
+
+    // リースが切れる。
+    const afterExpiry = new Date(base.getTime() + leaseMs);
+
+    // ワーカーB が再 claim して complete する。
+    const claimB = await stores.outboxStore.claimBatch(ctx, {
+      limit: 10,
+      now: afterExpiry,
+      claimedBy: "worker-B",
+      leaseMs,
+    });
+    const jobAsClaimedByB = claimB.find((j) => j.id === jobId)!;
+    expect(jobAsClaimedByB.attempts).toBeGreaterThan(jobAsClaimedByA.attempts);
+    await stores.outboxStore.complete(ctx, jobId, jobAsClaimedByB.attempts);
+
+    // ワーカーA が遅れて、自分が claim した時点の(もう古い) attempts で fail を呼ぶ。
+    await expect(
+      stores.outboxStore.fail(ctx, jobId, "worker-A: stale failure", jobAsClaimedByA.attempts),
+    ).rejects.toBeInstanceOf(OutboxLeaseConflictError);
+
+    // Bの complete の結果が、Aの遅れた呼び出しによって上書きされていない
+    // ——本 Issue が指摘したバグの直接の否定。
+    const finalJob = stores.outboxStore.listJobs(ctx).find((j) => j.id === jobId)!;
+    expect(finalJob.completedAt).not.toBeNull();
+    expect(finalJob.failedAt).toBeNull();
+  });
+});
+
+/**
+ * ADR 0142 決定3: `tick()` は `OutboxLeaseConflictError` を検知しても、その1件を
+ * 飛ばして残りのジョブの処理を続ける（伝播させて `tick()` 全体を止めない）。
+ *
+ * **リース競合は異常ではなく、正常な並行の結果である**——別のワーカーが既にその
+ * ジョブを終わらせたということであり、システムから見ればそのジョブは済んでいる。
+ * 1件の良性の競合で、同じ `tick` 呼び出し内の無関係な他のジョブまで処理が止まるのは、
+ * 狭い事象を広い停止に変換する形であり、避ける。
+ *
+ * **決定的な差し込み**（`FakeMemoryStore.beforeUpdateStatus`、ADR 0030 と同じ形）で
+ * 再現する: `FakeEmbeddingProvider.beforeEmbedReturn` フックから、処理中のジョブ自身を
+ * （テストコードが）直接 `claimBatch` で再 claim することで、「処理には成功したが
+ * complete しようとした時点でリースを失っていた」を確率的な並行に頼らず毎回同じ形で
+ * 起こす。
+ */
+describe("runtime.tick — リース競合は他のジョブの処理を止めない（ADR 0142 決定3）", () => {
+  it("⭐ 1件が complete 時にリース競合しても、同じ tick 内の他のジョブは処理される", async () => {
+    // fakeNow は実時刻より確実に先の、この describe 内で完全に制御する時刻。
+    // ジョブの availableAt は FakeBackingStore.enqueueJob が実時刻 `new Date()` で
+    // 打つため、fakeNow を実時刻より先に置くことで available_at <= now が
+    // 常に成立するようにする(実時刻とfakeNowの同期を取る必要を無くす)。
+    let fakeNow = new Date(Date.now() + 1000);
+    const fakeClock = { now: () => fakeNow };
+    const leaseMs = 10;
+
+    const { runtime, stores } = buildRuntime(
+      llmReturning([{ content: "本文", digest: "要旨", provenanceKind: "stated" }]),
+      { clock: fakeClock },
+    );
+
+    // job A(先に available)・job B(後に available)。claimBatch は available_at
+    // 昇順で claim するため、観測順どおり A が先・B が後に処理される。
+    const observeA = await runtime.observe(ctx, { kind: "utterance", text: "本文A" });
+    const observeB = await runtime.observe(ctx, { kind: "utterance", text: "本文B" });
+    const memoryIdA = observeA.memoryIds[0]!;
+    const memoryIdB = observeB.memoryIds[0]!;
+
+    let hookFired = false;
+    stores.embeddingProvider.beforeEmbedReturn = async () => {
+      if (hookFired) {
+        // 2件目(B)の embed() でも呼ばれる——1件目でだけ発火させる。
+        return;
+      }
+      hookFired = true;
+      // fakeNow をリース失効後まで進めてから、job A だけを別ワーカーとして
+      // 横取りする(limit:1・available_at 昇順なので A が選ばれる)。
+      fakeNow = new Date(fakeNow.getTime() + leaseMs + 1000);
+      const hijacked = await stores.outboxStore.claimBatch(ctx, {
+        kinds: ["embed"],
+        limit: 1,
+        now: fakeNow,
+        claimedBy: "attacker",
+        leaseMs,
+      });
+      expect(hijacked.map((j) => j.payload.memoryId)).toEqual([memoryIdA]);
+    };
+
+    const tickResult = await runtime.tick(ctx, {
+      kinds: ["embed"],
+      limit: 10,
+      leaseMs,
+    });
+
+    // A は「complete しようとした時点でリースを失っていた」——processed/failed の
+    // どちらにも数えず、leaseConflicts に名指しで出る。B は無関係に正常処理される。
+    expect(tickResult.processed).toBe(1);
+    expect(tickResult.failed).toBe(0);
+    expect(tickResult.unsupported).toEqual([]);
+    expect(tickResult.leaseConflicts).toHaveLength(1);
+    expect(tickResult.leaseConflicts[0]).toMatchObject({
+      kind: "embed",
+      attemptedOutcome: "complete",
+    });
+
+    // Aの embed 処理自体(handler)は実際には成功していた——outbox の記帳だけが
+    // 競合で弾かれた、という区別が付いていることを確認する。
+    const memoryA = await stores.memoryStore.get(ctx, memoryIdA);
+    expect(memoryA?.embeddingStatus).toBe("ready");
+    // Bは競合と無関係に、いつもどおり処理される。
+    const memoryB = await stores.memoryStore.get(ctx, memoryIdB);
+    expect(memoryB?.embeddingStatus).toBe("ready");
+  });
 });
 
 describe("runtime.reextract（ADR 0028: 「やり直したら重複が残る」の掃除）", () => {

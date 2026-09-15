@@ -1,4 +1,10 @@
-import type { ClaimOutboxJobsOptions, Ctx, OutboxJobRecord, OutboxStore } from "@mnemora/core";
+import {
+  OutboxLeaseConflictError,
+  type ClaimOutboxJobsOptions,
+  type Ctx,
+  type OutboxJobRecord,
+  type OutboxStore,
+} from "@mnemora/core";
 
 /**
  * `OutboxStore` のインメモリ・プレースホルダ実装（roadmap.md 段階3）。
@@ -10,6 +16,10 @@ import type { ClaimOutboxJobsOptions, Ctx, OutboxJobRecord, OutboxStore } from "
  * `claimBatch` のリース意味論（ADR 0032）は `PostgresOutboxStore` と一致させてある
  * ——`packages/testkit` の適合テスト（`outbox-store-conformance.ts`）が両方の実装に
  * 対して同じ歯を走らせるため、ここで食い違うと歯が嘘をつく。
+ *
+ * `complete`/`fail` の CAS 意味論（ADR 0142, Issue #233）も同じ理由で一致させてある
+ * ——`attempts` が `expectedAttempts` と一致する行だけを更新し、一致しなければ
+ * {@link OutboxLeaseConflictError} を投げる。
  */
 export class InMemoryOutboxStore implements OutboxStore {
   constructor(private readonly jobs: OutboxJobRecord[]) {}
@@ -39,18 +49,26 @@ export class InMemoryOutboxStore implements OutboxStore {
     return claimed.map((job) => ({ ...job }));
   }
 
-  async complete(ctx: Ctx, jobId: string): Promise<void> {
+  async complete(ctx: Ctx, jobId: string, expectedAttempts: number): Promise<void> {
     const job = this.jobs.find((j) => j.id === jobId && j.tenantId === ctx.tenantId);
-    if (job) {
-      job.completedAt = new Date();
+    if (!job) {
+      return;
     }
+    if (job.attempts !== expectedAttempts) {
+      throw new OutboxLeaseConflictError(jobId, expectedAttempts, job.attempts);
+    }
+    job.completedAt = new Date();
   }
 
-  async fail(ctx: Ctx, jobId: string, error: string): Promise<void> {
+  async fail(ctx: Ctx, jobId: string, error: string, expectedAttempts: number): Promise<void> {
     const job = this.jobs.find((j) => j.id === jobId && j.tenantId === ctx.tenantId);
-    if (job) {
-      job.failedAt = new Date();
-      job.lastError = error;
+    if (!job) {
+      return;
     }
+    if (job.attempts !== expectedAttempts) {
+      throw new OutboxLeaseConflictError(jobId, expectedAttempts, job.attempts);
+    }
+    job.failedAt = new Date();
+    job.lastError = error;
   }
 }

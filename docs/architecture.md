@@ -135,6 +135,14 @@ kind が増えた瞬間に黙って嘘になる）。そこに無い kind を `o
 「黙って何も起きないまま lease が切れる」形にはしない——上の「キューが無ければ黙って
 何も起きない」を作らない、を outbox の側でも守るということである。
 
+**2026-09 追記（ADR 0142、Issue #233）**: `complete`/`fail` が compare-and-swap になった
+（§5.11 参照）ことで、`tick` はジョブの結果を記録しようとした時点で**既に別のワーカーに
+リースを奪われている**ことを検知できるようになった。これは失敗ではない——別のワーカーが
+既にそのジョブを終端まで進めたということであり、システムから見ればそのジョブは済んでいる。
+`tick` はこの1件を `TickResult.leaseConflicts` に名指しで積んで**次のジョブへ進む**
+（`processed`/`failed` のどちらにも数えない）。1件の良性の競合で、同じ `tick` 呼び出し
+内の無関係な他のジョブまで処理を止めるのは、狭い事象を広い停止に変換する形であり、避けた。
+
 ### 3.4 transactional outbox
 
 `observe()` の DB コミットと「抽出ジョブを積む」は同一トランザクションでなければならない。
@@ -714,7 +722,7 @@ interface Clock {
   注入できるようにするための境界。alteroid・オーナー案のどちらにも無いが、multi-tenant・複数
   インスタンスで動く mnemora では時刻取得を暗黙に `new Date()` へ散らさないための最小限の追加である。
 
-### 5.11 OutboxStore — Phase 1（roadmap.md 段階3で追加、ADR 0012 D-ingest-2。claim のリースは ADR 0032）
+### 5.11 OutboxStore — Phase 1（roadmap.md 段階3で追加、ADR 0012 D-ingest-2。claim のリースは ADR 0032、complete/fail の CAS は ADR 0142）
 
 ```ts
 interface ClaimOutboxJobsOptions {
@@ -726,10 +734,23 @@ interface ClaimOutboxJobsOptions {
   leaseMs: number;
 }
 
+class OutboxLeaseConflictError extends Error {
+  constructor(
+    readonly jobId: string,
+    readonly expectedAttempts: number,
+    readonly observedAttempts: number | null,
+  );
+}
+
 interface OutboxStore {
   claimBatch(ctx: Ctx, opts: ClaimOutboxJobsOptions): Promise<OutboxJobRecord[]>;
-  complete(ctx: Ctx, jobId: string): Promise<void>;
-  fail(ctx: Ctx, jobId: string, error: string): Promise<void>;
+  /**
+   * `expectedAttempts` は必須・省略不可（ADR 0142）。呼び出し側が直前に自分の
+   * `claimBatch`（または生成経路）から受け取った、まさにその `attempts` を渡す。
+   * 一致しなければ {@link OutboxLeaseConflictError} を投げる。
+   */
+  complete(ctx: Ctx, jobId: string, expectedAttempts: number): Promise<void>;
+  fail(ctx: Ctx, jobId: string, error: string, expectedAttempts: number): Promise<void>;
 }
 ```
 
@@ -753,8 +774,19 @@ transactional outbox の「書く」側だとすれば、`OutboxStore` は `runt
   `fail()` で終端状態になったジョブの話、リースは終端に至らないまま止まったジョブの
   回収である。`leaseMs` に既定値は無い（`packages/core` が発明せず、呼び出し側の
   運用方針で決める）。
+- **`complete`/`fail` の compare-and-swap（2026-09 追記、ADR 0142、Issue #233）**:
+  `expectedAttempts` は必須・省略不可。adapter は `attempts` 列（`claimBatch` が claim の
+  たびに単調増加させる、かつ終端化された行では `claimBatch` の対象から外れるため以後
+  固定される）が一致する行だけを更新し、一致しなければ `OutboxLeaseConflictError` を
+  投げる。**理由**: 以前の `complete`/`fail` は条件なしの単純 `UPDATE` であり、リースが
+  切れて別のワーカーが再 claim・完了させた後に、遅れて戻ってきた古いワーカーが
+  `complete`/`fail` を呼ぶと、新しいワーカーが書いた終端状態を検知なく上書きしうる
+  （ADR 0032 が「本 PR の範囲外」として名前だけ残した named debt）。`expectedAttempts`
+  を省略可能にしなかった理由も `leaseMs`（上記）と同じ——寛容な既定は「今日の壊れ方」を
+  裏から実装し直すだけになる。
 - `complete` / `fail` は対象が存在しない・形式が不正な id でも例外を投げない
-  （べき等な終端更新）。
+  （べき等な終端更新）。**この契約は `expectedAttempts` の値に関わらず維持される**
+  ——CAS 判定は「行が存在するが `attempts` が不一致」の場合にのみ発火する。
 - Phase 1 は失敗したジョブを自動リトライしない（ADR 0012 D-ingest-2）。
 
 ### 5.12 TenantSettingsStore — Phase 1（roadmap.md 段階3で追加、ADR 0012 D-ingest-3）

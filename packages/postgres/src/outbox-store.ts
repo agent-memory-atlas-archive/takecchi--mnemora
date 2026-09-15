@@ -1,5 +1,11 @@
 import { sql } from "drizzle-orm";
-import type { ClaimOutboxJobsOptions, Ctx, OutboxJobRecord, OutboxStore } from "@mnemora/core";
+import {
+  OutboxLeaseConflictError,
+  type ClaimOutboxJobsOptions,
+  type Ctx,
+  type OutboxJobRecord,
+  type OutboxStore,
+} from "@mnemora/core";
 import type { Db } from "./client.js";
 import { isUuidLike, rowToOutboxJob, type OutboxJobRow } from "./mapping.js";
 
@@ -19,6 +25,13 @@ import { isUuidLike, rowToOutboxJob, type OutboxJobRow } from "./mapping.js";
  * 終わらないまま止まったワーカーのジョブが `completed_at`/`failed_at` のどちらも
  * 付かないまま二度と claim されなくなる（「見えない停止」）。詳細は
  * `packages/core/src/interfaces/outbox-store.ts` の doc と ADR 0032。
+ *
+ * 🔴 **`complete`/`fail` は CAS（ADR 0142, Issue #233）**——`attempts` 列が呼び出し側の
+ * `expectedAttempts` と一致する行だけを更新する。リースが切れて別のワーカーに再 claim
+ * された後、遅れて戻ってきた古いワーカーが `complete`/`fail` を呼んでも、新しいワーカーが
+ * 既に書いた終端状態を黙って上書きしない——`attempts` が一致しなければ
+ * `OutboxLeaseConflictError` を投げる。詳細は `packages/core/src/interfaces/outbox-store.ts`
+ * の doc と ADR 0142。
  */
 export class PostgresOutboxStore implements OutboxStore {
   constructor(private readonly db: Db) {}
@@ -53,28 +66,63 @@ export class PostgresOutboxStore implements OutboxStore {
     return result.rows.map((row) => rowToOutboxJob(row as unknown as OutboxJobRow));
   }
 
-  async complete(ctx: Ctx, jobId: string): Promise<void> {
+  async complete(ctx: Ctx, jobId: string, expectedAttempts: number): Promise<void> {
     // id 列は uuid 型。べき等な終端更新（存在しない/形式が不正な id でも例外を投げない）
     // という契約のため、UUID の形をしていない入力はここで静かに無視する
     // （実 DB 検査で判明: 素通しすると invalid input syntax for type uuid で例外になる）。
     if (!isUuidLike(jobId)) {
       return;
     }
-    await this.db.execute(sql`
+    const result = await this.db.execute(sql`
       UPDATE outbox
       SET completed_at = now()
-      WHERE tenant_id = ${ctx.tenantId} AND id = ${jobId}
+      WHERE tenant_id = ${ctx.tenantId} AND id = ${jobId} AND attempts = ${expectedAttempts}
+      RETURNING id
     `);
+    if (result.rows.length > 0) {
+      return;
+    }
+    await this.raiseIfLeaseConflict(ctx, jobId, expectedAttempts);
   }
 
-  async fail(ctx: Ctx, jobId: string, error: string): Promise<void> {
+  async fail(ctx: Ctx, jobId: string, error: string, expectedAttempts: number): Promise<void> {
     if (!isUuidLike(jobId)) {
       return;
     }
-    await this.db.execute(sql`
+    const result = await this.db.execute(sql`
       UPDATE outbox
       SET failed_at = now(), last_error = ${error}
-      WHERE tenant_id = ${ctx.tenantId} AND id = ${jobId}
+      WHERE tenant_id = ${ctx.tenantId} AND id = ${jobId} AND attempts = ${expectedAttempts}
+      RETURNING id
     `);
+    if (result.rows.length > 0) {
+      return;
+    }
+    await this.raiseIfLeaseConflict(ctx, jobId, expectedAttempts);
+  }
+
+  /**
+   * `complete`/`fail` の CAS な `UPDATE` が0行だったときに呼ぶ（ADR 0142, Issue #233）。
+   * **0行になる理由は2つあり、区別する**——(a) その id の行がそもそも存在しない
+   * （べき等な no-op、既存契約）、(b) 行は存在するが `attempts` が一致しない
+   * （別のワーカーが既にこの行を再 claim している。{@link OutboxLeaseConflictError}）。
+   * 読み直しと実際に条件が破れた瞬間の間にも別の claim が割り込む余地があるため、
+   * `observedAttempts` は「弾かれた瞬間の値」の保証ではない（ADR 0030 の
+   * `MemoryStatusConflictError` と同じ限界、doc コメント参照）。
+   */
+  private async raiseIfLeaseConflict(
+    ctx: Ctx,
+    jobId: string,
+    expectedAttempts: number,
+  ): Promise<void> {
+    const current = await this.db.execute(sql`
+      SELECT attempts FROM outbox WHERE tenant_id = ${ctx.tenantId} AND id = ${jobId}
+    `);
+    const row = current.rows[0] as { attempts: number } | undefined;
+    if (row === undefined) {
+      // 行が無い（既に存在しない/最初から無い）。べき等な no-op のまま、例外にしない。
+      return;
+    }
+    throw new OutboxLeaseConflictError(jobId, expectedAttempts, row.attempts);
   }
 }

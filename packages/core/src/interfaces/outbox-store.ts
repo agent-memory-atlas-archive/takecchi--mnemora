@@ -36,7 +36,30 @@ import type { OutboxJobKind } from "./scheduler.js";
  *   止まったとみなすか」という運用方針であり、この interface（`packages/core`）が
  *   決めてよい値ではなく、呼び出し側（`runtime.tick` の呼び出し元）が決める
  *   （「採らなかった案」は ADR 0032 参照）。
- * - `complete` / `fail` は対象が既に完了/失敗していても例外を投げない（べき等な終端更新）。
+ * - 🔴 **`complete` / `fail` は compare-and-swap である（ADR 0142、Issue #233）。**
+ *   `expectedAttempts` に、呼び出し側が自分の `claimBatch`（または `createObservationWithOutbox`
+ *   等の生成経路）から受け取った、まさにその `OutboxJobRecord.attempts` の値を渡す。
+ *   adapter は `attempts` がその値と一致する行だけを更新し、一致しなければ
+ *   {@link OutboxLeaseConflictError} を投げる。
+ *
+ *   **理由**: `attempts` は `claimBatch` が claim のたびに厳密に単調増加させる列であり
+ *   （ADR 0032）、かつ一度 `completed_at`/`failed_at` が付いた行は `claimBatch` の
+ *   `WHERE`（`completed_at IS NULL AND failed_at IS NULL`）から二度と対象にならないため、
+ *   終端化された行の `attempts` はその後永久に固定される。**この2つの性質を合わせると、
+ *   「自分が claim した瞬間の `attempts`」は、他の誰にも奪われていない自分のリースを
+ *   指すフェンシングトークンとして機能する。** リース切れ後に別のワーカーが同じジョブを
+ *   再 claim すると `attempts` が進むため、古いワーカーが遅れて `complete`/`fail` を
+ *   呼んでも「奪われる前の自分の値」はもう一致せず、**新しいワーカーが書いた終端状態を
+ *   黙って上書きできない**。
+ *
+ *   **省略不可・既定値なし**——ADR 0032 が `leaseMs` に既定値を持たせなかった理由
+ *   （寛容な既定は「今日の壊れ方」を裏から実装し直すだけになる）が、ここでも同じ形で効く。
+ *   呼び出し側は必ず、直前に自分が受け取った `OutboxJobRecord.attempts` を渡すこと。
+ * - **対象の行が存在しない（または id の形式が不正な）場合は、`expectedAttempts` の値に
+ *   関わらず例外を投げない**（べき等な終端更新、既存の契約を維持）。**行が存在するが
+ *   `attempts` が一致しない場合にのみ** {@link OutboxLeaseConflictError} を投げる。
+ *   行が存在し `attempts` が一致する場合は、対象が既に完了/失敗していても例外を投げない
+ *   （同じ worker が同じ claim に対して `complete`/`fail` を再度呼ぶことは冪等）。
  * - Phase 1 では失敗したジョブの自動リトライを行わない（`fail` は終端状態。本 PR の決定、
  *   PR 本文に記載）。
  */
@@ -53,8 +76,35 @@ export interface ClaimOutboxJobsOptions {
   leaseMs: number;
 }
 
+/**
+ * [ADR 0142](../../../../docs/decisions/0142-outbox-complete-fail-compare-and-swap.md)
+ * — `OutboxStore.complete`/`fail` が CAS で弾いたときに投げる例外。
+ *
+ * `observedAttempts` は**弾かれた後に読み直した値であり、弾かれた瞬間の値とは限らない**
+ * ——ADR 0030 の `MemoryStatusConflictError` と同じ限界（adapter は `UPDATE ... WHERE
+ * attempts = expectedAttempts` が0行だったときに追加の `SELECT` で読み直すため、その
+ * `SELECT` と実際に条件が破れた瞬間の間にも別の claim が割り込む余地がある）。
+ * `observedAttempts` が `null` になるのは、読み直した時点でも行そのものは見つかった
+ * ケースしか無いため、理論上は起きない
+ * （行が見つからない場合はそもそも例外を投げず、べき等な no-op として扱う——上記契約参照）。
+ * それでも adapter 間の実装差に備え、型は `number | null` のままにする。
+ */
+export class OutboxLeaseConflictError extends Error {
+  constructor(
+    readonly jobId: string,
+    readonly expectedAttempts: number,
+    readonly observedAttempts: number | null,
+  ) {
+    super(
+      `OutboxStore: expected attempts ${expectedAttempts} for job ${jobId}, but observed ` +
+        `${observedAttempts === null ? "(job disappeared)" : observedAttempts}`,
+    );
+    this.name = "OutboxLeaseConflictError";
+  }
+}
+
 export interface OutboxStore {
   claimBatch(ctx: Ctx, opts: ClaimOutboxJobsOptions): Promise<OutboxJobRecord[]>;
-  complete(ctx: Ctx, jobId: string): Promise<void>;
-  fail(ctx: Ctx, jobId: string, error: string): Promise<void>;
+  complete(ctx: Ctx, jobId: string, expectedAttempts: number): Promise<void>;
+  fail(ctx: Ctx, jobId: string, error: string, expectedAttempts: number): Promise<void>;
 }

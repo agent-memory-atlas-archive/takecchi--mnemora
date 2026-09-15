@@ -153,5 +153,6 @@ alteroid (github.com/takecchi/alteroid) を根拠として引く箇所は、確�
 | [0139](./0139-consolidation-cost-huge-utterance-timeout.md) | `consolidation-cost` の「巨大な utterance」テストの間欠タイムアウトを直す — 支配的費用は `encode()` であり、同じ壁を kana 巡回文字列で越えると解消する（Issue #258） | 採用 (2026-09) |
 | [0140](./0140-contested-write-side-companion-required.md) | `MemoryStore` の書き込み側で、対向（`contestedWithId`）の無い単独 `contested` を拒否する — ADR 0136 決定3の実装（生成経路も含む） | 採用 (2026-09) |
 | [0141](./0141-local-embedding-load-retry.md) | `@mnemora/local-embedding` の読み込みに、種類の分かっていない失敗のリトライを足す — キャッシュが hit してもネットワークは0回にならない（Issue #261） | 採用 (2026-09) |
+| [0142](./0142-outbox-complete-fail-compare-and-swap.md) | `OutboxStore.complete`/`fail` を compare-and-swap にする — `attempts` をフェンシングトークンに使う（Issue #233、ADR 0032 が残した named debt の実装） | 採用 (2026-09) |
 
 <!-- ADR-INDEX:GENERATED:END -->

@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import type { Ctx, OutboxJobKind, OutboxJobRecord, OutboxStore } from "@mnemora/core";
+import {
+  OutboxLeaseConflictError,
+  type Ctx,
+  type OutboxJobKind,
+  type OutboxJobRecord,
+  type OutboxStore,
+} from "@mnemora/core";
 
 export interface SeedOutboxJobInput {
   kind: OutboxJobKind;
@@ -123,8 +129,9 @@ export function describeOutboxStoreConformance(options: OutboxStoreConformanceOp
         leaseMs: DEFAULT_LEASE_MS,
       });
       expect(firstClaim.map((j) => j.id)).toContain(job.id);
+      const claimedJob = firstClaim.find((j) => j.id === job.id)!;
 
-      await store.complete(ctx, job.id);
+      await store.complete(ctx, job.id, claimedJob.attempts);
 
       const secondClaim = await store.claimBatch(ctx, {
         limit: 10,
@@ -140,7 +147,9 @@ export function describeOutboxStoreConformance(options: OutboxStoreConformanceOp
       const ctx: Ctx = { tenantId: "tenant-1" };
       const job = await seedJob(ctx, { kind: "extract" });
 
-      await store.fail(ctx, job.id, "simulated failure");
+      // job はまだ claim されていない(seedJob 直後、attempts は生成時の値のまま)ため、
+      // その attempts を渡す。
+      await store.fail(ctx, job.id, "simulated failure", job.attempts);
 
       const claimed = await store.claimBatch(ctx, {
         limit: 10,
@@ -151,16 +160,18 @@ export function describeOutboxStoreConformance(options: OutboxStoreConformanceOp
       expect(claimed.map((j) => j.id)).not.toContain(job.id);
     });
 
-    it("complete は存在しないジョブ id に対して例外を投げない（べき等な終端更新）", async () => {
+    it("complete は存在しないジョブ id に対して例外を投げない（べき等な終端更新、expectedAttempts の値に関わらず）", async () => {
       const store = await createStore();
       const ctx: Ctx = { tenantId: "tenant-1" };
-      await expect(store.complete(ctx, "does-not-exist")).resolves.not.toThrow();
+      await expect(store.complete(ctx, "does-not-exist", 0)).resolves.not.toThrow();
+      await expect(store.complete(ctx, "does-not-exist", 999)).resolves.not.toThrow();
     });
 
-    it("fail は存在しないジョブ id に対して例外を投げない（べき等な終端更新）", async () => {
+    it("fail は存在しないジョブ id に対して例外を投げない（べき等な終端更新、expectedAttempts の値に関わらず）", async () => {
       const store = await createStore();
       const ctx: Ctx = { tenantId: "tenant-1" };
-      await expect(store.fail(ctx, "does-not-exist", "boom")).resolves.not.toThrow();
+      await expect(store.fail(ctx, "does-not-exist", "boom", 0)).resolves.not.toThrow();
+      await expect(store.fail(ctx, "does-not-exist", "boom", 999)).resolves.not.toThrow();
     });
 
     it("クロステナントの claimBatch は他テナントの未処理ジョブを返さない", async () => {
@@ -246,6 +257,141 @@ export function describeOutboxStoreConformance(options: OutboxStoreConformanceOp
         leaseMs,
       });
       expect(afterExpiry.map((j) => j.id)).toContain(job.id);
+    });
+
+    // -------------------------------------------------------------------
+    // complete / fail の CAS（ADR 0142, Issue #233）
+    // -------------------------------------------------------------------
+
+    it("complete は claim 時の attempts と一致すれば成功する", async () => {
+      const store = await createStore();
+      const ctx: Ctx = { tenantId: "tenant-1" };
+      const job = await seedJob(ctx, { kind: "extract" });
+
+      const claimed = await store.claimBatch(ctx, {
+        limit: 10,
+        now: new Date(),
+        claimedBy: "worker-1",
+        leaseMs: DEFAULT_LEASE_MS,
+      });
+      const claimedJob = claimed.find((j) => j.id === job.id)!;
+
+      await expect(store.complete(ctx, job.id, claimedJob.attempts)).resolves.not.toThrow();
+    });
+
+    it("complete は attempts が一致しないと OutboxLeaseConflictError を投げ、行を変更しない", async () => {
+      const store = await createStore();
+      const ctx: Ctx = { tenantId: "tenant-1" };
+      const job = await seedJob(ctx, { kind: "extract" });
+
+      const claimed = await store.claimBatch(ctx, {
+        limit: 10,
+        now: new Date(),
+        claimedBy: "worker-1",
+        leaseMs: DEFAULT_LEASE_MS,
+      });
+      const claimedJob = claimed.find((j) => j.id === job.id)!;
+      const wrongAttempts = claimedJob.attempts - 1;
+
+      const error = await store.complete(ctx, job.id, wrongAttempts).catch((err: unknown) => err);
+      expect(error).toBeInstanceOf(OutboxLeaseConflictError);
+      const conflict = error as OutboxLeaseConflictError;
+      expect(conflict.jobId).toBe(job.id);
+      expect(conflict.expectedAttempts).toBe(wrongAttempts);
+      expect(conflict.observedAttempts).toBe(claimedJob.attempts);
+
+      // 弾かれたので、行は complete されていないまま——claimBatch にはまだ現れないが
+      // (リースが有効なので)、少なくとも上の complete によって completedAt が
+      // 付いていないことを、再度 claim して確認する(リースを切らして再取得)。
+      const reclaimed = await store.claimBatch(ctx, {
+        limit: 10,
+        now: new Date(Date.now() + DEFAULT_LEASE_MS + 1),
+        claimedBy: "worker-2",
+        leaseMs: DEFAULT_LEASE_MS,
+      });
+      expect(reclaimed.map((j) => j.id)).toContain(job.id);
+    });
+
+    it("fail は attempts が一致しないと OutboxLeaseConflictError を投げる", async () => {
+      const store = await createStore();
+      const ctx: Ctx = { tenantId: "tenant-1" };
+      const job = await seedJob(ctx, { kind: "extract" });
+
+      const claimed = await store.claimBatch(ctx, {
+        limit: 10,
+        now: new Date(),
+        claimedBy: "worker-1",
+        leaseMs: DEFAULT_LEASE_MS,
+      });
+      const claimedJob = claimed.find((j) => j.id === job.id)!;
+      const wrongAttempts = claimedJob.attempts - 1;
+
+      const error = await store
+        .fail(ctx, job.id, "boom", wrongAttempts)
+        .catch((err: unknown) => err);
+      expect(error).toBeInstanceOf(OutboxLeaseConflictError);
+      const conflict = error as OutboxLeaseConflictError;
+      expect(conflict.jobId).toBe(job.id);
+      expect(conflict.expectedAttempts).toBe(wrongAttempts);
+      expect(conflict.observedAttempts).toBe(claimedJob.attempts);
+    });
+
+    it("⭐ 再現(Issue #233): リース失効後に再claim・completeされたジョブを、遅れたワーカーのfail/completeが上書きできない", async () => {
+      const store = await createStore();
+      const ctx: Ctx = { tenantId: "tenant-1" };
+      const base = new Date();
+      const leaseMs = 1000;
+      const job = await seedJob(ctx, { kind: "extract", availableAt: base });
+
+      // ワーカーA が claim する(リース取得)。
+      const claimA = await store.claimBatch(ctx, {
+        limit: 10,
+        now: base,
+        claimedBy: "worker-A",
+        leaseMs,
+      });
+      const jobAsClaimedByA = claimA.find((j) => j.id === job.id)!;
+      expect(jobAsClaimedByA).toBeDefined();
+
+      // リースが切れる(時計を進める)。
+      const afterExpiry = new Date(base.getTime() + leaseMs);
+
+      // ワーカーB が同じジョブを再 claim して complete する。
+      const claimB = await store.claimBatch(ctx, {
+        limit: 10,
+        now: afterExpiry,
+        claimedBy: "worker-B",
+        leaseMs,
+      });
+      const jobAsClaimedByB = claimB.find((j) => j.id === job.id)!;
+      expect(jobAsClaimedByB).toBeDefined();
+      expect(jobAsClaimedByB.attempts).toBeGreaterThan(jobAsClaimedByA.attempts);
+      await store.complete(ctx, job.id, jobAsClaimedByB.attempts);
+
+      // ワーカーA が遅れて、自分が claim した時点の attempts で fail を呼ぶ
+      // ——自分のリースはもう有効ではないので、弾かれるはず。
+      const staleCall = store
+        .fail(ctx, job.id, "worker-A: stale failure", jobAsClaimedByA.attempts)
+        .catch((err: unknown) => err);
+      const error = await staleCall;
+      expect(error).toBeInstanceOf(OutboxLeaseConflictError);
+
+      // 上の `expect(error).toBeInstanceOf(OutboxLeaseConflictError)` は
+      // 「Aのfailが実際に(SQL/状態変更として)実行される前に弾かれた」ことの証拠になる
+      // ——本実装はどちらも「CASが一致しない場合、対象行への書き込みを一切行わずに
+      // 例外を投げる」形（`attempts = expectedAttempts` を満たす行が無ければ0行更新、
+      // または一致しないことを確認してから投げる）にしてあるため、例外が飛んだ時点で
+      // Aのfailは行に触れていない。これが本 Issue #233 の核心（遅れたワーカーが新しい
+      // ワーカーの結果を「黙って上書きする」ことの直接の否定）である。
+      // 追加の確認として、ジョブが(Bのcompleteのまま)終端状態を保っていることを、
+      // さらにリースを切らして再claimできない(＝終端のまま)ことでも確かめる。
+      const finalCheck = await store.claimBatch(ctx, {
+        limit: 10,
+        now: new Date(afterExpiry.getTime() + leaseMs + 1),
+        claimedBy: "worker-3",
+        leaseMs,
+      });
+      expect(finalCheck.map((j) => j.id)).not.toContain(job.id);
     });
   });
 }

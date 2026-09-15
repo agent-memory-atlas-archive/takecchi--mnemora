@@ -28,6 +28,7 @@ import type {
   RequeueEmbedJobsOptions,
   RequeueEmbedJobsResult,
 } from "./interfaces/memory-store.js";
+import { OutboxLeaseConflictError } from "./interfaces/outbox-store.js";
 import type { ClaimOutboxJobsOptions, OutboxStore } from "./interfaces/outbox-store.js";
 import type { OutboxJobKind } from "./interfaces/scheduler.js";
 import type { TenantSettingsStore } from "./interfaces/tenant-settings-store.js";
@@ -607,6 +608,33 @@ export interface UnsupportedOutboxJob {
   kind: OutboxJobKind;
 }
 
+/**
+ * 🔴 ADR 0142 / Issue #233: `tick` がジョブの結果を `complete`/`fail` で記録しようと
+ * した時点で、既にリースを失っていた（`OutboxLeaseConflictError`）ジョブ。
+ * {@link TickResult.leaseConflicts} の要素型。
+ *
+ * **これは失敗ではない。** リース競合が起きるのは、別のワーカーが既に同じジョブを
+ * 再 claim して（成功にせよ失敗にせよ）終端まで進めた場合だけである——
+ * `claimBatch` の `WHERE`（`completed_at IS NULL AND failed_at IS NULL`）が、
+ * 終端化されていない行しか対象にしないため。**システムから見れば、そのジョブは
+ * （このワーカー以外の誰かによって）既に済んでいる。**
+ */
+export interface OutboxLeaseConflict {
+  /** 競合した outbox 行の id。 */
+  jobId: string;
+  /** その行の `kind`。 */
+  kind: OutboxJobKind;
+  /**
+   * このワーカーが記録しようとしていた結果。`"complete"` はジョブの処理自体には
+   * 成功したが、その結果を記録しようとした時点でリースを失っていたことを示す。
+   * `"fail"` は、処理に失敗した（または `"complete"` の記録自体が競合以外の理由で
+   * 失敗した）ため `fail()` で記録しようとしたが、それもリース切れで記録できな
+   * かったことを示す。**いずれの場合も、この worker はジョブの最終的な結果に
+   * 影響を与えていない**——別のワーカーが既に書いた結果がそのまま残る。
+   */
+  attemptedOutcome: "complete" | "fail";
+}
+
 export interface TickResult {
   processed: number;
   failed: number;
@@ -629,6 +657,19 @@ export interface TickResult {
    * 同じ顔にしないため）。
    */
   unsupported: UnsupportedOutboxJob[];
+  /**
+   * 🔴 ADR 0142 / Issue #233: このジョブの結果を記録しようとした時点で、既にリースを
+   * 失っていた（`OutboxLeaseConflictError`）ジョブ。**`processed` にも `failed` にも
+   * 数えない**——「無い」の種類を潰さない、`unsupported` と同じ理由（ADR 0008 の族）。
+   * 良性の競合（正常な並行の結果）を、失敗という別の顔に変えない。
+   *
+   * `tick` はこの例外を検知すると、**そのジョブだけを飛ばして残りのジョブの処理を
+   * 続ける**——1件の良性の競合で、同じ `tick` 呼び出し内の他のジョブまで処理が
+   * 止まるのは、狭い事象を広い停止に変換する形であり、避ける。
+   *
+   * 空配列が既定であり、`undefined` にはならない。
+   */
+  leaseConflicts: OutboxLeaseConflict[];
 }
 
 /**
@@ -1747,7 +1788,10 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
     const { memoryIds, outcome, failure } = await runExtraction(ctx, observation);
     const extractJob = jobs.find((job) => job.kind === "extract");
     if (extractJob) {
-      await deps.outboxStore.complete(ctx, extractJob.id);
+      // CAS（ADR 0142）: この場では claimBatch を経由していないため attempts は
+      // 生成時の値（0）のまま——「ここまで誰にも claim/complete/fail されていない」を
+      // 表す自分のフェンシングトークンとして渡す。
+      await deps.outboxStore.complete(ctx, extractJob.id, extractJob.attempts);
     }
     return {
       observationId: observation.id,
@@ -1837,6 +1881,7 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
     let processed = 0;
     let failed = 0;
     const unsupported: UnsupportedOutboxJob[] = [];
+    const leaseConflicts: OutboxLeaseConflict[] = [];
     for (const job of jobs) {
       const handler = jobHandlerLookup.get(job.kind);
       if (handler === undefined) {
@@ -1845,21 +1890,63 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
         //    再び claim され、「claim され続けるがいつまでも進まない」になる。
         // 2. `unsupported` に**名指しで積む**。`failed` に数えるだけだと、
         //    「試して失敗した」と同じ顔になって呼び出し側から区別が付かない。
-        await deps.outboxStore.fail(ctx, job.id, `${UNSUPPORTED_KIND_ERROR_PREFIX}${job.kind}`);
+        // CAS（ADR 0142）: `job` はこの tick が `claimBatch` からたった今受け取った
+        // ものであり、`job.attempts` は「自分の claim」を指すフェンシングトークンである。
+        // 🔴 ADR 0142 決定3: fail() 自体がリース競合（OutboxLeaseConflictError）で
+        // 弾かれることもある——別のワーカーが、この worker が fail() を呼ぶより先に
+        // このジョブを再 claim して終端まで進めていた場合。良性の競合なので
+        // `leaseConflicts` に記録し、`unsupported`/`failed` には数えず次のジョブへ進む。
+        try {
+          await deps.outboxStore.fail(
+            ctx,
+            job.id,
+            `${UNSUPPORTED_KIND_ERROR_PREFIX}${job.kind}`,
+            job.attempts,
+          );
+        } catch (err) {
+          if (err instanceof OutboxLeaseConflictError) {
+            leaseConflicts.push({ jobId: job.id, kind: job.kind, attemptedOutcome: "fail" });
+            continue;
+          }
+          throw err;
+        }
         unsupported.push({ jobId: job.id, kind: job.kind });
         failed += 1;
         continue;
       }
       try {
         await handler(ctx, job);
-        await deps.outboxStore.complete(ctx, job.id);
+        // 🔴 ADR 0142: `complete` がリース競合で弾かれることがある——`handler` の
+        // 処理自体には成功したが、その完了を記録しようとした時点で、既に別の
+        // ワーカーがこのジョブを再 claim して終端まで進めていた場合。良性の競合
+        // なので `leaseConflicts` に記録するだけで、`fail()` は呼ばない
+        // （呼んでも同じ理由でまた弾かれるだけであり、かつ「処理には成功した」
+        // ジョブを `failed` にも数えない——事実と違う顔になる）。
+        await deps.outboxStore.complete(ctx, job.id, job.attempts);
         processed += 1;
       } catch (err) {
-        await deps.outboxStore.fail(ctx, job.id, err instanceof Error ? err.message : String(err));
+        if (err instanceof OutboxLeaseConflictError) {
+          leaseConflicts.push({ jobId: job.id, kind: job.kind, attemptedOutcome: "complete" });
+          continue;
+        }
+        try {
+          await deps.outboxStore.fail(
+            ctx,
+            job.id,
+            err instanceof Error ? err.message : String(err),
+            job.attempts,
+          );
+        } catch (failErr) {
+          if (failErr instanceof OutboxLeaseConflictError) {
+            leaseConflicts.push({ jobId: job.id, kind: job.kind, attemptedOutcome: "fail" });
+            continue;
+          }
+          throw failErr;
+        }
         failed += 1;
       }
     }
-    return { processed, failed, unsupported };
+    return { processed, failed, unsupported, leaseConflicts };
   }
 
   const tokenCounter = deps.tokenCounter ?? heuristicTokenCounter;
