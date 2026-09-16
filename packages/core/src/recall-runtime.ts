@@ -303,14 +303,59 @@ export async function runRecall(
   const validityGateActive = validatedQuery.includeOutsideValidity !== true;
   const validAt = validatedQuery.validAt ?? now;
 
+  // 忘却ゲート（decay floor gate、マネージャー決定、Issue #196 / ADR 0153）。
+  // 既定で有効——opt-in ではなく opt-out（`RecallQuery.includeFullyDecayed`）。
+  // ADR 0011「Phase 1 では decayFloorAtAfter を読み取りフィルタに使わない」を
+  // ADR 0153 が明示的に上書きしている。
+  const decayGateActive = validatedQuery.includeFullyDecayed !== true;
+
+  // ADR 0165: テナントの decay_clock を読み、忘却ゲート（段1・後置フィルタ）と段2の
+  // 再スコアに織り込む。`decayClock` は 'wall' 以外なら段2でも使うため、ゲートが
+  // 無効（includeFullyDecayed: true）でも常に読む——「ゲートを外す」ことと「順位付けに
+  // 使う時計を選ぶ」ことは別の軸である。
+  const decayClock: DecayClock =
+    deps.tenantSettingsStore === undefined
+      ? DEFAULT_DECAY_CLOCK
+      : await readDecayClock(deps.tenantSettingsStore, ctx);
+  // 活動時計の「いま」。'wall' のテナントでは一度も `tenant_activity` を読まない
+  // （ADR 0165 決めたこと5「activity_seq を進めるのは decay_clock != 'wall' のテナントに
+  // 限る」の読み側の対になる節約——'wall' のテナントの activity_seq は常に無意味な 0 なので
+  // 読む理由が無い）。
+  const nowSeq: number | undefined =
+    decayClock === "wall" || deps.tenantSettingsStore === undefined
+      ? undefined
+      : await readActivitySeq(deps.tenantSettingsStore, ctx);
+
   // -------------------------------------------------------------------
   // 段0: スコープ確定（docs/recall.md §2 段0、マネージャー決定の「スコープの外延」）
+  //
+  // ⚠ **この塊は `decayClock`/`nowSeq` の読み取り（上の2つの `await`）より後に置く**
+  // （Issue #329 / ADR 0173）。忘却ゲートの2軸は `decay_clock` を読まなければ決まらず、
+  // スコープはその2軸を持って `MemoryStore.aggregateScope` へ渡らなければならない
+  // ——`omitted.filtered(decayed)` の件数を、段1の押し下げと**同じ述語**で数えるためである。
+  // **`stage: "scope"` の trace の内容も、stages 内の順序も1バイトも変わっていない**
+  // ——この塊より前にあるのは `decayGateActive` の定義と2つの `await` だけであり、
+  // そのどれも `stages` を1つも積まない。
   // -------------------------------------------------------------------
   const scope: RecallScope = {
     subjectId: ctx.subjectId,
     occurredAfter: validatedQuery.occurredAfter,
     occurredBefore: validatedQuery.occurredBefore,
     validAt: validityGateActive ? validAt : undefined,
+    // ADR 0153 が段1へ押し下げた述語を、そのままスコープの一部として持つ
+    // （ADR 0165 決めたこと1・12 の2軸ぶん）。
+    // **⭐ ここが軸の唯一の出所である。**段1（ANN）と段3.5（連想枠）の `VectorFilter` は
+    // `gateVectorFilterFields`（下、ADR 0172）経由でこの欄を読むだけであり、
+    // 段5の `aggregateScope` は `scope` そのものを受け取る（ADR 0173）。
+    // ——2箇所で同じ式を書くと、片方だけ直したときに「落ちた数」と「数えた数」が黙って
+    // 食い違う（ADR 0038 が測った「実装が2つあると食い違う」穴）。
+    decayFloorAtAfter:
+      decayGateActive && (decayClock === "wall" || decayClock === "either") ? now : undefined,
+    decayFloorSeqAfter:
+      decayGateActive && (decayClock === "activity" || decayClock === "either")
+        ? nowSeq
+        : undefined,
+    decayFloorAnyAxis: decayGateActive && decayClock === "either",
   };
   stages.push({
     stage: "scope",
@@ -335,29 +380,6 @@ export async function runRecall(
   const channels = validatedQuery.channels ?? DEFAULT_RECALL_CHANNELS;
   const wantsAnn = channels.includes("ann");
   const wantsLexical = channels.includes("lexical");
-
-  // 忘却ゲート（decay floor gate、マネージャー決定、Issue #196 / ADR 0153）。
-  // 既定で有効——opt-in ではなく opt-out（`RecallQuery.includeFullyDecayed`）。
-  // ADR 0011「Phase 1 では decayFloorAtAfter を読み取りフィルタに使わない」を
-  // ADR 0153 が明示的に上書きしている。
-  const decayGateActive = validatedQuery.includeFullyDecayed !== true;
-
-  // ADR 0165: テナントの decay_clock を読み、忘却ゲート（段1・後置フィルタ）と段2の
-  // 再スコアに織り込む。`decayClock` は 'wall' 以外なら段2でも使うため、ゲートが
-  // 無効（includeFullyDecayed: true）でも常に読む——「ゲートを外す」ことと「順位付けに
-  // 使う時計を選ぶ」ことは別の軸である。
-  const decayClock: DecayClock =
-    deps.tenantSettingsStore === undefined
-      ? DEFAULT_DECAY_CLOCK
-      : await readDecayClock(deps.tenantSettingsStore, ctx);
-  // 活動時計の「いま」。'wall' のテナントでは一度も `tenant_activity` を読まない
-  // （ADR 0165 決めたこと5「activity_seq を進めるのは decay_clock != 'wall' のテナントに
-  // 限る」の読み側の対になる節約——'wall' のテナントの activity_seq は常に無意味な 0 なので
-  // 読む理由が無い）。
-  const nowSeq: number | undefined =
-    decayClock === "wall" || deps.tenantSettingsStore === undefined
-      ? undefined
-      : await readActivitySeq(deps.tenantSettingsStore, ctx);
 
   /**
    * 忘却ゲートの壁時計側の軸: `decayFloorAt` がまだ「いま」を過ぎていないか（狭義の `>`）。
@@ -434,18 +456,26 @@ export async function runRecall(
    * ⚠ **この断片は後置フィルタの代わりではない。** `survivesDecayGate` / `survivesValidityGate`
    * が両段の後置に残っており、adapter が ADR 0034 の契約（filter を実際に適用する）を
    * 守らなかった場合の多層防御になっている。
+   *
+   * ⭐ **Issue #329 / [ADR 0173](../../../docs/decisions/0173-decayed-omission-counted-by-aggregate-scope.md):
+   * この断片は式を1つも持たない——4欄すべて `scope` から取る。**
+   * 段5の `MemoryStore.aggregateScope` は同じ `scope` を受け取り、`count(*) FILTER` で
+   * 「ゲートが落とした件数」を厳密に数える（`ScopeAggregate.filteredDecayed` /
+   * `filteredExpired` / `filteredNotYetValid`）。⟹ **押し下げ（ここ）と集約（段5）が
+   * 構造的に同じ述語を見る**ことが、`omitted` の件数が `"exact"` を名乗れる根拠である。
+   * **ここに式を書き戻すと、その根拠が消える**——「段1で落ちた数」と「集約が数えた数」が
+   * 黙って食い違いうる形に戻る。
+   *
+   * ⟹ **ゲートを増やすときは、`RecallScope`（`recall.ts`）に欄を足し、ここでその欄を撒き、
+   * `aggregateScope` の述語に同じものを足す。この3点セットで1つである。**
    */
   const gateVectorFilterFields: Pick<
     VectorFilter,
     "decayFloorAtAfter" | "decayFloorSeqAfter" | "decayFloorAnyAxis" | "validAt"
   > = {
-    decayFloorAtAfter:
-      decayGateActive && (decayClock === "wall" || decayClock === "either") ? now : undefined,
-    decayFloorSeqAfter:
-      decayGateActive && (decayClock === "activity" || decayClock === "either")
-        ? nowSeq
-        : undefined,
-    decayFloorAnyAxis: decayGateActive && decayClock === "either",
+    decayFloorAtAfter: scope.decayFloorAtAfter,
+    decayFloorSeqAfter: scope.decayFloorSeqAfter,
+    decayFloorAnyAxis: scope.decayFloorAnyAxis,
     validAt: scope.validAt,
   };
 
@@ -540,6 +570,8 @@ export async function runRecall(
         // ——由来・意味論・opt-out の効き方は `gateVectorFilterFields` の doc に置いてある。
         // ⚠ ここへゲートの欄を直接書き足さないこと。足すなら `gateVectorFilterFields` へ足す
         // ——そうしないと連想枠だけが取り残される（それが Issue #347 で実際に起きたことである）。
+        // ⚠ その `gateVectorFilterFields` も式を持たず `scope` から作る（Issue #329 / ADR 0173）
+        // ——段5の `aggregateScope` が同じ `scope` を受け取って `count(*) FILTER` で数えるためである。
         ...gateVectorFilterFields,
       },
       // subjectId は等値一致なので段1に降ろす（ADR 0023）。excludeProvenanceKinds も
@@ -561,9 +593,12 @@ export async function runRecall(
     stages.push({
       stage: "candidate_generation",
       executed: candidateGenerationExecuted,
-      // decayGate（ADR 0153）: ANN は段1の VectorFilter.decayFloorAtAfter へ押し下げる
-      // ——落ちた件数は原理的に数えられない（ADR 0011 と同じ理由）ので、ここでは
-      // 「適用されたかどうか」だけを名乗る。件数は omitted.filtered(condition:'decayed') を見よ。
+      // decayGate（ADR 0153）: ANN は段1の VectorFilter.decayFloorAtAfter へ押し下げる。
+      // ここでは「適用されたかどうか」だけを名乗る——件数は
+      // omitted.filtered(condition:'decayed') を見よ。
+      // ⭐ Issue #329 / ADR 0173: その件数は今は **exact** である（段5の `aggregateScope` が
+      // 同じ述語で数える）。**ただし「ANN が k' の窓の中で落とした件数」ではない**
+      // ——窓の内側の話は ADR 0011 の限界として引き続き不明である。
       detail: {
         channel: "ann",
         kPrime,
@@ -674,10 +709,6 @@ export async function runRecall(
   const memoriesById = new Map(fetchedMemories.map((m) => [m.id, m]));
 
   const excludeKinds = new Set(validatedQuery.excludeProvenanceKinds ?? []);
-  // 忘却ゲート（decay floor gate、マネージャー決定、Issue #196 / ADR 0153）の後置フィルタで
-  // 実際に落とした件数。ANN の押し下げ分はここに含まれない（原理的に数えられない）ので、
-  // これは常に「少なくともこれだけは落ちた」という下限である（下の omitted push を参照）。
-  let decayFilteredCount = 0;
   const filteredCandidates: { memory: Memory; distance?: number; lexicalCoverage?: number }[] = [];
   for (const memoryId of candidateIds) {
     const raw = rawById.get(memoryId);
@@ -719,29 +750,17 @@ export async function runRecall(
     // ⭐ ADR 0165: `decay_clock` が 'activity'/'either' のテナントでは、この述語が
     // 壁時計だけでなく活動時計の軸も見る（`survivesDecayGate` の doc コメント参照）——
     // これを忘れると、語彙チャンネルだけ壁時計のまま残る（ADR 0165 決めたこと12 の表）。
+    // ⚠ **ここでは数えない**（Issue #329 / ADR 0173）。`period`/`expired` と同じ扱いに
+    // 揃えた——exact な件数は段5の `aggregateScope`（`ScopeAggregate.filteredDecayed`）から
+    // 取る。**両方から数えると二重計上になる。**フィルタそのものは残す（多層防御と、
+    // 語彙チャンネルが混ざったときの保険。ADR 0153 決めたこと3）。
     if (decayGateActive && !survivesDecayGate(memory)) {
-      decayFilteredCount += 1;
       continue;
     }
     filteredCandidates.push({
       memory,
       distance: raw.distance,
       lexicalCoverage: raw.lexicalCoverage,
-    });
-  }
-
-  // 忘却ゲートが実際に落とした件数を報告する（マネージャー決定「黙って減らさない。
-  // ただし件数を偽らない」）。0件のときは push しない——ゲートが1件も落とさなかった
-  // 回に偽の omitted を積まない（マネージャー決定の明示的な注意）。
-  // `condition: 'archived'` に相乗りしない——status ゲートとは別の列・別の理由（recall.ts 参照）。
-  if (decayFilteredCount > 0) {
-    omitted.push({
-      kind: "filtered",
-      condition: "decayed",
-      count: decayFilteredCount,
-      // ANN の押し下げ分は数えられない（ADR 0011）ので、これは下限——
-      // 実際に落ちた総数はこれ以上でありうる。
-      countKind: "lower_bound",
     });
   }
 
@@ -1174,11 +1193,21 @@ export async function runRecall(
           // 書き下すと、連想枠だけが壁時計のまま取り残される。
           //
           // 🔴 **落ちた件数はここでは数えない**（Issue #347 / ADR 0172 決めたこと3）。
-          // 段1の押し下げで落ちた分が原理的に数えられない（ADR 0011）のと同じ扱いであり、
-          // 連想用 `search()` も同じ3欄を押し下げているので、通常この後置は1件も落とさない
-          // ——落ちるのは adapter が ADR 0034 の契約を破ったときだけである。
-          // ⟹ `omitted` の数え方は本 Issue では1バイトも変えていない（Issue #329 と
-          // 数え方が混ざらないようにするため）。
+          // 段1の後置ループ（上）と同じ扱いであり、連想用 `search()` も同じ欄を
+          // 押し下げているので、通常この後置は1件も落とさない——落ちるのは adapter が
+          // ADR 0034 の契約を破ったときだけである。
+          //
+          // ⭐ **Issue #329 / ADR 0173 の後は、件数は段5の `aggregateScope` が名乗る**
+          // （`filtered(decayed)` / `filtered(expired)` / `filtered(not_yet_valid)`、
+          // いずれも `countKind: "exact"`）。ADR 0172 が書いていた「段1の押し下げで
+          // 落ちた分は原理的に数えられない（ADR 0011）」は、`decayed` については
+          // **もう実態ではない**——押し下げは外さないまま、同じ `scope` の述語を
+          // 集約側が持つことで厳密に数えられるようになった。
+          // ⚠ **二重計上にならないのはなぜか**: 集約が数えるのは「**scope 内で**
+          // 減衰しきっていた件数」という*集合の大きさ*であって、「どの段が落としたか」
+          // ではない。⟹ 段1で落ちようが段3.5 で落ちようが、同じ Memory は1回しか
+          // 数えられない。**だからこそ、数えるのは段5の1箇所だけでなければならない**
+          // ——ここや段1の後置で足し込むと、その瞬間に二重計上になる。
           if (!survivesValidityGate(memory)) continue;
           if (decayGateActive && !survivesDecayGate(memory)) continue;
           // ⛔ アンカーとの類似度を score.similarity（クエリとの類似度の枠）に入れない
@@ -1389,6 +1418,22 @@ export async function runRecall(
       condition: "not_yet_valid",
       count: aggregate.filteredNotYetValid.count,
       countKind: aggregate.filteredNotYetValid.countKind,
+    });
+  }
+  // ⭐ Issue #329 / ADR 0173: 忘却ゲートが落とした件数も、他の `filtered` と同じく
+  // **この集約1本**から出す。ADR 0153 は段1（ANN）へ押し下げた分を「原理的に数えられない」
+  // として後置フィルタの実測値（下限）だけを報告していたが、既定チャンネルは ANN 1本
+  // （`DEFAULT_RECALL_CHANNELS`）なので**既定経路では一度も鳴らなかった**——記憶が
+  // 何の名乗りも無く消えていた（北極星 項目6「『見つからなかった』と『探していない』を、
+  // 同じ顔で返さない」と正面から食い違う）。押し下げは1バイトも外さず、
+  // **同じ述語を持つ `scope` を集約へ渡して厳密に数える**ことで塞いだ。
+  // `count === 0` では積まない——他の `filtered` と同じ作法。
+  if (aggregate.filteredDecayed.count > 0) {
+    omitted.push({
+      kind: "filtered",
+      condition: "decayed",
+      count: aggregate.filteredDecayed.count,
+      countKind: aggregate.filteredDecayed.countKind,
     });
   }
   // 理由ごとに1件ずつ返す（`filtered` の `condition` と同じ形）。

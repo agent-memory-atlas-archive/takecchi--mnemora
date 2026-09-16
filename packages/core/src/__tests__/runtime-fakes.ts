@@ -118,6 +118,43 @@ class FakeBackingStore {
   }
 }
 
+/**
+ * ⭐ Issue #329 / [ADR 0173](../../../../docs/decisions/0173-decayed-omission-counted-by-aggregate-scope.md):
+ * `aggregateScope` が `filteredDecayed` を数えるための述語。
+ *
+ * **`recall-runtime.ts` の `survivesDecayGate`（段1の押し下げ・後置フィルタの両方が使う
+ * もの）の否定**であり、`PostgresMemoryStore.aggregateScope` の `isDecayed`（SQL）と
+ * 同じものでなければならない。`period`/`validAt` と同じ「4箇所の複製」の5つ目である
+ * ——**この一致そのものを、適合テストと `recall-decay-cross-day.postgres.test.ts` が検算する。**
+ *
+ * - 壁時計の軸が生きている: `decayFloorAt > decayFloorAtAfter`（狭義の `>`）
+ * - 活動時計の軸が生きている: `decayFloorSeq` が無い（この軸に床が無い、ADR 0165 決めたこと4）
+ *   か `decayFloorSeq > decayFloorSeqAfter`
+ * - `decayFloorAnyAxis`（`decay_clock: 'either'`）: 2軸の **OR**（最も緩い）
+ * - 軸が1本も渡されていない（ゲート無効）: 常に `false`（0件と数える）
+ */
+function isDecayedForScope(
+  memory: Pick<Memory, "decayFloorAt" | "decayFloorSeq">,
+  scope: RecallScope,
+): boolean {
+  const { decayFloorAtAfter, decayFloorSeqAfter } = scope;
+  if (decayFloorAtAfter === undefined && decayFloorSeqAfter === undefined) return false;
+  const wallAlive =
+    decayFloorAtAfter === undefined ? undefined : memory.decayFloorAt > decayFloorAtAfter;
+  const activityAlive =
+    decayFloorSeqAfter === undefined
+      ? undefined
+      : memory.decayFloorSeq === undefined ||
+        memory.decayFloorSeq === null ||
+        memory.decayFloorSeq > decayFloorSeqAfter;
+  if (scope.decayFloorAnyAxis === true && wallAlive !== undefined && activityAlive !== undefined) {
+    return !(wallAlive || activityAlive);
+  }
+  if (wallAlive !== undefined && activityAlive !== undefined) return !(wallAlive && activityAlive);
+  if (wallAlive !== undefined) return !wallAlive;
+  return !activityAlive;
+}
+
 export class FakeMemoryStore implements MemoryStore {
   constructor(private readonly backing: FakeBackingStore) {}
 
@@ -641,6 +678,7 @@ export class FakeMemoryStore implements MemoryStore {
     let filteredPeriod = 0;
     let filteredExpired = 0;
     let filteredNotYetValid = 0;
+    let filteredDecayed = 0;
     // 目次帯の候補（本 PR）: totalInScope に数える条件と**同じ条件**で in-scope の
     // Memory を集める。`digestBand` が要求されなかった場合はこの配列を使わない。
     const inScopeMemories: Memory[] = [];
@@ -687,6 +725,14 @@ export class FakeMemoryStore implements MemoryStore {
       }
 
       totalInScope += 1;
+      // ⭐ Issue #329 / ADR 0173: 忘却ゲートで落ちた件数。**`continue` しない**
+      // ——`archived`/`period`/`expired` と違い、減衰しきった Memory は
+      // `totalInScope`・群カウント・目次帯のいずれからも除かれない（スコープ内に在る）。
+      // 述語は `PostgresMemoryStore.aggregateScope` の `isDecayed` と、
+      // `recall-runtime.ts` の `survivesDecayGate` の否定と、同じものでなければならない。
+      if (isDecayedForScope(memory, scope)) {
+        filteredDecayed += 1;
+      }
       const key = memory.subjectId ?? null;
       inScopeBySubject.set(key, (inScopeBySubject.get(key) ?? 0) + 1);
       if (memory.embeddingStatus !== "ready") {
@@ -738,6 +784,7 @@ export class FakeMemoryStore implements MemoryStore {
       filteredPeriod: { count: filteredPeriod, countKind: "exact" },
       filteredExpired: { count: filteredExpired, countKind: "exact" },
       filteredNotYetValid: { count: filteredNotYetValid, countKind: "exact" },
+      filteredDecayed: { count: filteredDecayed, countKind: "exact" },
       digests,
       digestEligible,
     };

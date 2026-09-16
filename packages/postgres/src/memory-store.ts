@@ -980,6 +980,16 @@ export class PostgresMemoryStore implements MemoryStore {
    * 別クエリにすると群カウントと帯が別スナップショットになり、並行する書き込みの下で
    * 被覆不変条件が構造的に崩れる。
    *
+   * **⭐ Issue #329 / [ADR 0173](../../../docs/decisions/0173-decayed-omission-counted-by-aggregate-scope.md)
+   * で忘却ゲートの件数（`decayed_filtered`）を同じ CTE に相乗りさせた。** `scoped` の
+   * projection に `decay_floor_at`/`decay_floor_seq` を足し、`count(*) FILTER` を1本
+   * 増やしただけである——**別クエリで数えない。** 別クエリにすると (a) 往復が増え
+   * （【実測】2026-09-16、100k 行のローカル PG17: 別クエリ案は **Seq Scan で 24.6〜27.6ms**、
+   * 相乗りさせたこの案の増分は **+9.5ms**（median 150.6ms → 160.1ms、buffers は 6456 で同数）。
+   * ADR 0173「測ったこと」）、
+   * (b) 別スナップショットになって `totalInScope` と食い違いうる。ここは `digestBand` を
+   * 相乗りさせたのと同じ判断である。
+   *
    * `status` の4分岐（scope 内 / archived / superseded / forgotten）と period の内外は、
    * すべて `FILTER (WHERE ...)` による条件付き集約として `scoped` CTE の1回のスキャンで
    * 計算する。**superseded と forgotten は別々の列として数える**（ADR 0027）——前者は
@@ -1022,6 +1032,52 @@ export class PostgresMemoryStore implements MemoryStore {
       ${validAt}::timestamptz IS NOT NULL AND valid_from IS NOT NULL AND valid_from > ${validAt}::timestamptz
     )`;
 
+    // ⭐ Issue #329 / ADR 0173: 忘却ゲート（`decay_floor_at` / `decay_floor_seq`）が
+    // 落とした件数を、**段1の押し下げとまったく同じ述語**で厳密に数える。
+    //
+    // 押し下げ側は `PostgresVectorStore.search`（`vector-store.ts`）の
+    // `decayFloorAtCondition` / `decayFloorSeqCondition` / `decayFloorAnyAxis` の3本である。
+    // **ここはその否定（NOT）を組む**——生き残る側の述語を書いて否定することで、
+    // 「押し下げが通したもの」と「ここが数えないもの」が定義上一致する。
+    // ⚠ **`NOT` を分配して書き直さないこと。** 'either' は OR なので
+    // `NOT (wall OR seq)` = `NOT wall AND NOT seq` であり、AND/OR を取り違えると
+    // 「段1で落ちた数」と「集約が数えた数」が黙って食い違う（それがこの ADR の眼目である）。
+    //
+    // `decay_floor_at` は NOT NULL（`memories` の列定義）なので `NOT (x > p)` に
+    // 三値論理の穴は無い。`decay_floor_seq` は NULL を取りうるが、生き残る側の述語が
+    // `IS NULL OR ...` の形なので、その否定は `IS NOT NULL AND ... <= p` になり、
+    // やはり NULL が UNKNOWN で漏れることは無い（ADR 0165 決めたこと4）。
+    const decayFloorAtAfter = scope.decayFloorAtAfter;
+    const decayFloorSeqAfter = scope.decayFloorSeqAfter;
+    const wallAxisAlive =
+      decayFloorAtAfter !== undefined
+        ? sql`(decay_floor_at > ${decayFloorAtAfter}::timestamptz)`
+        : undefined;
+    const activityAxisAlive =
+      decayFloorSeqAfter !== undefined
+        ? sql`(decay_floor_seq IS NULL OR decay_floor_seq > ${decayFloorSeqAfter})`
+        : undefined;
+    let isDecayed: SQL;
+    if (wallAxisAlive === undefined && activityAxisAlive === undefined) {
+      // ゲート無効（`RecallQuery.includeFullyDecayed: true`）。**0件と数える**
+      // ——「ゲートを外した」ことと「0件落ちた」ことは呼び出し側から見て同じである
+      // （`omitted` に `decayed` が積まれない。`validAt` 未指定のときの
+      // `expired_filtered` が常に 0 になるのと同じ形）。
+      isDecayed = sql`false`;
+    } else if (
+      scope.decayFloorAnyAxis === true &&
+      wallAxisAlive !== undefined &&
+      activityAxisAlive !== undefined
+    ) {
+      isDecayed = sql`(NOT ${wallAxisAlive} AND NOT ${activityAxisAlive})`;
+    } else if (wallAxisAlive !== undefined && activityAxisAlive !== undefined) {
+      isDecayed = sql`(NOT ${wallAxisAlive} OR NOT ${activityAxisAlive})`;
+    } else if (wallAxisAlive !== undefined) {
+      isDecayed = sql`(NOT ${wallAxisAlive})`;
+    } else {
+      isDecayed = sql`(NOT ${activityAxisAlive!})`;
+    }
+
     const digestBand = opts?.digestBand;
     // `digestBand` が無ければ余計な仕事をしない（doc コメント・PR 指示のとおり）——
     // このサブクエリ群自体を SQL テキストに載せない。
@@ -1054,7 +1110,7 @@ export class PostgresMemoryStore implements MemoryStore {
     const result = await this.db.execute(sql`
       WITH scoped AS (
         SELECT id, subject_id, digest, occurred_at, recorded_at, embedding_status, status,
-               valid_from, valid_until
+               valid_from, valid_until, decay_floor_at, decay_floor_seq
         FROM memories
         WHERE tenant_id = ${ctx.tenantId} ${subjectFilter}
       )
@@ -1091,7 +1147,14 @@ export class PostgresMemoryStore implements MemoryStore {
         )::int AS expired_filtered,
         count(*) FILTER (
           WHERE status IN ('active', 'contested') AND ${inPeriod} AND ${isNotYetValid}
-        )::int AS not_yet_valid_filtered
+        )::int AS not_yet_valid_filtered,
+        -- Issue #329 / ADR 0173: 忘却ゲートで落ちた件数。in_scope と同じ絞り
+        -- (status + period + validity) の上に載る = in_scope の部分集合であり、
+        -- archived/period/expired のように in_scope から除かれた件数ではない。
+        -- 被覆不変条件 (群カウントの総和 = totalInScope) は動かない。
+        count(*) FILTER (
+          WHERE status IN ('active', 'contested') AND ${inPeriod} AND ${isValid} AND ${isDecayed}
+        )::int AS decayed_filtered
         ${digestBandColumns}
       FROM scoped
     `);
@@ -1108,6 +1171,7 @@ export class PostgresMemoryStore implements MemoryStore {
       period_filtered: number;
       expired_filtered: number;
       not_yet_valid_filtered: number;
+      decayed_filtered: number;
       digests?: { memoryId: string; digest: string }[];
       digest_eligible_count?: number;
     };
@@ -1144,6 +1208,7 @@ export class PostgresMemoryStore implements MemoryStore {
       filteredPeriod: { count: row.period_filtered, countKind: "exact" },
       filteredExpired: { count: row.expired_filtered, countKind: "exact" },
       filteredNotYetValid: { count: row.not_yet_valid_filtered, countKind: "exact" },
+      filteredDecayed: { count: row.decayed_filtered, countKind: "exact" },
       digests,
       digestEligible,
     };

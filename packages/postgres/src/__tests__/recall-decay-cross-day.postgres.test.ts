@@ -173,20 +173,40 @@ describe("runtime.recall() が decay を跨いで実際にどう振る舞うか 
     const gatedIds = gated.memories.map((m) => m.memoryId);
     expect(gatedIds).not.toContain(memoryId);
 
-    // ⚠ ここでは `omitted` に `{kind:"filtered", condition:"decayed"}` は現れない。
-    // **確かめた実態**（`recall-runtime.ts` を読んで追跡した）: 既定チャンネル（ANN のみ）では
-    // `decayFloorAtAfter` を段1の `VectorStore.search()` の filter として渡しており
-    // （ADR 0153）、この Memory は Postgres 側の SQL で候補集合にすら入らない。
-    // 後置フィルタ（`decayFilteredCount` → `omitted.push({kind:"filtered",
-    // condition:"decayed", countKind:"lower_bound"})`）は「ANN の候補として一度返ってきた
-    // ものを、それでも念のため落とす」ときにしか鳴らない——語彙チャンネル
-    // （`LexicalFilter` は `decayFloorAtAfter` を持たない）が
-    // 混ざったときの非対称を塞ぐための保険であって、ANN 単体の既定経路では
-    // 一度も鳴らない。⟹ ここで「消えたこと」は、`omitted` の中身ではなく
-    // 下の対照実験（`includeFullyDecayed: true` + `scoreThreshold: 0` で戻ってくること）で示す。
-    expect(gated.omitted.some((o) => o.kind === "filtered" && o.condition === "decayed")).toBe(
-      false,
+    // ⭐⭐ Issue #329 / [ADR 0173](../../../../docs/decisions/0173-decayed-omission-counted-by-aggregate-scope.md):
+    // **この歯は反転している。**PR #324 当時ここは `toBe(false)` だった——既定の ANN 単独
+    // 経路では `decayFloorAtAfter` を段1の SQL へ押し下げるので、落ちた記憶は候補集合に
+    // すら入らず、後置フィルタ（当時の `decayFilteredCount`）は一度も鳴らなかったためである。
+    //
+    // **なぜ反転が正しいのか**（詳細は ADR 0173。ここには要約だけ置く）:
+    // - 当時の期待の出所は仕様でも ADR でもなく**当時の実装を追跡した結果**だった
+    //   （旧コメントが「確かめた実態（`recall-runtime.ts` を読んで追跡した）」と自認していた）。
+    // - その実態は **ADR 0153 が自分で「引き受けた負債」2 として明記したもの**と同一である。
+    //   ⟹ この歯が固定していたのは**負債の現在値**であり、負債を返した以上それは動く。
+    // - そしてその状態は、北極星 項目6（「見つからなかった」と「探していない」を、同じ顔で
+    //   返さない）と正面から衝突していた。`AGENTS.md`「正典と実装が食い違ったら、
+    //   バグなのは実装のほうである」。
+    //
+    // ⟹ **この歯の役割が変わった。**「減衰しきった記憶が消える事実の記録」から、
+    // **「段1の押し下げと段5の集約が同じ述語を見ていることの検算」**へ。
+    // 押し下げは1バイトも外していない（下の `decayGate === "pushed_down"` がそれを固定する）。
+    const decayedOmissions = gated.omitted.filter(
+      (o) => o.kind === "filtered" && o.condition === "decayed",
     );
+    expect(decayedOmissions).toHaveLength(1);
+    const decayedOmission = decayedOmissions[0] as {
+      kind: "filtered";
+      condition: "decayed";
+      count: number;
+      countKind: string;
+    };
+    // (a) count がこの scope の実際の減衰件数と一致する。この tenant には
+    // `observe()` した1件しか居ないので、実測値は 1 である——scope を無視して
+    // tenant 全体や DB 全体を数える実装はここで落ちる。
+    expect(decayedOmission.count).toBe(1);
+    // (b) countKind は "exact"（"lower_bound" から上がった。ADR 0173「戻り値の意味が変わった」）。
+    expect(decayedOmission.countKind).toBe("exact");
+    // 押し下げは外していない——候補集合そのものから除かれたままであることを stages で固定する。
     const gatedCandidateGen = gated.explain.stages.find((s) => s.stage === "candidate_generation");
     const gatedDetail = gatedCandidateGen?.detail as { decayGate?: string } | undefined;
     expect(gatedDetail?.decayGate).toBe("pushed_down");
@@ -229,5 +249,121 @@ describe("runtime.recall() が decay を跨いで実際にどう振る舞うか 
     );
     const ungatedDetail = ungatedCandidateGen?.detail as { decayGate?: string } | undefined;
     expect(ungatedDetail?.decayGate).toBe("disabled");
+
+    // (c) ⭐ Issue #329 / ADR 0173: `includeFullyDecayed: true` のときは逆に、この
+    // omission が**積まれない**——ゲートを外したのだから「ゲートで落ちた」は 0 件である。
+    // これを固定しないと、「常に1件積む」だけの実装でも (a)(b) が通ってしまう。
+    expect(ungated.omitted.some((o) => o.kind === "filtered" && o.condition === "decayed")).toBe(
+      false,
+    );
+    expect(
+      ungatedDefaultThreshold.omitted.some(
+        (o) => o.kind === "filtered" && o.condition === "decayed",
+      ),
+    ).toBe(false);
+  });
+
+  /**
+   * ⭐⭐ Issue #329 / ADR 0173: **活動時計（`decay_clock: 'activity'` / `'either'`）でも、
+   * 段1の押し下げと段5の集約が同じ述語を見ていること。**
+   *
+   * ⚠ **ADR 0173 の実測（latency / EXPLAIN / 候補の質）は全行 `wall` でしか取っていない。**
+   * この軸は歯で埋める、というのがマネージャーの指示であり、これがその歯である。
+   * **本物の Postgres でしか測れない**——`decay_floor_seq` は `bigint` 列であり、
+   * `count(*) FILTER` の NULL 三値論理（`decay_floor_seq IS NULL` は沈まない側、
+   * ADR 0165 決めたこと4）も SQL 側の振る舞いだからである。
+   */
+  it("(丙) 活動時計のテナントでも、段1の押し下げと段5の集約が同じ述語で一致する（ADR 0165 の2軸）", async () => {
+    await resetTestDatabase();
+    const ctx: Ctx = { tenantId: `tenant-decay-activity-${randomUUID()}` };
+    const now = new Date();
+    const clock = createMutableClock(now);
+    const { runtime, memoryStore } = await buildTestRuntime(clock);
+    const { db } = await getTestClient();
+    const tenantSettingsStore = new PostgresTenantSettingsStore(db);
+
+    // 壁時計では絶対に沈まない（+100年）。活動時計の軸だけで判定されなければならない。
+    const farFuture = new Date(now.getTime() + 1000 * 60 * 60 * 24 * 365 * 100);
+    // 壁時計では既に沈んでいる。'activity' では**無視**されなければならない。
+    const farPast = new Date(now.getTime() - 1000 * 60 * 60 * 24 * 365);
+
+    const seed = async (overrides: {
+      decayFloorAt: Date;
+      decayFloorSeq: number | null;
+      hash: string;
+    }) =>
+      memoryStore.createMemory(ctx, {
+        tenantId: ctx.tenantId,
+        subjectId: null,
+        sourceObservationId: null,
+        extractorVersion: null,
+        content: `活動時計の歯 ${overrides.hash}`,
+        contentHash: `${ctx.tenantId}-${overrides.hash}`,
+        digest: overrides.hash,
+        digestSource: "llm",
+        provenance: { kind: "imported", batchId: "activity-clock-fixture" },
+        tags: [],
+        occurredAt: null,
+        recordedAt: now,
+        lastReinforcedAt: null,
+        strength: 1,
+        halfLifeHours: DEFAULT_HALF_LIFE_HOURS,
+        decayFloorAt: overrides.decayFloorAt,
+        decayBaseSeq: 0,
+        decayFloorSeq: overrides.decayFloorSeq,
+        embeddingStatus: "skipped",
+      });
+
+    // activity_seq はこのテナントではまだ1本も進んでいない（nowSeq = 0）。
+    expect(await tenantSettingsStore.getActivitySeq(ctx)).toBe(0);
+
+    // 壁=生 / 活=死（0 > 0 は false）: 'activity' でも 'either' でも……
+    await seed({ decayFloorAt: farFuture, decayFloorSeq: 0, hash: "wall-alive-activity-dead" });
+    // 壁=死 / 活=生
+    await seed({ decayFloorAt: farPast, decayFloorSeq: 100, hash: "wall-dead-activity-alive" });
+    // 壁=死 / 活=死
+    await seed({ decayFloorAt: farPast, decayFloorSeq: 0, hash: "wall-dead-activity-dead" });
+    // 壁=死 / 活は床が無い（NULL）——ADR 0165 決めたこと4 で「この軸では沈まない」。
+    await seed({ decayFloorAt: farPast, decayFloorSeq: null, hash: "wall-dead-activity-null" });
+
+    const decayedCount = async (): Promise<number> => {
+      // ⚠ `text` を渡すと埋め込みが要る。ここで見たいのは段5の集約なので、
+      //   ベクトルを直接渡して段1を走らせる（上の4件は embeddingStatus: 'skipped' で
+      //   ベクトルを持たないため、`memories` には1件も返らない——それでよい）。
+      const result = await runtime.recall(ctx, { vector: [0, 0, 1], limit: 10 });
+      const omission = result.omitted.find(
+        (o) => o.kind === "filtered" && o.condition === "decayed",
+      ) as { count: number; countKind: string } | undefined;
+      if (omission === undefined) return 0;
+      expect(omission.countKind).toBe("exact");
+      return omission.count;
+    };
+
+    // 'wall'（既定）: 壁時計だけを見る ⟹ farPast の3件。
+    expect(await decayedCount()).toBe(3);
+
+    // 'activity': 活動時計だけを見る ⟹ decayFloorSeq が 0（= nowSeq 以下）の2件。
+    // NULL の1件は沈まない。壁時計の farPast は一切効かない。
+    // ⚠ `decay_clock != 'wall'` のテナントでは recall のたびに activity_seq が +1 する
+    //   （ADR 0165 決めたこと5）。`decayFloorSeq: 100` はそれでも当分沈まない。
+    await tenantSettingsStore.setDecayClock(ctx, "activity");
+    expect(await decayedCount()).toBe(2);
+
+    // 'either': **OR**（どちらかが生きていれば沈まない）⟹ 両方沈んだ1件だけ。
+    // ⚠ AND/OR を取り違えた集約（`NOT wall OR NOT seq`）はここで 3 を返して赤くなる。
+    //   **これが段1の押し下げ（`vector-store.ts` の `decayFloorAnyAxis`）と段5の集約が
+    //   同じ述語であることの検算そのものである。**
+    await tenantSettingsStore.setDecayClock(ctx, "either");
+    expect(await decayedCount()).toBe(1);
+
+    // 鳴ってはいけない側: ゲートを外せば、どの時計でも 0 件。
+    const ungated = await runtime.recall(ctx, {
+      vector: [0, 0, 1],
+      limit: 10,
+      includeFullyDecayed: true,
+    });
+    expect(ungated.omitted.some((o) => o.kind === "filtered" && o.condition === "decayed")).toBe(
+      false,
+    );
   });
 });

@@ -508,12 +508,30 @@ describe("recall() — 連想用 adapter がゲートを無視しても、後置
     });
 
     expect(result.memories.map((m) => m.memoryId)).not.toContain(associated.id);
-    // 🔴 **数え方を変えていないことの歯**（Issue #347 / ADR 0172 決めたこと3）:
-    // 連想枠の後置で落ちた分は `filtered(decayed)` に**載らない**——段1の押し下げで
-    // 落ちた分を数えないのと同じ扱いであり、Issue #329 の対応と数え方を混ぜないため。
-    expect(result.omitted).not.toContainEqual(
-      expect.objectContaining({ kind: "filtered", condition: "decayed" }),
-    );
+    // 🔴 **二重計上しないことの歯**（Issue #347 / ADR 0172 決めたこと3 を、Issue #329 /
+    // ADR 0173 の後の形に読み替えたもの）。
+    //
+    // ⚠ **この行は 2026-09-16 に反転している。**ADR 0172 当時は
+    // `not.toContainEqual({condition:"decayed"})` だった——「連想枠の後置で落ちた分は
+    // `filtered(decayed)` に載らない」を固定していた。その根拠として当時のコメントが
+    // 挙げていたのは「段1の押し下げで落ちた分を数えないのと同じ扱いであり、**Issue #329 の
+    // 対応と数え方を混ぜないため**」であり、**#329 を名指しで待っている歯だった。**
+    // ⟹ ADR 0173 が段5の `aggregateScope` で厳密に数えるようにした以上、
+    // 「載らない」はもう実態ではない。**ADR 0172 の主張（連想枠の後置は件数を足さない）は
+    // 1ミリも変わっていない**——変わったのは、別の場所（段5）が数え始めたことである。
+    //
+    // ⛔ **弱めていない。**`not.toContainEqual` を消したのではなく、
+    // **`count` がちょうど 1 であること**を固定した。この scope に減衰しきった Memory は
+    // `associated` の1件しか無いので、もし連想枠の後置（または段1の後置）が
+    // 集約とは別に足し込んでいたら **2 になる。**⟹ この行は
+    // **「数えるのは段5の1箇所だけ」の検算**であり、ADR 0172 が守りたかったものを
+    // より強く守る。
+    expect(result.omitted).toContainEqual({
+      kind: "filtered",
+      condition: "decayed",
+      count: 1,
+      countKind: "exact",
+    });
   });
 
   /**

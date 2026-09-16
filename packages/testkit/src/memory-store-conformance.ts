@@ -4199,6 +4199,264 @@ export function describeMemoryStoreConformance(options: MemoryStoreConformanceOp
       expect(aggregate.filteredNotYetValid.count).toBe(0);
     });
 
+    // -----------------------------------------------------------------------
+    // ⭐ 忘却ゲート（Issue #329 / ADR 0173）
+    //
+    // `aggregateScope` が数える `filteredDecayed` は、**段1の押し下げ
+    // （`VectorFilter.decayFloorAtAfter`/`decayFloorSeqAfter`/`decayFloorAnyAxis`、
+    // `vector-store.ts`）とまったく同じ述語**でなければならない——ここがずれると
+    // 「段1で落ちた数」と「集約が数えた数」が黙って食い違い、`omitted` が嘘をつく。
+    // ⚠ **ここは `validAt` と決定的に違う点が1つある**: 減衰しきった Memory は
+    // `totalInScope` からも群カウントからも**除かれない**（スコープ内に在る）。
+    // ⟹ 下の歯はすべて `totalInScope` を併せて固定する。
+    // -----------------------------------------------------------------------
+
+    const DECAY_AT = new Date("2026-06-01T00:00:00.000Z");
+
+    it("aggregateScope は decayFloorAt が decayFloorAtAfter 以下の Memory を filteredDecayed に数える（境界も沈む側、狭義の `>`）", async () => {
+      const store = await createStore();
+      const ctx: Ctx = { tenantId: "tenant-1" };
+      // 境界ちょうど（decayFloorAt === decayFloorAtAfter）は「沈んでいる」側
+      // ——`VectorFilter.decayFloorAtAfter` が狭義の `>`（`decay_floor_at > $n`）だから。
+      await store.createMemory(
+        ctx,
+        buildNewMemoryFixture({ tenantId: "tenant-1", decayFloorAt: DECAY_AT }),
+      );
+      for (let i = 0; i < 3; i += 1) {
+        await store.createMemory(
+          ctx,
+          buildNewMemoryFixture({
+            tenantId: "tenant-1",
+            decayFloorAt: new Date(DECAY_AT.getTime() - 1000),
+            contentHash: `decayed-${i}`,
+          }),
+        );
+      }
+      await store.createMemory(
+        ctx,
+        buildNewMemoryFixture({
+          tenantId: "tenant-1",
+          decayFloorAt: new Date(DECAY_AT.getTime() + 1000),
+          contentHash: "alive",
+        }),
+      );
+
+      const aggregate = await store.aggregateScope(ctx, { decayFloorAtAfter: DECAY_AT });
+      expect(aggregate.filteredDecayed.count).toBe(4);
+      expect(aggregate.filteredDecayed.countKind).toBe("exact");
+      // ⭐ `expired` と違い、**totalInScope からは除かれない**（5件すべてスコープ内）。
+      expect(aggregate.totalInScope).toBe(5);
+      expect(aggregate.groups.reduce((sum, g) => sum + g.count, 0)).toBe(5);
+    });
+
+    it("⚠ 鳴ってはいけない側: decayFloorAtAfter/decayFloorSeqAfter をどちらも渡さなければ filteredDecayed は 0（includeFullyDecayed: true の経路）", async () => {
+      const store = await createStore();
+      const ctx: Ctx = { tenantId: "tenant-1" };
+      await store.createMemory(
+        ctx,
+        buildNewMemoryFixture({
+          tenantId: "tenant-1",
+          decayFloorAt: new Date("2000-01-01T00:00:00.000Z"),
+          // ⚠ 負の値は使えない——`memories_decay_seq_non_negative`（CHECK 制約）で
+          // 本物の Postgres が弾く。【実測】2026-09-16、この歯を `-1` で書いて実際に踏んだ。
+          // 「どの軸でも沈んでいる」を表すには 0 で足りる（`decayFloorSeqAfter` を
+          // 渡さないので、そもそもこの列は読まれない、というのがこの歯の主張である）。
+          decayFloorSeq: 0,
+        }),
+      );
+
+      const aggregate = await store.aggregateScope(ctx, {});
+      expect(aggregate.filteredDecayed.count).toBe(0);
+      expect(aggregate.totalInScope).toBe(1);
+    });
+
+    it("aggregateScope は活動時計の軸（decayFloorSeqAfter）だけで数え、壁時計を見ない（ADR 0165 決めたこと1の 'activity'）", async () => {
+      const store = await createStore();
+      const ctx: Ctx = { tenantId: "tenant-1" };
+      const farPast = new Date("2000-01-01T00:00:00.000Z");
+      // 壁時計では全員沈んでいる。活動時計の軸だけで判定されなければならない。
+      await store.createMemory(
+        ctx,
+        buildNewMemoryFixture({
+          tenantId: "tenant-1",
+          decayFloorAt: farPast,
+          decayFloorSeq: 10, // 10 > 10 は false ⟹ 沈んでいる（境界も沈む側）
+          contentHash: "seq-boundary",
+        }),
+      );
+      await store.createMemory(
+        ctx,
+        buildNewMemoryFixture({
+          tenantId: "tenant-1",
+          decayFloorAt: farPast,
+          decayFloorSeq: 9,
+          contentHash: "seq-below",
+        }),
+      );
+      await store.createMemory(
+        ctx,
+        buildNewMemoryFixture({
+          tenantId: "tenant-1",
+          decayFloorAt: farPast,
+          decayFloorSeq: 11,
+          contentHash: "seq-above",
+        }),
+      );
+      // ⭐ decayFloorSeq が NULL（この軸に床が無い）は沈まない（ADR 0165 決めたこと4）
+      // ——壁時計では沈んでいるのに、である。軸を取り違えた実装はここで赤くなる。
+      await store.createMemory(
+        ctx,
+        buildNewMemoryFixture({
+          tenantId: "tenant-1",
+          decayFloorAt: farPast,
+          decayFloorSeq: null,
+          contentHash: "seq-null",
+        }),
+      );
+
+      const aggregate = await store.aggregateScope(ctx, { decayFloorSeqAfter: 10 });
+      expect(aggregate.filteredDecayed.count).toBe(2);
+      expect(aggregate.filteredDecayed.countKind).toBe("exact");
+      expect(aggregate.totalInScope).toBe(4);
+    });
+
+    it("⭐ decayFloorAnyAxis: true は2軸の OR（どちらかが生きていれば沈まない。'either' の4象限）", async () => {
+      const store = await createStore();
+      const ctx: Ctx = { tenantId: "tenant-1" };
+      const alivePast = new Date(DECAY_AT.getTime() + 1000);
+      const deadPast = new Date(DECAY_AT.getTime() - 1000);
+      // (壁=生, 活=生) / (壁=生, 活=死) / (壁=死, 活=生) / (壁=死, 活=死)
+      const quadrants: [string, Date, number][] = [
+        ["alive-alive", alivePast, 11],
+        ["alive-dead", alivePast, 9],
+        ["dead-alive", deadPast, 11],
+        ["dead-dead", deadPast, 9],
+      ];
+      for (const [name, decayFloorAt, decayFloorSeq] of quadrants) {
+        await store.createMemory(
+          ctx,
+          buildNewMemoryFixture({
+            tenantId: "tenant-1",
+            decayFloorAt,
+            decayFloorSeq,
+            contentHash: name,
+          }),
+        );
+      }
+
+      // OR（'either'）: 両方沈んだ1件だけが数えられる。
+      const either = await store.aggregateScope(ctx, {
+        decayFloorAtAfter: DECAY_AT,
+        decayFloorSeqAfter: 10,
+        decayFloorAnyAxis: true,
+      });
+      expect(either.filteredDecayed.count).toBe(1);
+
+      // ⚠ 対照: `decayFloorAnyAxis` を渡さなければ AND（両軸とも生きていなければ沈む）
+      // ——`vector-store.ts` が2条件を AND で積むのと同じ。**AND/OR を取り違えた実装は
+      // この2つの期待値が入れ替わる。**
+      const both = await store.aggregateScope(ctx, {
+        decayFloorAtAfter: DECAY_AT,
+        decayFloorSeqAfter: 10,
+      });
+      expect(both.filteredDecayed.count).toBe(3);
+      expect(either.totalInScope).toBe(4);
+      expect(both.totalInScope).toBe(4);
+    });
+
+    it("⭐ filteredDecayed は scope に従う: subjectId / period で絞ると、その中の減衰件数だけを数える", async () => {
+      const store = await createStore();
+      const ctx: Ctx = { tenantId: "tenant-1" };
+      const decayed = new Date(DECAY_AT.getTime() - 1000);
+      const inPeriod = new Date("2026-03-01T00:00:00.000Z");
+      const outOfPeriod = new Date("2025-03-01T00:00:00.000Z");
+      // alice: 期間内に2件、期間外に1件（いずれも減衰済み）。bob: 期間内に1件（減衰済み）。
+      for (const [subjectId, occurredAt, hash] of [
+        ["alice", inPeriod, "alice-in-1"],
+        ["alice", inPeriod, "alice-in-2"],
+        ["alice", outOfPeriod, "alice-out"],
+        ["bob", inPeriod, "bob-in"],
+      ] as [string, Date, string][]) {
+        await store.createMemory(
+          ctx,
+          buildNewMemoryFixture({
+            tenantId: "tenant-1",
+            subjectId,
+            occurredAt,
+            decayFloorAt: decayed,
+            contentHash: hash,
+          }),
+        );
+      }
+
+      const wholeTenant = await store.aggregateScope(ctx, { decayFloorAtAfter: DECAY_AT });
+      expect(wholeTenant.filteredDecayed.count).toBe(4);
+
+      const bySubject = await store.aggregateScope(ctx, {
+        subjectId: "alice",
+        decayFloorAtAfter: DECAY_AT,
+      });
+      expect(bySubject.filteredDecayed.count).toBe(3);
+
+      const byPeriod = await store.aggregateScope(ctx, {
+        occurredAfter: new Date("2026-01-01T00:00:00.000Z"),
+        decayFloorAtAfter: DECAY_AT,
+      });
+      expect(byPeriod.filteredDecayed.count).toBe(3);
+      expect(byPeriod.filteredPeriod.count).toBe(1);
+
+      const both = await store.aggregateScope(ctx, {
+        subjectId: "alice",
+        occurredAfter: new Date("2026-01-01T00:00:00.000Z"),
+        decayFloorAtAfter: DECAY_AT,
+      });
+      expect(both.filteredDecayed.count).toBe(2);
+      expect(both.totalInScope).toBe(2);
+    });
+
+    it("⚠ filteredDecayed は scope の外（archived / period 外 / expired）を数えない——二重計上しない", async () => {
+      const store = await createStore();
+      const ctx: Ctx = { tenantId: "tenant-1" };
+      const decayed = new Date(DECAY_AT.getTime() - 1000);
+      const archived = await store.createMemory(
+        ctx,
+        buildNewMemoryFixture({
+          tenantId: "tenant-1",
+          decayFloorAt: decayed,
+          contentHash: "archived-and-decayed",
+        }),
+      );
+      await store.updateStatus(ctx, archived.id, "archived");
+      await store.createMemory(
+        ctx,
+        buildNewMemoryFixture({
+          tenantId: "tenant-1",
+          decayFloorAt: decayed,
+          validUntil: new Date(DECAY_AT.getTime() - 5000),
+          contentHash: "expired-and-decayed",
+        }),
+      );
+      await store.createMemory(
+        ctx,
+        buildNewMemoryFixture({
+          tenantId: "tenant-1",
+          decayFloorAt: decayed,
+          contentHash: "plain-decayed",
+        }),
+      );
+
+      const aggregate = await store.aggregateScope(ctx, {
+        validAt: DECAY_AT,
+        decayFloorAtAfter: DECAY_AT,
+      });
+      // archived と expired は既に別の札で名乗っている——`decayed` にも数えると
+      // 呼び出し側から見て同じ Memory が2回落ちたことになる。
+      expect(aggregate.filteredArchived.count).toBe(1);
+      expect(aggregate.filteredExpired.count).toBe(1);
+      expect(aggregate.filteredDecayed.count).toBe(1);
+      expect(aggregate.totalInScope).toBe(1);
+    });
+
     it("aggregateScope は notIndexed を理由ごと（pending/failed/skipped）に分けて数え、totalInScope からは除かない", async () => {
       // 各理由の件数を**すべて異なる数**にする。同数だと、理由の取り違え
       // （例: failed を数えるべきところで skipped を数える）が起きても

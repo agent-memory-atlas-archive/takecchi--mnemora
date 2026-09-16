@@ -159,13 +159,16 @@ describe("recall() — 忘却ゲートが実際に候補を落とす（ANN チ�
     expect(ids).toContain(alive.id);
     expect(ids).not.toContain(decayed.id);
 
-    // 段1（ANN）の push-down が候補集合そのものから除いているので、core の後置フィルタは
-    // この候補を一度も見ない——⟹ count は 0 のままで、偽の omission を積まない
-    // （マネージャー決定「ゲートが1件も落とさなかったときに、偽の omitted を積まない」の
-    // 裏側: ここでは「後置フィルタとしては1件も落としていない」ことを固定する）。
-    expect(result.omitted).not.toContainEqual(
-      expect.objectContaining({ kind: "filtered", condition: "decayed" }),
-    );
+    // ⭐ Issue #329 / ADR 0173: 段1（ANN）の push-down が候補集合そのものから除いていても、
+    // **`omitted` は名乗る。** 件数は段5の `aggregateScope` が、押し下げと同じ述語で
+    // 厳密に数える（`countKind: "exact"`）。
+    // **この歯が反転した経緯と、なぜ反転が正しいのかは ADR 0173 に書いてある。**
+    expect(result.omitted).toContainEqual({
+      kind: "filtered",
+      condition: "decayed",
+      count: 1,
+      countKind: "exact",
+    });
 
     const annTrace = result.explain.stages.find(
       (s) => s.stage === "candidate_generation" && s.detail?.["channel"] === "ann",
@@ -243,15 +246,14 @@ describe("recall() — 忘却ゲートが語彙チャンネルにも同じ述語
 
     // ⚠ 件数を偽らない: `LexicalFilter` は decayFloorAtAfter を持たないので
     // `FakeLexicalStore`（postgres 実装と同じく LexicalFilter の契約のみを見る）は
-    // decayed-lexical もヒットとして返す。それを core の後置フィルタが実際に1件落とす
-    // ——ANN の押し下げ分とは違い、この count は正確に数えられる（`countKind: 'lower_bound'`
-    // なのは「ANN 側の押し下げ分は含まれていない」という一般則に合わせているだけで、
-    // ここで実際に測った1件という数自体は exact である）。
+    // decayed-lexical もヒットとして返し、core の後置フィルタがそれを落とす。
+    // **件数はその後置フィルタからではなく、段5の `aggregateScope` から出る**
+    // （Issue #329 / ADR 0173。両方から数えると二重計上になる）——⟹ `exact`。
     expect(result.omitted).toContainEqual({
       kind: "filtered",
       condition: "decayed",
       count: 1,
-      countKind: "lower_bound",
+      countKind: "exact",
     });
 
     const lexicalTrace = result.explain.stages.find(
@@ -345,17 +347,23 @@ describe("recall() — 押し下げと後置フィルタは同じ述語である
 
     expect(result.memories.map((m) => m.memoryId)).not.toContain(decayed.id);
     // ここでは ANN の adapter がゲートを守らなかったぶん、候補が core の後置フィルタまで
-    // 届いている——⟹ 今回は count に載る（普段の押し下げ経路とは違う数え方になることを
-    // 明示する歯）。
+    // 届いている。⭐ Issue #329 / ADR 0173 の後は、**届いたかどうかに関わらず件数は同じ**
+    // ——数えているのは後置フィルタではなく段5の `aggregateScope` だからである。
+    // （下の歯が、押し下げが効いている通常の配線でも同じ値になることを対で固定する。）
     expect(result.omitted).toContainEqual({
       kind: "filtered",
       condition: "decayed",
       count: 1,
-      countKind: "lower_bound",
+      countKind: "exact",
     });
   });
 
-  it("通常の配線（adapter が正しく押し下げる）では、後置フィルタは追加で何も落とさない", async () => {
+  it("⭐ 通常の配線（adapter が正しく押し下げる）でも、壊れた adapter のときと同じ件数を名乗る（段1と段5が同じ述語を見ていることの検算）", async () => {
+    // ⭐ Issue #329 / ADR 0173: この歯は以前「後置フィルタは追加で何も落とさない」を
+    // 固定していた（`filtered(decayed)` が1件も積まれないこと）。それは**実装がそうである**
+    // ことの記録であって、**そうあるべきである**ことを定めた歯ではなかった——そして
+    // その実態は、既定の ANN 単独経路で記憶が名乗り無く消えるという、北極星 項目6 と
+    // 正面から食い違う状態だった（Issue #329）。今はその逆を固定する。
     const { runtime, stores } = buildRuntime();
     await createEmbeddedMemory(stores, [1, 0], {
       digest: "decayed",
@@ -368,11 +376,69 @@ describe("recall() — 押し下げと後置フィルタは同じ述語である
 
     const result = await runtime.recall(ctx, { vector: [1, 0], limit: 10 });
 
-    // 押し下げが既に落としているので、後置フィルタが「追加で」落とす分は無い
-    // ——`filtered(decayed)` の omission そのものが1件も積まれない。
+    // (a) count が scope の実際の減衰件数（1件）と一致する。
+    // (b) countKind は "exact"。
+    expect(result.omitted).toContainEqual({
+      kind: "filtered",
+      condition: "decayed",
+      count: 1,
+      countKind: "exact",
+    });
+    // 押し下げは1バイトも外していない——候補集合そのものから除かれていることを
+    // stages 側からも見る（「後置で拾ったから数えられた」のではないことの確認）。
+    const annTrace = result.explain.stages.find(
+      (s) => s.stage === "candidate_generation" && s.detail?.["channel"] === "ann",
+    );
+    expect(annTrace?.detail?.["decayGate"]).toBe("pushed_down");
+  });
+
+  it("(c) includeFullyDecayed: true のときは、この omission が積まれない（ゲートを外したのだから落ちていない）", async () => {
+    const { runtime, stores } = buildRuntime();
+    await createEmbeddedMemory(stores, [1, 0], {
+      digest: "decayed",
+      decayFloorAt: new Date(NOW.getTime() - 1_000),
+    });
+
+    const result = await runtime.recall(ctx, {
+      vector: [1, 0],
+      limit: 10,
+      includeFullyDecayed: true,
+      scoreThreshold: 0,
+    });
+
     expect(result.omitted).not.toContainEqual(
       expect.objectContaining({ kind: "filtered", condition: "decayed" }),
     );
+  });
+
+  it("⭐ 件数は scope に従う: subjectId で絞ると、その subject の減衰件数だけを数える", async () => {
+    // `filtered(decayed)` が「テナント全体の減衰件数」ではなく「この scope の減衰件数」で
+    // あることを固定する。scope を無視して数える実装（例: tenant 全体を数える SQL）は
+    // ここで赤くなる。
+    const { runtime, stores } = buildRuntime();
+    const past = new Date(NOW.getTime() - 1_000);
+    for (const subjectId of ["alice", "alice", "bob"]) {
+      await createEmbeddedMemory(stores, [1, 0], { subjectId, decayFloorAt: past });
+    }
+
+    const scoped = await runtime.recall(
+      { tenantId: "tenant-1", subjectId: "alice" },
+      { vector: [1, 0], limit: 10 },
+    );
+    expect(scoped.omitted).toContainEqual({
+      kind: "filtered",
+      condition: "decayed",
+      count: 2,
+      countKind: "exact",
+    });
+
+    const wholeTenant = await runtime.recall(ctx, { vector: [1, 0], limit: 10 });
+    expect(wholeTenant.omitted).toContainEqual({
+      kind: "filtered",
+      condition: "decayed",
+      count: 3,
+      countKind: "exact",
+    });
   });
 });
 
@@ -416,13 +482,18 @@ describe("recall() — 忘却ゲートの時計選択（ADR 0165 決めたこと
 
     const result = await runtime.recall(ctx, { vector: [1, 0], limit: 10 });
 
-    // ⚠ ここでは `omitted` に `filtered(decayed)` を期待しない——`FakeVectorStore` が
-    // `decayFloorSeqAfter` を正しく段1（ANN）へ押し下げるため、この候補は post-filter
-    // まで届く前に候補集合そのものから外れる。ANN の押し下げ分は原理的に数えられない
-    // （ADR 0011。上の「本命の歯」の同じ注記）ので、ここで数える術は無い——それ自体が
-    // 押し下げが効いていることの証拠であり、post-filter の `filtered(decayed)` は
-    // 「adapter が押し下げを守らなかったときの多層防御」の側の歯が別に持つ。
     expect(result.memories.map((m) => m.memoryId)).not.toContain(dead.id);
+    // ⭐ Issue #329 / ADR 0173: **活動時計の軸でも、段1の押し下げと段5の集約が一致する。**
+    // `FakeVectorStore` は `decayFloorSeqAfter` を正しく段1へ押し下げるのでこの候補は
+    // 候補集合そのものから外れるが、`aggregateScope` が**同じ軸の述語**で数えるため
+    // `omitted` は exact で名乗る。⚠ ADR 0173 の実測は全行 `wall` でしか取っていない
+    // ——この軸を埋めるのはこの歯である。
+    expect(result.omitted).toContainEqual({
+      kind: "filtered",
+      condition: "decayed",
+      count: 1,
+      countKind: "exact",
+    });
   });
 
   it("'activity' のテナントでは decayFloorSeq が nowSeq を上回っていれば生き残る", async () => {
@@ -438,6 +509,11 @@ describe("recall() — 忘却ゲートの時計選択（ADR 0165 決めたこと
     const result = await runtime.recall(ctx, { vector: [1, 0], limit: 10 });
 
     expect(result.memories.map((m) => m.memoryId)).toContain(alive.id);
+    // ⭐ 鳴ってはいけない側（活動時計）: 1件も沈んでいないのだから、集約も0件でなければ
+    // ならない。
+    expect(result.omitted).not.toContainEqual(
+      expect.objectContaining({ kind: "filtered", condition: "decayed" }),
+    );
   });
 
   it("'activity' のテナントで decayFloorSeq が NULL（この軸に床が無い）なら常に生き残る（ADR 0165 決めたこと4）", async () => {
@@ -468,6 +544,12 @@ describe("recall() — 忘却ゲートの時計選択（ADR 0165 決めたこと
     const result = await runtime.recall(ctx, { vector: [1, 0], limit: 10 });
 
     expect(result.memories.map((m) => m.memoryId)).toContain(alive.id);
+    // ⭐ 'either' は OR（最も緩い）。壁時計が生きているのだから落ちていない——
+    // 集約側で AND/OR を取り違えると（`NOT (wall OR seq)` を `NOT wall OR NOT seq` と
+    // 書くと）ここが 1 件を名乗って赤くなる。**これが段1と段5の述語一致の検算そのもの。**
+    expect(result.omitted).not.toContainEqual(
+      expect.objectContaining({ kind: "filtered", condition: "decayed" }),
+    );
   });
 
   it("'either' はOR: 活動時計は生きているが壁時計は沈んでいても通る", async () => {
@@ -483,6 +565,11 @@ describe("recall() — 忘却ゲートの時計選択（ADR 0165 決めたこと
     const result = await runtime.recall(ctx, { vector: [1, 0], limit: 10 });
 
     expect(result.memories.map((m) => m.memoryId)).toContain(alive.id);
+    // ⭐ 'either' は OR: 活動時計が生きているので落ちていない（壁時計だけを見る集約は
+    // ここで 1 件を名乗って赤くなる）。
+    expect(result.omitted).not.toContainEqual(
+      expect.objectContaining({ kind: "filtered", condition: "decayed" }),
+    );
   });
 
   it("'either' はOR: 両方沈んでいれば除外される", async () => {
@@ -498,6 +585,13 @@ describe("recall() — 忘却ゲートの時計選択（ADR 0165 決めたこと
     const result = await runtime.recall(ctx, { vector: [1, 0], limit: 10 });
 
     expect(result.memories.map((m) => m.memoryId)).not.toContain(dead.id);
+    // ⭐ 'either' で両軸とも沈んだときだけ、集約は 1 件を名乗る。
+    expect(result.omitted).toContainEqual({
+      kind: "filtered",
+      condition: "decayed",
+      count: 1,
+      countKind: "exact",
+    });
   });
 
   it("explain.stages の detail.clock が実際に使ったテナントの時計を名乗る（'activity'/'either'、北極星の問い3）", async () => {

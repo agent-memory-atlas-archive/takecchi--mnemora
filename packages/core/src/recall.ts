@@ -81,13 +81,25 @@ export interface FilteredOmission {
    * `decayed` は強化すれば `decayFloorAt` 自体が先へ延びるため、そもそも次の recall では
    * この条件に当たらなくなる）を持つ。
    *
-   * **⚠ `count`/`countKind` は他の `filtered` 系と性質が違う。** ANN 段（段1）へ
-   * 押し下げた分（`VectorFilter.decayFloorAtAfter`）は、[ADR 0011](../../../docs/decisions/0011-no-window-count-in-ann-stage.md)
-   * が段1の候補生成について確立した理由と同じく、原理的に数えられない——ANN が
-   * 窓の外に残した候補の総数を知る手段が無い。**ここに載る `count` は、core が
-   * 段2の直前で全チャンネルの候補に対して掛ける後置フィルタが実際に落とした件数
-   * だけである。**⟹ `countKind` は常に `"lower_bound"`（押し下げで落ちた分は
-   * この数に含まれておらず、実際の総数はこれ以上でありうる）。
+   * **`count`/`countKind`（2026-09-16 変更、Issue #329 /
+   * [ADR 0173](../../../docs/decisions/0173-decayed-omission-counted-by-aggregate-scope.md)）**:
+   * `"period"`/`"expired"` と同じ扱いになった——**`countKind` は常に `"exact"`。**
+   * 件数は `MemoryStore.aggregateScope`（`ScopeAggregate.filteredDecayed`）が、
+   * 段1へ押し下げているのと**同じ述語**の `count(*) FILTER` で厳密に数える。
+   *
+   * **⚠ 戻り値の意味が変わった。** ADR 0173 より前は `"lower_bound"` 固定であり、
+   * その `count` は「core の後置フィルタが実際に落とした件数」だった——既定の
+   * ANN 単独経路では段1の押し下げが先に候補を除くため、**この omission 自体が
+   * 一度も現れなかった**（Issue #329）。今は「scope 内で減衰しきっていた件数」を名乗る。
+   * **その2つは違う数である**——後者は「ANN が k' の窓の中で落とした件数」ではない。
+   * 窓の内側で何件落ちたかは
+   * [ADR 0011](../../../docs/decisions/0011-no-window-count-in-ann-stage.md) の
+   * 限界として引き続き不明である。ただし `archived`/`period`/`expired`/`not_yet_valid`
+   * も**すべて前者**を数えており、`docs/recall.md` §5「スコープの外延」の契約が
+   * そもそも前者である ⟹ 契約と整合する。
+   *
+   * **⚠ `"archived"` 等と違い、この件数は `IndexBand.totalInScope` から除かれていない**
+   * ——減衰しきった Memory はスコープ内に在る（`ScopeAggregate.filteredDecayed` の doc）。
    *
    * **`"expired"`/`"not_yet_valid"`（Issue #280、Issue #202 第2弾、マネージャー決定3）**:
    * `RecallQuery.validAt` ゲート（既定 `now`）が落とした Memory を名指しする。
@@ -576,7 +588,7 @@ export const DIGEST_BAND_MAX_ENTRY_CHARS = 120;
  * **件数はすべてこの集約1本から取る**（ADR 0011 が段1から締め出した
  * `count(*) OVER ()` の代わりに指定した経路と同じ発想）。`groups` の総和・`totalInScope`・
  * `filteredArchived`/`filteredSuperseded`/`filteredForgotten`/`filteredPeriod`/
- * `filteredExpired`/`filteredNotYetValid`/`notIndexed`
+ * `filteredExpired`/`filteredNotYetValid`/`filteredDecayed`/`notIndexed`
  * の各件数を、
  * 別々のクエリではなく同一の集約クエリから得ることで、書き込みが並行して起きていても
  * 「群カウントと totalInScope の総和が一致する」という被覆不変条件が構造的に崩れない。
@@ -629,6 +641,26 @@ export interface ScopeAggregate {
    * `scope.validAt` が `undefined` なら常に0、`countKind` は常に `'exact'`。
    */
   filteredNotYetValid: { count: number; countKind: CountKind };
+  /**
+   * Issue #329 / [ADR 0173](../../../docs/decisions/0173-decayed-omission-counted-by-aggregate-scope.md):
+   * 忘却ゲート（`decay_floor_at` / `decay_floor_seq`）が落とした件数
+   * （`FilteredOmission.condition: 'decayed'` の doc 参照）。
+   * `RecallScope.decayFloorAtAfter`/`decayFloorSeqAfter` がどちらも `undefined`
+   * （ゲート無効＝`includeFullyDecayed: true`）なら常に0。`countKind` は常に `'exact'`
+   * ——`filteredExpired` と同じく、段1へ押し下げているのと**同じ述語**をこの集約が
+   * `count(*) FILTER` として持つため厳密に数えられる。
+   *
+   * **⚠ 他の `filtered*` 欄と、`totalInScope` との関係が違う。**
+   * `filteredArchived`/`filteredPeriod`/`filteredExpired`/`filteredNotYetValid` は
+   * `totalInScope` から**除かれた**件数だが、**`filteredDecayed` は `totalInScope` の
+   * 内訳（部分集合）である。** 忘却ゲートは `docs/recall.md` §2 段0「スコープの外延」が
+   * 列挙する次元（tenant + subject + period + taxonomy + status）に**入っていない**
+   * ——減衰しきった Memory はスコープ内に在り、群カウントにも目次帯にも現れる
+   * （だから `below_threshold` と同じ「スコープ内で落ちたもの」の側に属する）。
+   * ⟹ **群カウントの総和 = `totalInScope` という被覆不変条件は、この欄を足しても崩れない。**
+   * 詳細は ADR 0173。
+   */
+  filteredDecayed: { count: number; countKind: CountKind };
   /**
    * 目次帯（`IndexBand.digestBand`）に載せる候補（スコープ内 かつ
    * `AggregateScopeOptions.digestBand.excludeMemoryIds` に含まれないもの）を、
@@ -1268,6 +1300,34 @@ export interface RecallScope {
    * （`period` が未指定なら `undefined` のままなのと同じ形）。
    */
   validAt?: Date;
+  /**
+   * Issue #329 / [ADR 0173](../../../docs/decisions/0173-decayed-omission-counted-by-aggregate-scope.md):
+   * 忘却ゲートの**壁時計側**の基準時刻。`validAt` とまったく同じ形で入る——
+   * `recall-runtime.ts` が `RecallQuery.includeFullyDecayed` とテナントの `decay_clock`
+   * （ADR 0165）を見て、ゲート無効なら `undefined` にする。
+   *
+   * **⚠ ここに並ぶ3欄は `VectorFilter.decayFloorAtAfter`/`decayFloorSeqAfter`/
+   * `decayFloorAnyAxis`（`interfaces/vector-store.ts`）と同じ名前・同じ意味・同じ境界
+   * （狭義の `>`）である。**名前を揃えているのは飾りではない——段1の押し下げと段5の集約が
+   * **同じ述語**を見ていることが、`omitted.filtered(decayed)` の件数を信じられる唯一の
+   * 根拠だからである（ADR 0173）。
+   */
+  decayFloorAtAfter?: Date;
+  /**
+   * 忘却ゲートの**活動時計側**の基準（ADR 0165 の `activity_seq`）。
+   * `decayFloorSeq` が NULL の Memory は「この軸には床が無い」ので常に生き残る
+   * （ADR 0165 決めたこと4）——`VectorFilter.decayFloorSeqAfter` と同じ規則。
+   */
+  decayFloorSeqAfter?: number;
+  /**
+   * `decay_clock: 'either'`（ADR 0165 決めたこと1）のとき `true`。2軸を **OR** で結ぶ
+   * （どちらかが生きていれば通す＝最も緩い）。`VectorFilter.decayFloorAnyAxis` と同じく、
+   * **両方の基準が渡されているときだけ**効く。
+   *
+   * ⚠ `MemoryStore.archiveDecayed` の `'either'` は **AND** であり向きが逆である
+   * （`ArchiveDecayedOptions.clock` の doc「⭐」）。ここはゲート側なので OR。
+   */
+  decayFloorAnyAxis?: boolean;
 }
 
 export const RecallScopeSchema = z.object({
@@ -1275,6 +1335,9 @@ export const RecallScopeSchema = z.object({
   occurredAfter: z.date().optional(),
   occurredBefore: z.date().optional(),
   validAt: z.date().optional(),
+  decayFloorAtAfter: z.date().optional(),
+  decayFloorSeqAfter: z.number().optional(),
+  decayFloorAnyAxis: z.boolean().optional(),
 }) satisfies z.ZodType<RecallScope>;
 
 /**

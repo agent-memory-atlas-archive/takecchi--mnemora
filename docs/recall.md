@@ -75,6 +75,19 @@ recall は次の7段からなる。各段は「入力」「出力」「落ちる
 
 **帰結**: スコープ内で落ちたもの(`not_indexed` / `below_threshold` / `over_limit` / `budget_dropped` / `ann_truncated`)はすべて群カウントに乗っている。スコープを定義するフィルタ(period / taxonomy / status)で落ちたものは群カウントには乗らない。これが被覆不変条件の実質的な中身である——「在るなら出せるはず」と読める形で `forgotten`/`superseded` まで群カウントに数えることはしない。
 
+**⚠ 2026-09-16 追記（[ADR 0173](./decisions/0173-decayed-omission-counted-by-aggregate-scope.md)）: 忘却ゲート（`decay_floor_at`/`decay_floor_seq`）はこの外延に入らない。**
+上の決定（スコープ = tenant + subject + period + taxonomy + status ゲート）に忘却ゲートは
+**書かれていない**。ADR 0153 がゲートを既定 ON にしたときも、この外延は動かさなかった。
+⟹ **減衰しきった Memory はスコープ内に在る**——`IndexBand.totalInScope` にも群カウントにも
+目次帯にも現れ続け、`omitted` の `filtered(condition: 'decayed')` は
+**その内訳（部分集合）**を名乗る。`archived`/`period`/`expired` が「除かれた件数」なのとは
+関係が違う。
+**⟹ 被覆不変条件（群カウントの総和 = `totalInScope`）は、この札を足しても崩れない。**
+
+⚠ **これを「スコープに入れる」（＝ `totalInScope` から引く）判断は、あり得るが別の判断である**
+——それは「減衰しきった記憶は目次帯にも出さない」という製品の振る舞いの変更であり、
+⭐門（`examples/chat` の `compare`）の基準値も動く。ADR 0173「採らなかった案」4番。
+
 ### 段1: 候補生成（索引が効く）
 
 入力: 段0のスコープ、埋め込みベクトル（あれば）、タグ集合。
@@ -247,6 +260,31 @@ recall の候補から外れたことを表す。`'archived'` には相乗りし
 **`count`/`countKind` は他の `filtered` 系と性質が違う**——ANN 段（段1）へ押し下げた分は
 ADR 0011 と同じ理由で原理的に数えられず、ここに載る `count` は core の後置フィルタが
 実際に落とした件数だけである。⟹ `countKind` は常に `'lower_bound'`。詳細は ADR 0153。
+
+**⚠ 2026-09-16 訂正（[Issue #329](https://github.com/takecchi/mnemora/issues/329) /
+[ADR 0173](./decisions/0173-decayed-omission-counted-by-aggregate-scope.md)）: 直前の段落は
+もう実態ではない。**`countKind` は **`'exact'`** になり、件数は他の `filtered` と同じく
+`MemoryStore.aggregateScope` の `count(*) FILTER`（段1の押し下げと**同じ述語**）から出る。
+ADR 0153 が「引き受けた負債」2 として明記していた `'lower_bound'` は、ADR 0173 が返した。
+**この訂正が必要だったのは、負債が既定経路で実害を出していたからである**——既定チャンネルは
+ANN 1本（`DEFAULT_RECALL_CHANNELS`）であり、押し下げで落ちた記憶は後置フィルタに届かないため、
+**`filtered(decayed)` のエントリ自体が一度も出なかった**（記憶が名乗り無く消えていた。
+「目指す姿」項目6 と正面から食い違う）。
+
+**⚠ ただし、この `count` が数えているのは「scope 内で減衰しきっていた件数」であって、
+「ANN が k' の窓の中で落とした件数」ではない。**この2つは違う数である。
+**窓の内側で何件落ちたかは [ADR 0011](./decisions/0011-no-window-count-in-ann-stage.md) の
+限界として引き続き不明である。**⟹ ADR 0173 の欠陥ではなく、**契約の範囲外**である
+——`archived`/`period`/`expired`/`not_yet_valid` も**すべて前者**を数えており、
+§5「スコープの外延」の「件数はすべて単一の集約から取る」という契約がそもそも前者である。
+
+**⚠ `decayed` の件数だけは `IndexBand.totalInScope` から引かれていない。**
+忘却ゲートは §2 段0「スコープの外延」が列挙する次元（tenant + subject + period + taxonomy +
+status）に**入っていない**——減衰しきった Memory は**スコープ内に在り**、群カウントにも
+目次帯にも現れ続ける。⟹ `filtered(decayed)` は `totalInScope` から除かれた件数ではなく、
+**その内訳（部分集合）**である。**被覆不変条件（群カウントの総和 = `totalInScope`）は
+これによって崩れない。**この点で `decayed` は `archived`/`period`/`expired` より
+`below_threshold`（スコープ内で落ちたもの）の側に近い。
 
 **⚠ 2026-09-16 追記**: `reason` は以前 `'budget_exhausted'` も持っていたが、
 生成するコードが一度も無かった（Issue #206 / [ADR 0117](./decisions/0117-unreachable-union-values-inventory.md)
