@@ -103,7 +103,9 @@ forget
       ── status 更新とイベント追記を 1呼び出し・1トランザクションで（「必ず残る」の強制。ADR 0031）
 ```
 
-`purge()`（物理削除）は Phase 2 以降。イベント種別だけは Phase 1 のスキーマに含める。
+`purge()`（物理削除）は Issue #198 / [ADR 0124](./decisions/0124-purge-physical-delete.md) で
+実装済み（⚠ 2026-09 訂正——ここは当初「Phase 2 以降」と書いていた）。イベント種別は
+既に Phase 1 のスキーマに含まれている。
 
 **実装済み**（[ADR 0087](./decisions/0087-runtime-forget-shape.md)、Issue #102）。
 `Runtime.forget(ctx, target, opts?)` は対象ごとに `ForgetOutcome` を返す——

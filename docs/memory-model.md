@@ -568,6 +568,14 @@ Phase 2 以降だが、`memory_events.kind` の `'purged'` は Phase 1 のスキ
 （後からマイグレーションで `kind` の CHECK 制約を広げるのは、既存行との整合を壊すリスクが
 あるため避ける）。
 
+**⚠ 2026-09 訂正（Issue #289、[ADR 0124](./decisions/0124-purge-physical-delete.md)）:
+上の「`purge()` は Phase 2 以降」は Phase 1 計画時点の記録であり、値そのものは書き換えない。
+`purge()` は Issue #198 / ADR 0124 で実装済みである**——`Runtime.purge`
+（`packages/core/src/runtime.ts` の interface 宣言・実体）、`MemoryStore.purgeMemory?` の
+postgres 実装（`packages/postgres/src/memory-store.ts`）とも揃っている。`forgotten` から
+のみ遷移でき、`tick()`/`observe()` には配線しない（ADR 0124 決定1・決定3）。下のトゥーム
+ストーンの説明は実装とそのまま一致する。
+
 `purge()` が実行された場合、`memories` 行自体は残す（`memory_events` からの外部キー参照
 整合性のため、また `superseded_by_id` / `contested_with_id` の参照先としても残す必要が
 あるため）。ただし `content` と `digest` を固定のトゥームストーン文字列で上書きする
@@ -575,8 +583,7 @@ Phase 2 以降だが、`memory_events.kind` の `'purged'` は Phase 1 のスキ
 「消えたことを示す値で上書きする」ことで、NOT NULL と物理削除の両立を図る）。
 
 ```sql
--- Phase 2
-purged_at timestamptz NULL   -- 非NULLなら content/digest はトゥームストーン済み
+purged_at timestamptz NULL   -- 非NULLなら content/digest はトゥームストーン済み（実装済み。Issue #198 / ADR 0124）
 ```
 
 ---
@@ -677,7 +684,7 @@ CREATE TABLE memories (
   embedding_status       text        NOT NULL DEFAULT 'pending'
                             CHECK (embedding_status IN ('pending','ready','failed','skipped')),
 
-  purged_at              timestamptz NULL,   -- Phase 2
+  purged_at              timestamptz NULL,   -- 実装済み（2026-09 訂正。Issue #198 / ADR 0124）
 
   created_at             timestamptz NOT NULL DEFAULT now(),
   updated_at             timestamptz NOT NULL DEFAULT now()
@@ -928,7 +935,7 @@ observed → extracted → active ───────────────�
                           ├──(判定できない対向を検出)────▶ contested ──(後で解決)──▶ active | superseded
                           │
                           ▼
-                       archived  ──(forget() 呼び出し)──▶ forgotten ──(purge() 呼び出し・Phase 2)──▶ purged(*)
+                       archived  ──(forget() 呼び出し)──▶ forgotten ──(purge() 呼び出し)──▶ purged(*)
                           │
                           └──(restoreArchived() 呼び出し・明示的な復帰)──▶ active（行14）
 
@@ -953,6 +960,11 @@ observed → extracted → active ───────────────�
 遷移はすべて同じに適用される**——`superseded`/`contested`/`archived`/`forgotten` の判定・
 埋め込みジョブ・強化のどれも、由来を区別する分岐を持たない。
 
+**⚠ 2026-09 訂正（Issue #289、[ADR 0124](./decisions/0124-purge-physical-delete.md)）:
+上の図・行10は「`purge()` 呼び出し・Phase 2」と書いていたが、`purge()` は
+Issue #198 / ADR 0124 で実装済みである。**図そのもの（遷移の形・`(*)` の脚注）は
+実装と一致しており、直したのは「Phase 2」という古い注記だけである。
+
 | # | 遷移 | トリガー | 同期/非同期 | 書き換わる列 | 残るイベント (`memory_events.kind`) |
 |---|---|---|---|---|---|
 | 1 | (なし) → observed | `observe()` 呼び出し | 同期 | `observations` へ INSERT | なし（`observations` 自体が追記専用の記録） |
@@ -964,7 +976,7 @@ observed → extracted → active ───────────────�
 | 7 | contested → active \| superseded | 新しい証拠・人手の訂正により解決。実装は `Runtime.resolveContested(ctx, firstId, secondId, resolution)`（Issue #197、[ADR 0150](./decisions/0150-resolve-contested-explicit-operation.md)）。`resolution` は `{kind:'supersede', winnerId}`（負けた側が出る）か `{kind:'both_active'}`（**対向ではなかったと分かった決着。負けた側が居ない**——この行の「（負けた側は）」という括弧書きに対応する）の2つ。⚠ **「統合により解決」だけは今日も実装が無い**（ADR 0150 負債3） | 判定は非同期でよいが書き込みは1トランザクション（`MemoryStore.resolveContestedPair`）。**適格性は両側 `status='contested'` かつ `contested_with_id` が相互に成立していること**——片方向の対は解決させない（ADR 0046 の対不変条件を、解決側から壊さないため） | `status` を確定、`contested_with_id` をクリア、（負けた側は）`superseded_by_id` を設定 | 勝った側 `updated` / 負けた側 `superseded`（`both_active` なら両側 `updated`）。どちらも `meta.reason='contested_resolved'`、`meta.resolution` に決着の種類 |
 | 8 | active/superseded/contested → archived | `decay_floor_at < now()` を検出する低頻度の掃引、または明示的なアーカイブ操作 | 非同期（定期ジョブ。全件走査ではなく `decay_floor_at` の範囲走査） | `status='archived'` | `archived` |
 | 9 | 任意 → forgotten | `forget(ctx, target)` 呼び出し | 同期（`EventStore` への追記と同一トランザクション） | `status='forgotten'` | `forgotten` |
-| 10 | forgotten → purged（Phase 2） | `purge(ctx, target)` 呼び出し（法的要求） | 同期 | `content`/`digest` をトゥームストーンで上書き、`purged_at` 設定 | `purged` |
+| 10 | forgotten → purged（実装済み。Issue #198 / ADR 0124） | `purge(ctx, target)` 呼び出し（法的要求） | 同期 | `content`/`digest` をトゥームストーンで上書き、`purged_at` 設定 | `purged` |
 | 11 | (memory_events の掃除) | `MemoryStore.purgeExpiredEvents?` の明示呼び出し（任意メソッド。Issue #210 / [ADR 0115](./decisions/0115-event-retention-purge.md)）。定期実行そのものは呼び出し側（運用のスクリプト・cron）の責務——`tick()`/`observe()` には配線しない | 非同期（保守ジョブ。`EventStore` interface は経由しない） | `memory_events` から古い行を DELETE | `events_purged`（件数・期間のみ。削除対象の詳細は残さない） |
 | 12 | (なし) → active（統合先の新規作成。Observation を経ない） | `Runtime.consolidate()` 呼び出し（Issue #103、ADR 0089）。統合元 2件以上が確定した後、LLM 呼び出しが成功した場合のみ | 同期（`consolidate()` の呼び出し1回の中で完結し、`tick()` はこの操作を駆動しない）。統合元の supersede（行5）と同一トランザクションで書けるかは adapter 依存——口（`MemoryStore.supersedeWithNewMemories`）が在れば1トランザクション、無ければ2段（ADR 0100） | `memories` へ INSERT（`status='active'`、`provenance.kind='consolidated'`・`sources=<統合元の memoryId>`、`decay_floor_at` を初期計算、`strength=1`）。`source_observation_id`/`extractor_version` は常に `NULL` | `created`（`meta.reason='consolidated'`、`meta.sources=<統合元の memoryId>`） |
 | 13 | (なし) → active（内省による新規作成。Observation を経ない） | `Runtime.reflect()` 呼び出し（Issue #104、ADR 0091）。土台 1件以上に対し LLM が `outcome:'reflected'` を返した場合のみ | 同期（`reflect()` の呼び出し1回の中で完結し、`tick()` はこの操作を駆動しない） | `memories` へ INSERT（`status='active'`、`provenance.kind='reflected'`・`sources=<土台の memoryId>`、`decay_floor_at` を初期計算、`strength=1`）。`source_observation_id`/`extractor_version` は常に `NULL`。**既存の行へは一切書き込まない**——行5〜7のどれも発生しない | `created`（`meta.reason='reflected'`、`meta.sources=<土台の memoryId>`） |

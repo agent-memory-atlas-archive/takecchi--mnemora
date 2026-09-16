@@ -1353,8 +1353,8 @@ export interface Runtime {
    * Issue #102: Memory を**論理的に**忘れさせる。
    *
    * **行も `content` も消さない。**`status` を `'forgotten'` へ動かすだけで、
-   * 物理削除（`purge()`）は Phase 2 の別操作である（docs/memory-model.md
-   * 「forget() と purge() を分ける」）。`status` の更新と `memory_events` への
+   * 物理削除（`purge()`）は別操作である（{@link Runtime.purge}、Issue #198 / ADR 0124。
+   * docs/memory-model.md「forget() と purge() を分ける」）。`status` の更新と `memory_events` への
    * `kind: 'forgotten'` の追記は `MemoryStore.updateStatusWithEvent`
    * （ADR 0031）で**同一トランザクション**として行う——片方だけ起きることはない。
    *

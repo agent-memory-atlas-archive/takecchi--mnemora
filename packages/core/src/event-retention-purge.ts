@@ -26,8 +26,9 @@ import type { TenantSettingsStore } from "./interfaces/tenant-settings-store.js"
  *   🔴 **値を `"executed"` と名付け、`"purged"` にしなかった**——
  *   `packages/core/src/event.ts` の `MemoryEventKind`（`memory_events.kind` 列の型）にも
  *   同名の値 `"purged"` が存在し、`kind: "purged"` という同じ文字面のオブジェクトリテラルに
- *   なる。両者は無関係の型（あちらは Phase 2 の物理削除イベント種別、こちらは
- *   このオーケストレータの実行結果）だが、[ADR 0117](../../../docs/decisions/0117-unreachable-union-values-inventory.md)
+ *   なる。両者は無関係の型（あちらは物理削除イベント種別——Issue #198 / ADR 0124で
+ *   実装済み、こちらはこのオーケストレータの実行結果）だが、
+ *   [ADR 0117](../../../docs/decisions/0117-unreachable-union-values-inventory.md)
  *   の回帰テスト（`unreachable-union-values.test.ts`）は型を見ずテキスト一致で
  *   `kind: "purged"` を探すため、同じ文字列を使うと「`MemoryEventKind.purged` が
  *   生成された」という偽陽性になる。**文字列が衝突するなら、文字列を変えて衝突を解消する**

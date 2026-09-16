@@ -97,7 +97,7 @@ export const memories = pgTable(
 
     embeddingStatus: text("embedding_status").notNull(),
 
-    purgedAt: timestamp("purged_at", { withTimezone: true, mode: "date" }), // Phase 2
+    purgedAt: timestamp("purged_at", { withTimezone: true, mode: "date" }), // Issue #198 / ADR 0124
 
     createdAt: timestamp("created_at", { withTimezone: true, mode: "date" }).notNull(),
     updatedAt: timestamp("updated_at", { withTimezone: true, mode: "date" }).notNull(),
