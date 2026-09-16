@@ -33,9 +33,23 @@ Release の tag にあるという既存の決定（[ADR 0070](./docs/decisions/
 最新は `v0.2.0` であり、`npm view @mnemora/<pkg> dist-tags` は6パッケージとも `latest: 0.2.0` を返す。
 
 **この節は `0.2.0` からの差分を対象とする。載せる項目は、いま1件も無い。**
-【実測】`git rev-parse v0.2.0` と `git rev-parse origin/main` がどちらも `c52be47…` を返す
-——**`v0.2.0` の tag 以降、`origin/main` に commit が1本も入っていない。**⟹ 利用者に見える
-変更も無い。
+【実測】2026-09-17、`git rev-parse v0.2.0` は `c52be478…`、`git rev-parse origin/main` は
+`9e13ac87…` を返す——**`v0.2.0` の tag 以降、`origin/main` に commit が2本入っている**
+（`git log --oneline v0.2.0..origin/main`）:
+
+- `d2f5e40`（PR #359、`docs(changelog,migration,release,roadmap): …`）——変更ファイルは
+  `CHANGELOG.md` / `docs/migration-v1.md` / `docs/release-v1.md` / `docs/roadmap.md` の
+  4件のみ。**docs のみの PR。**
+- `9e13ac8`（PR #362、`test(core,postgres): …`、Issue #293 / ADR 0177）——変更ファイルは
+  ADR 1件・ADR 索引1件と、`packages/core/src/__tests__/` の test ファイル3件・
+  `packages/postgres/src/__tests__/recall.postgres.test.ts`。**すべて `__tests__/` 配下か
+  ドキュメントで、`packages/*/src` の非テストコードに差分は無い**（commit 本文も
+  「本番コードは変更していない」と明記）。**テスト追加のみの PR。**
+
+どちらも、冒頭「何を載せるか」節の除外規則（docs のみの PR・テスト追加のみの PR は
+載せない）に当たる。⟹ **どちらも載せる対象ではなく、項目は引き続き0件。**
+（【実測】`git diff --stat v0.2.0 origin/main -- packages/core/src packages/postgres/src` の
+出力4件がすべて `__tests__/` 配下であることを確認した。）
 
 ⚠ **`v1.0.0` に何が入るか・いつ切るかは、この節を書いた時点で決まっていない。**
 経緯は [docs/roadmap.md](./docs/roadmap.md) §7.12 に在る。
