@@ -1,5 +1,12 @@
-import { heuristicTokenCounter } from "@mnemora/core";
-import type { Ctx, MemoryStore, Omission, Runtime } from "@mnemora/core";
+import { heuristicTokenCounter, writeDecayClock } from "@mnemora/core";
+import type {
+  Ctx,
+  DecayClock,
+  MemoryStore,
+  Omission,
+  Runtime,
+  TenantSettingsStore,
+} from "@mnemora/core";
 import { buildConversation } from "./scenario.js";
 import { measureNaive } from "./naive-path.js";
 import { factStatementExternalId, reportMemoryUsage, runMnemoraPath } from "./mnemora-path.js";
@@ -106,6 +113,19 @@ export interface CompareOptions {
    * 「どちらの判定で出た ❌ なのか」が表から読めなくなる。
    */
   memoryStore: MemoryStore;
+  /**
+   * `--decay-clock`（ADR 0165 決めたこと11）が指定されたときだけ渡す。
+   * `store`/`clock` を1つの欄にまとめているのは、**「書くかどうか」を1個の
+   * optional な値の有無だけで判定できるようにするため**——`decayClock` と
+   * `tenantSettingsStore` を別々の optional にすると、片方だけ渡された不整合な
+   * 状態を型で防げなくなる。
+   *
+   * 各 `fillerPairs` ごとに新しく作るテナントすべてに対して、会話を ingest する
+   * 前に `writeDecayClock`（`@mnemora/core`）で書き込む。**省略時はこの関数を
+   * 一度も呼ばない**——既定 `'wall'` のテナントで `tenant_settings` への書き込みが
+   * 1本も増えないことの唯一の保証点。
+   */
+  decayClock?: { store: TenantSettingsStore; clock: DecayClock };
 }
 
 /**
@@ -126,6 +146,9 @@ export async function runComparison(
   const rows: ComparisonRow[] = [];
   for (const fillerPairs of options.fillerPairsSequence) {
     const ctx: Ctx = { tenantId: `${tenantPrefix}-${fillerPairs}` };
+    if (options.decayClock !== undefined) {
+      await writeDecayClock(options.decayClock.store, ctx, options.decayClock.clock);
+    }
     const conversation = buildConversation(fillerPairs);
     const naive = measureNaive(conversation, heuristicTokenCounter);
     const { recall } = await runMnemoraPath(runtime, ctx, conversation);

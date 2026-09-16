@@ -1416,6 +1416,23 @@ export interface NewRecallRecord {
   indexBand: IndexBand;
   explain: { stages: StageTrace[] };
   returnedMemories: RecallRecordMemory[];
+  /**
+   * [ADR 0165](../../../docs/decisions/0165-decay-activity-clock.md) 決めたこと5:
+   * `true` のとき、`MemoryStore.createRecall` の実装は `recalls` への INSERT と
+   * **同一トランザクションで** `tenant_activity.activity_seq` を `+1` しなければならない。
+   * 既定 `false`（省略時は今日と同じ挙動——`activity_seq` は動かない）。
+   *
+   * **1単位 = `recall()` 1回。** `observe()` はこのカウンタに触れない（ADR 0165
+   * 決めたこと6）——活動時計が測るのは「記憶が、想起される機会を何回見送られたか」であり、
+   * 書き込みは機会ではない。
+   *
+   * **呼び出し側の責務**: `true` を渡すのは、そのテナントの `decay_clock` が
+   * `'wall'` 以外（`'activity'`/`'either'`）のときに限る（ADR 0165 決めたこと5
+   * 「`activity_seq` を進めるのは `decay_clock != 'wall'` のテナントに限る」）。
+   * この欄自体は `decay_clock` を読まない——`createRecall` の呼び出し側
+   * （`packages/core/src/recall-runtime.ts` 等）がテナント設定を読んで渡す。
+   */
+  advanceActivityClock?: boolean;
 }
 
 /**

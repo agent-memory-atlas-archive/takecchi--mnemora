@@ -54,6 +54,15 @@ export interface ExampleRuntimeHandle {
    * これまで `createExampleRuntime` の返り値に含めていなかっただけ。
    */
   pool: PostgresClient["pool"];
+  /**
+   * `--decay-clock`（ADR 0165 決めたこと11）が実際に `tenant_settings.decay_clock` へ
+   * 書き込むために公開する。**`packages/core`/`packages/postgres` は変更していない**
+   * ——`PostgresTenantSettingsStore` は元から公開の class であり、これまで
+   * `createExampleRuntime` の返り値に含めていなかっただけ（`memoryStore` を
+   * 足したときと同じ理由）。書き込みは公開 interface の `writeDecayClock`
+   * （`@mnemora/core`）を通してのみ行う——生 SQL の UPSERT は増やさない。
+   */
+  tenantSettingsStore: PostgresTenantSettingsStore;
   close(): Promise<void>;
 }
 
@@ -97,13 +106,14 @@ export async function createExampleRuntime(
   await registerEmbeddingSpace(client.pool, embeddingProvider.space);
 
   const memoryStore = new PostgresMemoryStore(client.db);
+  const tenantSettingsStore = new PostgresTenantSettingsStore(client.db);
   const runtime = createRuntime({
     memoryStore,
     outboxStore: new PostgresOutboxStore(client.db),
     vectorStore: new PostgresVectorStore(client.db),
     lexicalStore: new PostgresLexicalStore(client.db),
     eventStore: new PostgresEventStore(client.db),
-    tenantSettingsStore: new PostgresTenantSettingsStore(client.db),
+    tenantSettingsStore,
     llmProvider,
     embeddingProvider,
     hashContent: sha256Hex,
@@ -117,6 +127,7 @@ export async function createExampleRuntime(
     embeddingMode,
     ...(usageMeter !== undefined ? { usageMeter } : {}),
     memoryStore,
+    tenantSettingsStore,
     embeddingProvider,
     pool: client.pool,
     close: () => closePostgresClient(client),

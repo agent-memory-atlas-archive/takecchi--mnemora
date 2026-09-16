@@ -97,6 +97,32 @@ export interface VectorFilter {
    */
   occurredBefore?: Date;
   /**
+   * 活動時計の忘却ゲート（[ADR 0165](../../../../docs/decisions/0165-decay-activity-clock.md)
+   * 決めたこと1・12、`decay_clock: 'activity'`/`'either'`）。**狭義の `>`**——`decayFloorAtAfter`
+   * と同じ意味論・同じ境界（`decayFloorAtAfter` の doc「名前だけで意味論を推測しないこと」の
+   * 注記を、この2つの `〜After` フィールド間では守る）。
+   *
+   * **契約: `decay_floor_seq IS NULL` の行は通す。** `NULL` は「この軸には床が無い＝
+   * 活動時計では沈まない」（ADR 0165 決めたこと4）——`decayFloorSeqAfter` を渡しても、
+   * `decay_floor_seq` が無い行を落としてはならない。
+   */
+  decayFloorSeqAfter?: number;
+  /**
+   * `decayFloorAtAfter` と `decayFloorSeqAfter` の結び方を切り替える（ADR 0165 決めたこと1、
+   * `decay_clock: 'either'` の表現）。既定 `false`（未指定時と同じ）。
+   *
+   * **契約: `true` かつ `decayFloorAtAfter` と `decayFloorSeqAfter` の両方が与えられている
+   * ときに限り、その2つだけを OR で結ぶ**（`decay_floor_at > decayFloorAtAfter OR
+   * (decay_floor_seq IS NULL OR decay_floor_seq > decayFloorSeqAfter)`）。**他の条件
+   * （`status`/`subjectId`/`excludeProvenanceKinds`/`period`）は従来どおり AND のまま**——
+   * この欄が結び方を変えるのは忘却ゲートの2軸だけである。
+   *
+   * `decayFloorAtAfter`/`decayFloorSeqAfter` のどちらか一方しか与えられていない場合、
+   * この欄は無視される（もう片方が無いので OR にする相手がいない——単に渡された側の
+   * 条件だけが効く）。
+   */
+  decayFloorAnyAxis?: boolean;
+  /**
    * **「この時刻において真だった記憶」ゲート**（Issue #280、Issue #202 第2弾、
    * `@mnemora/core` の `RecallQuery.validAt` の doc 参照）。
    *

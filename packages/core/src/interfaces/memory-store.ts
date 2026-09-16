@@ -12,6 +12,7 @@ import type {
   ScopeAggregate,
 } from "../recall.js";
 import type { OutboxJobKind } from "./scheduler.js";
+import type { DecayClock } from "./tenant-settings-store.js";
 
 /**
  * `updateStatus` に `opts.expectedStatus` を渡したとき、書き込み時点の実際の status が
@@ -480,8 +481,23 @@ export interface MemoryStore {
    * 対象の Memory が存在しない場合は「memory not found」の `Error` を投げる。`id` が
    * adapter の期待する形式でない場合も同じ結果になる（`setEmbeddingStatus` の doc
    * コメント・`packages/postgres/src/mapping.ts` の `isUuidLike` の doc コメント参照）。
+   *
+   * [ADR 0165](../../../../docs/decisions/0165-decay-activity-clock.md) 決めたこと16:
+   * `opts.nowSeq` を渡すと、活動時計側の起点・床（`decayBaseSeq`/`decayFloorSeq`）も
+   * 同じ強化イベントとして進める——**対象の Memory が `halfLifeRecalls` を持つ場合に限る**
+   * （`ReinforceOptions.nowSeq` の doc コメント参照）。`opts` を渡さない、または
+   * `opts.nowSeq` を省略した場合の契約: **活動時計側の3列（`decayBaseSeq`/`decayFloorSeq`/
+   * `halfLifeRecalls`）には一切触れない**（黙って `0` として扱わない）。壁時計側
+   * （`last_reinforced_at`/`decay_floor_at`）の更新は `opts` の有無に関わらず今日どおり。
+   *
+   * ⭐ **`opts` は省略可能な第4引数であり、この変更は非破壊である。**この口を実装する
+   * 既存の3引数実装（`reinforce(ctx, id, at): Promise<Memory>`）は、1行も直さずに
+   * この4引数の interface をそのまま満たす——TypeScript の構造的部分型の下で、
+   * 「呼び出し側が省略可能な引数を渡さない」ことと「実装がその引数を最初から
+   * 持たない」ことは区別されない。ADR 0165 決めたこと13 が
+   * `TenantSettingsStore` の新メソッドを省略可能にしたのと同じ規律をここでも守る。
    */
-  reinforce(ctx: Ctx, id: MemoryId, at: Date): Promise<Memory>;
+  reinforce(ctx: Ctx, id: MemoryId, at: Date, opts?: ReinforceOptions): Promise<Memory>;
   /**
    * D9: 使用報告を記録する。`(recall_id, memory_id)` の挿入が実際に起きたものだけを
    * `insertedMemoryIds` として返す（再送は空配列になりうる）。
@@ -507,7 +523,20 @@ export interface MemoryStore {
     scope: RecallScope,
     opts?: AggregateScopeOptions,
   ): Promise<ScopeAggregate>;
-  /** roadmap.md 段階4/5: recall 段6（記録）。`recalls` へ1行書き込み、発行した recallId を返す。 */
+  /**
+   * roadmap.md 段階4/5: recall 段6（記録）。`recalls` へ1行書き込み、発行した recallId を返す。
+   *
+   * [ADR 0165](../../../../docs/decisions/0165-decay-activity-clock.md) 決めたこと5:
+   * `record.advanceActivityClock === true` のとき、実装は `recalls` への INSERT と
+   * **同一トランザクションで** `tenant_activity.activity_seq` を `+1` しなければならない
+   * （`NewRecallRecord.advanceActivityClock` の doc コメント参照）。
+   *
+   * ⚠ **戻り値の形はこの ADR で変えていない。**「進めた後の `activity_seq` を返り値に
+   * 載せる」案も検討したが、この口は `@mnemora/core` の公開 API であり、戻り値を
+   * `RecallId` から `{ recallId, activitySeq? }` のような形へ変えること自体が破壊的変更
+   * になる（`docs/autonomy.md`「してはいけないこと」表）。進めた後の値が要る呼び出し側は
+   * `TenantSettingsStore.getActivitySeq` を別途読むこと。
+   */
   createRecall(ctx: Ctx, record: NewRecallRecord): Promise<RecallId>;
   /**
    * Issue #298 / [ADR 0155](../../../../docs/decisions/0155-recall-score-breakdown-persisted.md):
@@ -746,7 +775,21 @@ export interface MemoryStore {
    *   である**——`decayFloorAtAfter` は「これより後のものだけを ANN の候補にする」
    *   という recall 側の下限境界、こちらは「これ以前に閾値を割ったものを掃く」という
    *   掃引側の上限境界であり、2つの異なる関心が同じ演算子を共有する理由が無い。
-   * - **`decay_floor_at` 昇順**（最も古く遠ざかったものから）で `opts.limit` 件まで。
+   * - **「どの行を選ぶか」と「どの順で返すか」は別の契約である。**
+   *   [ADR 0165](../../../../docs/decisions/0165-decay-activity-clock.md) 決めたこと8・15:
+   *   - **選び方**: `opts.limit` 件を切り出す順序は、**掃く軸に合わせる**。
+   *     `clock: 'activity'` は `decay_floor_seq` 昇順、`'wall'` と `'either'` は
+   *     `decay_floor_at` 昇順（どちらも同着は `id` 昇順）。
+   *     ⭐ **`'activity'` をこうしないと、`packages/postgres` 側で
+   *     `idx_memories_recall_gate_seq` が並び替えを担えず、掃引で索引が引けない**
+   *     ——【実測】2026-09-16 の CI で実際に赤くなった。詳細は
+   *     `packages/postgres/src/memory-store.ts` の `buildArchiveDecayedTargetSelect` の
+   *     doc コメント。**正しさではなく処理量の問題である。**
+   *   - **返し方**: {@link ArchiveDecayedResult.archived} は、`clock` によらず常に
+   *     **`decay_floor_at` 昇順**（同着は `id` 昇順）。返り値の型が `decayFloorSeq` を
+   *     持たないので、返す並びに活動軸を持ち込まない。
+   *   ⟹ `'activity'` では「選んだ順」と「返す順」が一致しないことがある。
+   *   **これは意図した仕様であり、見落としではない。**
    * - 選ばれた各行について `status='archived'` への更新と `memory_events` への
    *   `kind='archived'` の追記を行う。**この2つは同一トランザクション**
    *   （ADR 0031 が `updateStatusWithEvent` で確立した「更新とイベントは同値」の
@@ -958,6 +1001,44 @@ export interface MemoryStore {
 }
 
 /**
+ * {@link MemoryStore.reinforce} の省略可能な第4引数
+ * ([ADR 0165](../../../../docs/decisions/0165-decay-activity-clock.md) 決めたこと16)。
+ *
+ * **穴**: `reinforce` にはこれまで活動時計の「いま」を渡す口が無かった。強化すると
+ * 壁時計の床（`decay_floor_at`）は引き直されるのに、活動時計の床（`decay_floor_seq`）は
+ * 据え置かれたままになる——`decay_clock` が `'activity'` のテナントでは、強化が忘却
+ * ゲートに対して完全な no-op になり、`'either'` では壁時計軸だけが戻る非対称になる。
+ * これは ADR 0165 の文脈節の表（「起点は両方の時計で同じく『最後の書き込み（作成・
+ * 強化）』に置く」）と食い違っていたため、この口を足す。
+ *
+ * ⭐ **非破壊である**——引数を1つ増やすだけであり、`opts` を省略すればいまと同じ
+ * `reinforce(ctx, id, at)` の3引数呼び出しがそのまま動く。既存の3引数の実装
+ * （`MemoryStore` を実装する第三者の adapter を含む）も、1行も直さずにこの4引数の
+ * interface をそのまま満たす——TypeScript の構造的部分型の下では「呼び出し側が
+ * 省略可能な引数を渡さない」ことと「実装がその引数を最初から受け取らない」ことは
+ * 区別されない。`@mnemora/core` は npm 公開済みなので、これは ADR 0165 決めたこと13
+ * （`TenantSettingsStore` の新メソッドを省略可能にした判断）と同じ理由で選んでいる。
+ */
+export interface ReinforceOptions {
+  /**
+   * 強化する時点の活動時計の「いま」（`tenant_activity.activity_seq`）。
+   * `ArchiveDecayedOptions.nowSeq` と同じ規律（ADR 0037「時刻は呼び出し側が渡す」）
+   * ——**store が自分で `tenant_activity` を読みに行かない。**
+   *
+   * **省略した場合の契約: 活動時計側の3列（`decayBaseSeq`/`decayFloorSeq`/
+   * `halfLifeRecalls`）は据え置く**（本 ADR 以前と同じ挙動）。**黙って `0` として
+   * 扱わない**——省略と `0` は別の指示である。壁時計側（`lastReinforcedAt`/
+   * `decayFloorAt`）の更新には一切影響しない。
+   *
+   * 対象の Memory が `halfLifeRecalls` を持たない（`null`/未設定、＝そもそも活動時計では
+   * 沈まない Memory）場合は、`nowSeq` を渡しても活動時計側の列には触れない
+   * （`Memory.decayBaseSeq` の doc コメント、ADR 0165 決めたこと4「NULL は…緩い側へ倒す」
+   * と同じ理由）。
+   */
+  nowSeq?: number;
+}
+
+/**
  * {@link MemoryStore.archiveDecayed} の引数（ADR 0114）。
  *
  * **`now` は呼び出し側が渡す**（ADR 0037 の「時刻は呼び出し側が渡す」規律をここでも
@@ -976,11 +1057,50 @@ export interface ArchiveDecayedOptions {
   now: Date;
   /** 1回の呼び出しで archived にする上限。**既定値なし**（上の doc コメント参照）。 */
   limit: number;
+  /**
+   * [ADR 0165](../../../../docs/decisions/0165-decay-activity-clock.md) 決めたこと15:
+   * 「いまの `activity_seq`」を呼び出し側から受け取る。`now: Date` と同じ規律
+   * （ADR 0037「時刻は呼び出し側が渡す」）——**store が自分で `tenant_activity` を
+   * 読みに行かない。** `clock` が `'activity'`/`'either'` のときに必須になる（`clock` の
+   * doc コメント参照）。
+   */
+  nowSeq?: number;
+  /**
+   * ADR 0165 決めたこと1・12・15: どの軸で掃くかを選ぶ。省略時は `'wall'`
+   * （本 ADR 以前と1バイトも変わらない挙動）。
+   *
+   * - `'wall'`（省略時と同じ）: `decay_floor_at <= now`（現行、境界を含む）。
+   * - `'activity'`: `decay_floor_seq IS NOT NULL AND decay_floor_seq <= nowSeq`
+   *   （`nowSeq` は必須。境界を含む——`now`/`decay_floor_at` と同じ非対称を seq 側にも
+   *   写す。下記「境界の非対称」参照）。
+   * - `'either'`: **AND**（両方の軸で沈んでいるものだけ掃く）。
+   *
+   * **⭐ `'either'` が段1のゲートでは OR（どちらかが生きていれば通す、決めたこと1）なのに、
+   * ここでは AND である理由**: ゲートの `'either'` は「どちらかの軸で生きていれば
+   * まだ通す」という**寛容**の向きに働く。掃引はその裏返し——「まだ通る」の否定は
+   * 「**両方の軸で**死んでいる」でなければならない。ゲートが通すのに掃引が掃く、
+   * という矛盾（ある行が段1では返り続けるのに `archiveDecayed` からは消える）を
+   * 避けるには、掃引の条件はゲートの条件の**論理否定**と一致していなければならず、
+   * `NOT (A OR B) = (NOT A) AND (NOT B)` により AND になる。
+   *
+   * **境界の非対称（ADR 0165 決めたこと14）**: ゲートは狭義の `>`（境界を含まない）、
+   * 掃引は `<=`（境界を含む）——これは `decayFloorAtAfter`/既存の `now` 側で既に
+   * 意図的だと明記されている非対称であり（上の `now` の doc コメント、
+   * `VectorFilter.decayFloorAtAfter` の doc コメント参照）、`decay_floor_seq` 側にも
+   * そのまま写す。片方だけ `>=` にする実装ミスは、境界1件のズレとして歯に出ないまま
+   * 紛れ込みうる——`packages/testkit` の適合テストが境界の歯を seq 側にも同じ形で置く。
+   */
+  clock?: DecayClock;
 }
 
 /** {@link MemoryStore.archiveDecayed} の返り値（ADR 0114）。 */
 export interface ArchiveDecayedResult {
-  /** 実際に archived にした Memory。`decay_floor_at` 昇順（最も古く遠ざかったもの順）。 */
+  /**
+   * 実際に archived にした Memory。`decay_floor_at` 昇順（最も古く遠ざかったもの順）。
+   * ⚠ `opts.clock` が `'activity'`/`'either'` のときも同じ——`decay_floor_seq` 順の契約は
+   * 無い（この型が `decayFloorSeq` を持たないことがその宣言。`archiveDecayed` の
+   * 契約節、doc コメント参照）。
+   */
   archived: Array<{ memoryId: MemoryId; decayFloorAt: Date }>;
   /**
    * 🔴 **`true` は「`limit` 件ちょうど返した＝まだ在るかもしれない」を意味する。**

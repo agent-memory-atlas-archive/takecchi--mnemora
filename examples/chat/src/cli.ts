@@ -1,11 +1,13 @@
 #!/usr/bin/env node
 import { writeFileSync } from "node:fs";
+import type { DecayClock } from "@mnemora/core";
 import { DEFAULT_RECALL_LIMIT, heuristicTokenCounter } from "@mnemora/core";
 import { CassetteRecorder } from "@mnemora/testkit";
 import { runAssociationArm } from "./association-arm.js";
 import { formatAssociationProbeRunReport } from "./association-format.js";
 import { buildAssociationProbeRunJson } from "./association-json.js";
 import type { CassetteTarget } from "./cassette-io.js";
+import { parseDecayClockFlag } from "./decay-clock-options.js";
 import {
   cassetteExists,
   cassettePathFor,
@@ -348,7 +350,23 @@ async function runCorrection(): Promise<void> {
   }
 }
 
-async function runCompare(): Promise<void> {
+/**
+ * `--decay-clock`（ADR 0165 決めたこと11）が指定されたときだけ、`compare`/
+ * `archive-sweep-cost` の実行前に画面へ出す。**未指定なら1行も出ない**——
+ * `decay-clock-options.ts`/`compare.ts`/`archive-sweep-cost.ts` が持つ
+ * 「省略時は `writeDecayClock` を一度も呼ばない」契約と対になる案内。
+ */
+function printDecayClockNotice(decayClock: DecayClock | undefined): void {
+  if (decayClock === undefined) {
+    return;
+  }
+  console.log(
+    `\n[decay-clock] --decay-clock ${decayClock} が指定された。` +
+      `対象テナントの tenant_settings.decay_clock へ書き込む（ADR 0165）。`,
+  );
+}
+
+async function runCompare(decayClock: DecayClock | undefined): Promise<void> {
   const databaseUrl = requireDatabaseUrl();
   // `retrieval` と同じ規律（ADR 0051）: キーがあれば実 API、無ければ記録の再生。
   // **どちらで走ったかは必ず画面に出す。**
@@ -361,6 +379,7 @@ async function runCompare(): Promise<void> {
     cassette ? { cassette } : {},
   );
   printProviderMode(handle.llmMode, handle.embeddingMode);
+  printDecayClockNotice(decayClock);
   try {
     console.log(
       "\n会話の長さを変えて、経路A（naive）と経路B（mnemora, budget 無し）の焼かれる量を測る。\n",
@@ -368,6 +387,9 @@ async function runCompare(): Promise<void> {
     const rows = await runComparison(handle.runtime, {
       fillerPairsSequence: DEFAULT_COMPARE_SEQUENCE,
       memoryStore: handle.memoryStore,
+      ...(decayClock !== undefined
+        ? { decayClock: { store: handle.tenantSettingsStore, clock: decayClock } }
+        : {}),
     });
     console.log(formatComparisonTable(rows));
     console.log(
@@ -1344,7 +1366,7 @@ async function runConsolidationCostCommand(): Promise<void> {
  * **なぜ `MutableClock` を注入するか**: filler だけを backdate して掃引を実行時間内に
  * 発火させるため(`archive-sweep-cost.ts` の docstring、`time-term` arm と同じ仕掛け)。
  */
-async function runArchiveSweepCostCommand(): Promise<void> {
+async function runArchiveSweepCostCommand(decayClock: DecayClock | undefined): Promise<void> {
   const databaseUrl = requireDatabaseUrl();
   const options = parseArchiveSweepCostOptions(process.env);
   const tenantId = `archive-sweep-cost-${newRunToken()}`;
@@ -1359,6 +1381,7 @@ async function runArchiveSweepCostCommand(): Promise<void> {
     clock,
   );
   printProviderMode(handle.llmMode, handle.embeddingMode);
+  printDecayClockNotice(decayClock);
   try {
     console.log(
       "\n[archive-sweep-cost] warmup() でモデルの読み込みを先に済ませる" +
@@ -1404,6 +1427,9 @@ async function runArchiveSweepCostCommand(): Promise<void> {
       recallLimit: options.recallLimit,
       measuredAt,
       commit,
+      ...(decayClock !== undefined
+        ? { decayClock: { store: handle.tenantSettingsStore, clock: decayClock } }
+        : {}),
     });
 
     console.log(`\n${formatArchiveSweepCostReport(json)}`);
@@ -1426,6 +1452,7 @@ function printHelp(): void {
       "  DATABASE_URL=... pnpm --filter @mnemora/example-chat run chat       # observe/recall の往復・omitted/usage/budget を実演",
       "  DATABASE_URL=... pnpm --filter @mnemora/example-chat run compare    # 会話の長さを変えて経路A/経路Bの量を実測",
       "                                                                      #   OPENAI_API_KEY があれば実 API、無ければ記録の再生(ADR 0052)",
+      "                                                                      #   -- --decay-clock <wall|activity|either> で対象テナントの decay_clock を設定する(ADR 0165、既定は未指定=何も書かない)",
       "  DATABASE_URL=... pnpm --filter @mnemora/example-chat run scope      # tenantId/subjectId のスコープを実演",
       "  DATABASE_URL=... pnpm --filter @mnemora/example-chat run explain    # recallId から Runtime.getRecall() で内訳を後から読み戻す(Issue #312)",
       "  DATABASE_URL=... pnpm --filter @mnemora/example-chat run backfill   # observe() の occurredAt が period の絞りに効くことを実演",
@@ -1448,6 +1475,7 @@ function printHelp(): void {
       "  DATABASE_URL=... pnpm --filter @mnemora/example-chat run archive-sweep-cost",
       "                                                                      # 掃引(Runtime.sweepArchive)が「載る量」/hit@k をどう動かすかを実測する(Issue #209)",
       "                                                                      #   鍵・カセット不要(deterministic LLM + local embedding)。MNEMORA_ARCHIVE_SWEEP_JSON で機械可読出力",
+      "                                                                      #   -- --decay-clock <wall|activity|either> で対象テナントの decay_clock を設定する(ADR 0165、既定は未指定=何も書かない)",
       "  DATABASE_URL=... OPENAI_API_KEY=... pnpm --filter @mnemora/example-chat run record",
       "                                                                      # retrieval の応答を記録する(ADR 0051)",
       "  DATABASE_URL=... OPENAI_API_KEY=... pnpm --filter @mnemora/example-chat run record:compare",
@@ -1469,7 +1497,7 @@ async function main(): Promise<void> {
   if (command === "chat") {
     await runChat();
   } else if (command === "compare") {
-    await runCompare();
+    await runCompare(parseDecayClockFlag(process.argv.slice(3)));
   } else if (command === "scope") {
     await runScope();
   } else if (command === "explain") {
@@ -1491,7 +1519,7 @@ async function main(): Promise<void> {
   } else if (command === "consolidation-cost") {
     await runConsolidationCostCommand();
   } else if (command === "archive-sweep-cost") {
-    await runArchiveSweepCostCommand();
+    await runArchiveSweepCostCommand(parseDecayClockFlag(process.argv.slice(3)));
   } else if (command === "record") {
     await runRecord(parseCassetteTarget(process.argv[3]));
   } else if (command === "verify") {

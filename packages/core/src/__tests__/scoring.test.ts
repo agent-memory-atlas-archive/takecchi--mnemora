@@ -226,3 +226,117 @@ describe("defaultScoringStrategy: freshness は 1 で頭打ちにする（ADR 00
     expect(score.total).toBe(0.5);
   });
 });
+
+/**
+ * `computeDecay`（`strategies/scoring.ts`、非 export）の歯——`defaultScoringStrategy` 越しに
+ * `score.decay` だけを見て検査する（[ADR 0165](../../../docs/decisions/0165-decay-activity-clock.md)
+ * 決めたこと12）。
+ *
+ * 壁時計側は「1 half-life 経過 → 0.5」（halfLifeHours=24, elapsed=24h）に固定し、
+ * 活動時計側はそれとは違う値（0.25 or 0.933...）になるよう別の half-life を選ぶ——
+ * 2つの時計の値が偶然一致すると「どちらが使われたか」を判別できない歯になる。
+ */
+describe("defaultScoringStrategy: computeDecay の時計選択（ADR 0165 決めたこと12）", () => {
+  const recordedAt = new Date("2026-01-01T00:00:00.000Z");
+  const now = new Date(recordedAt.getTime() + 24 * HOUR); // 壁時計: elapsed=24h, halfLifeHours=24 → wallDecay=0.5
+
+  function baseWallInput() {
+    return {
+      now,
+      tags: [] as string[],
+      queryTags: [] as string[],
+      occurredAt: null as Date | null,
+      recordedAt,
+      lastReinforcedAt: null as Date | null,
+      strength: 1,
+      halfLifeHours: 24,
+    };
+  }
+
+  it("decayClock 省略時は壁時計のみ——活動時計の入力があっても無視する", () => {
+    const score = defaultScoringStrategy({
+      ...baseWallInput(),
+      nowSeq: 20,
+      decayBaseSeq: 0,
+      halfLifeRecalls: 10, // 使われれば elapsed=20,half=10 → 0.25 になるはずの値
+    });
+    expect(score.decay).toBeCloseTo(0.5, 10);
+  });
+
+  it("decayClock: 'wall' を明示しても同じ——活動時計の入力を無視する", () => {
+    const score = defaultScoringStrategy({
+      ...baseWallInput(),
+      decayClock: "wall",
+      nowSeq: 20,
+      decayBaseSeq: 0,
+      halfLifeRecalls: 10,
+    });
+    expect(score.decay).toBeCloseTo(0.5, 10);
+  });
+
+  it("decayClock: 'activity' で3つの入力が揃っていれば活動時計だけを使う（壁時計の値を無視する）", () => {
+    const score = defaultScoringStrategy({
+      ...baseWallInput(), // 使われれば 0.5 になってしまう壁時計の入力をそのまま残す
+      decayClock: "activity",
+      nowSeq: 20,
+      decayBaseSeq: 0,
+      halfLifeRecalls: 10, // elapsed=20, half=10 → 2 half-life → 0.25
+    });
+    expect(score.decay).toBeCloseTo(0.25, 10);
+    expect(score.decay).not.toBeCloseTo(0.5, 5);
+  });
+
+  it("decayClock: 'activity' でも活動時計の入力が欠けていれば壁時計へフォールバックする（ADR 0165 決めたこと4と同じ向き）", () => {
+    const score = defaultScoringStrategy({
+      ...baseWallInput(),
+      decayClock: "activity",
+      // nowSeq を渡さない = 'wall' のテナント、または activity_seq を読んでいない状態。
+      decayBaseSeq: 0,
+      halfLifeRecalls: 10,
+    });
+    expect(score.decay).toBeCloseTo(0.5, 10);
+  });
+
+  it("decayClock: 'activity' でも decayBaseSeq が null（NULL＝この軸に床が無い）なら壁時計へフォールバックする", () => {
+    const score = defaultScoringStrategy({
+      ...baseWallInput(),
+      decayClock: "activity",
+      nowSeq: 20,
+      decayBaseSeq: null,
+      halfLifeRecalls: 10,
+    });
+    expect(score.decay).toBeCloseTo(0.5, 10);
+  });
+
+  it("decayClock: 'either' は Math.max——活動時計のほうが大きい（生きている）とき活動時計を採る", () => {
+    const score = defaultScoringStrategy({
+      ...baseWallInput(), // wallDecay=0.5
+      decayClock: "either",
+      nowSeq: 5,
+      decayBaseSeq: 0,
+      halfLifeRecalls: 50, // elapsed=5, half=50 → 0.5^(0.1) ≈ 0.933（wall より大きい）
+    });
+    expect(score.decay).toBeGreaterThan(0.5);
+    expect(score.decay).toBeCloseTo(Math.pow(0.5, 5 / 50), 10);
+  });
+
+  it("decayClock: 'either' は Math.max——壁時計のほうが大きい（生きている）とき壁時計を採る", () => {
+    const score = defaultScoringStrategy({
+      ...baseWallInput(), // wallDecay=0.5
+      decayClock: "either",
+      nowSeq: 20,
+      decayBaseSeq: 0,
+      halfLifeRecalls: 10, // elapsed=20, half=10 → 0.25（wall より小さい）
+    });
+    expect(score.decay).toBeCloseTo(0.5, 10);
+    expect(score.decay).not.toBeCloseTo(0.25, 5);
+  });
+
+  it("decayClock: 'either' でも活動時計の入力が欠けていれば壁時計の値だけになる（Math.max のもう片方が存在しないのと同じ）", () => {
+    const score = defaultScoringStrategy({
+      ...baseWallInput(),
+      decayClock: "either",
+    });
+    expect(score.decay).toBeCloseTo(0.5, 10);
+  });
+});

@@ -4,8 +4,14 @@ import type { EventStore } from "../interfaces/event-store.js";
 import { OutboxLeaseConflictError } from "../interfaces/outbox-store.js";
 import type { ClaimOutboxJobsOptions, OutboxStore } from "../interfaces/outbox-store.js";
 import type { OutboxJobKind } from "../interfaces/scheduler.js";
-import { assertValidEventRetentionDays } from "../interfaces/tenant-settings-store.js";
+import {
+  assertValidDecayClock,
+  assertValidEventRetentionDays,
+  DEFAULT_DECAY_CLOCK,
+  DEFAULT_HALF_LIFE_RECALLS,
+} from "../interfaces/tenant-settings-store.js";
 import type {
+  DecayClock,
   EventRetention,
   EventRetentionSetting,
   TenantSettingsStore,
@@ -91,6 +97,16 @@ class FakeBackingStore {
    * 書く2つの書き込み先を共有する」という形に揃えた。
    */
   events: MemoryEvent[] = [];
+  /**
+   * [ADR 0165](../../../docs/decisions/0165-decay-activity-clock.md) 決めたこと2・5:
+   * `tenant_activity.activity_seq` 相当。`FakeMemoryStore.createRecall` と
+   * `FakeTenantSettingsStore.getActivitySeq` が同じ `FakeBackingStore` を共有することで、
+   * 本番の「`MemoryStore` と `TenantSettingsStore` は別 adapter だが、`activity_seq` は
+   * `createRecall` と同一トランザクションで進む」という契約を、フェイクの世界でも
+   * 「書く側（`createRecall`）と読む側（`getActivitySeq`）が同じ値を見る」という
+   * 観測可能な形で再現する。
+   */
+  activitySeq = new Map<string, number>();
 
   extractionKey(
     tenantId: string,
@@ -245,6 +261,14 @@ export class FakeMemoryStore implements MemoryStore {
         strength: input.strength,
         halfLifeHours: input.halfLifeHours,
         decayFloorAt: input.decayFloorAt,
+        // ADR 0165 決めたこと3: 活動時計の3つ組。以前はここで1つも転記しておらず、
+        // `createMemory` で渡した `decayBaseSeq`/`decayFloorSeq`/`halfLifeRecalls` が
+        // 常に `undefined` になって消えていた——`recall-decay-gate.test.ts` の
+        // 活動時計の歯を書く過程で実測した(すべて `undefined` に化けるため
+        // `activityAxisAlive` が「この軸に床が無い」と誤認して常に生存判定していた)。
+        decayBaseSeq: input.decayBaseSeq ?? null,
+        decayFloorSeq: input.decayFloorSeq ?? null,
+        halfLifeRecalls: input.halfLifeRecalls ?? null,
         embeddingStatus: input.embeddingStatus,
         purgedAt: input.purgedAt ?? null,
         createdAt: now,
@@ -722,6 +746,13 @@ export class FakeMemoryStore implements MemoryStore {
   async createRecall(ctx: Ctx, record: NewRecallRecord): Promise<RecallId> {
     const id = nextId("rcl");
     this.backing.recalls.set(id, { ...record, tenantId: ctx.tenantId, createdAt: new Date() });
+    // ADR 0165 決めたこと5: `recalls` への INSERT と「同一トランザクション」で
+    // `activity_seq` を +1 する。フェイクには本物のトランザクションが無いので、
+    // 同期的に隣り合わせて書くことで同じ性質（片方だけが書かれることはない）を再現する。
+    if (record.advanceActivityClock === true) {
+      const current = this.backing.activitySeq.get(ctx.tenantId) ?? 0;
+      this.backing.activitySeq.set(ctx.tenantId, current + 1);
+    }
     return id;
   }
 
@@ -1159,12 +1190,33 @@ export class FakeVectorStore implements VectorStore {
       if (opts.filter.subjectId !== undefined && memory.subjectId !== opts.filter.subjectId) {
         continue;
       }
+      // ADR 0165 決めたこと1・12・14: 忘却ゲートの2軸。`decayFloorAnyAxis: true` かつ
+      // 両方（`decayFloorAtAfter`・`decayFloorSeqAfter`）が与えられているときに限り OR で
+      // 結ぶ（`interfaces/vector-store.ts` の `decayFloorAnyAxis` doc の契約そのもの）。
+      // 以前はここで `decayFloorAtAfter` だけを常時 AND で見ており、`decayFloorSeqAfter`/
+      // `decayFloorAnyAxis` を一度も参照していなかった——'either' のテナントで
+      // 壁時計が死んでいるが活動時計は生きている候補が、ANN の push-down 段で
+      // 誤って落ちる（実測: `recall-decay-gate.test.ts` の「'either' はOR: 活動時計は
+      // 生きているが壁時計は沈んでいても通る」歯が最初に赤くなった）。
+      const wallAxisAfter = opts.filter.decayFloorAtAfter;
+      const seqAxisAfter = opts.filter.decayFloorSeqAfter;
+      const wallAlive =
+        wallAxisAfter === undefined ? undefined : memory.decayFloorAt > wallAxisAfter;
+      const seqAlive =
+        seqAxisAfter === undefined
+          ? undefined
+          : memory.decayFloorSeq === null || memory.decayFloorSeq === undefined
+            ? true
+            : memory.decayFloorSeq > seqAxisAfter;
       if (
-        opts.filter.decayFloorAtAfter !== undefined &&
-        memory.decayFloorAt <= opts.filter.decayFloorAtAfter
+        opts.filter.decayFloorAnyAxis === true &&
+        wallAlive !== undefined &&
+        seqAlive !== undefined
       ) {
-        // 狭義の `>`（境界とちょうど同じものは除外）。この意味論は変えていない。
-        continue;
+        if (!wallAlive && !seqAlive) continue;
+      } else {
+        if (wallAlive === false) continue;
+        if (seqAlive === false) continue;
       }
       // ADR 0056: 除外の列挙（status とは向きが逆）。`undefined`/空配列は no-op
       // （`VectorFilter.excludeProvenanceKinds` の doc 参照。`InMemoryVectorStore` と
@@ -1421,10 +1473,28 @@ export class FakeEventStore implements EventStore {
 // `FakeTenantSettingsStore` は適合スイートの対象外（ADR 0047 が明記した「core 専用の
 // Fake は testkit の適合テストが届かない」構造と同じ）ため、ここに置いた実装を
 // 独立に検査する歯は無い。
+//
+// [ADR 0165](../../../docs/decisions/0165-decay-activity-clock.md) 決めたこと13:
+// `getDecayClock`/`setDecayClock`/`getDefaultHalfLifeRecalls`/`getActivitySeq` を実装する。
+// **interface 上はすべて省略可能（`?`）だが、活動時計の歯を書くにはこの Fake 側で
+// 実装が要る**——省略した adapter がどう振る舞うかは `readDecayClock` 等の
+// フォールバック自身の歯（`tenant-settings-store.test.ts` 等）が別に持つ。
 export class FakeTenantSettingsStore implements TenantSettingsStore {
   private eventRetention: EventRetention = { kind: "unset" };
+  private decayClockByTenant = new Map<string, DecayClock>();
+  private halfLifeRecallsByTenant = new Map<string, number>();
 
-  constructor(private readonly halfLifeHours = 720) {}
+  constructor(
+    private readonly halfLifeHours = 720,
+    /**
+     * ADR 0165 決めたこと13 末尾の訂正どおり、`activity_seq` を進めるのは
+     * `MemoryStore.createRecall`（別 adapter）である。フェイクの世界でその契約
+     * （書く側と読む側が同じ値を見る）を再現するために、`FakeMemoryStore` と同じ
+     * `FakeBackingStore` を共有する。省略すると `getActivitySeq` は常に `0` を返す
+     * ——`tenant_activity` に一度も書かれていないテナントと同じ状態。
+     */
+    private readonly backing?: FakeBackingStore,
+  ) {}
 
   async getDefaultHalfLifeHours(_ctx: Ctx): Promise<number> {
     return this.halfLifeHours;
@@ -1439,6 +1509,35 @@ export class FakeTenantSettingsStore implements TenantSettingsStore {
       assertValidEventRetentionDays(retention.days);
     }
     this.eventRetention = retention;
+  }
+
+  async getDecayClock(ctx: Ctx): Promise<DecayClock> {
+    return this.decayClockByTenant.get(ctx.tenantId) ?? DEFAULT_DECAY_CLOCK;
+  }
+
+  async setDecayClock(ctx: Ctx, clock: DecayClock): Promise<void> {
+    assertValidDecayClock(clock);
+    this.decayClockByTenant.set(ctx.tenantId, clock);
+  }
+
+  async getDefaultHalfLifeRecalls(ctx: Ctx): Promise<number> {
+    return this.halfLifeRecallsByTenant.get(ctx.tenantId) ?? DEFAULT_HALF_LIFE_RECALLS;
+  }
+
+  /**
+   * `TenantSettingsStore` interface に `setDefaultHalfLifeRecalls` は無い
+   * （ADR 0165 決めたこと13 が足したのは読むだけの `getDefaultHalfLifeRecalls`）。
+   * テストが既定値を差し替えたいときのための、interface 外のテスト専用の口
+   * ——`getDefaultHalfLifeHours` がコンストラクタ引数で差し替えられるのと同じ役割を、
+   * テナントごとに持てるようにしたもの。
+   */
+  setDefaultHalfLifeRecallsForTest(tenantId: string, value: number): void {
+    this.halfLifeRecallsByTenant.set(tenantId, value);
+  }
+
+  async getActivitySeq(ctx: Ctx): Promise<number> {
+    if (this.backing === undefined) return 0;
+    return this.backing.activitySeq.get(ctx.tenantId) ?? 0;
   }
 }
 
@@ -1490,7 +1589,9 @@ export function createFakeRuntimeStores(): {
     vectorStore: new FakeVectorStore(backing),
     lexicalStore: new FakeLexicalStore(backing),
     eventStore: new FakeEventStore(backing),
-    tenantSettingsStore: new FakeTenantSettingsStore(),
+    // `backing` を共有することで、`createRecall({advanceActivityClock: true})` が進めた
+    // `activity_seq` を `getActivitySeq` が同じ値として読み戻せる（上のクラス doc 参照）。
+    tenantSettingsStore: new FakeTenantSettingsStore(720, backing),
     embeddingProvider: new FakeEmbeddingProvider(),
   };
 }

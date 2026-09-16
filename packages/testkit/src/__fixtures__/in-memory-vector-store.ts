@@ -149,13 +149,42 @@ export class InMemoryVectorStore implements VectorStore {
       if (opts.filter.subjectId !== undefined && memory.subjectId !== opts.filter.subjectId) {
         continue;
       }
-      if (
-        opts.filter.decayFloorAtAfter !== undefined &&
-        !(memory.decayFloorAt > opts.filter.decayFloorAtAfter)
-      ) {
+      // ADR 0165 決めたこと1・4・12（Issue #305）: 忘却ゲートの2軸。`decayFloorAnyAxis` が
+      // true かつ両方の境界が渡されているときだけ OR で結ぶ——`PostgresVectorStore.search`
+      // （`packages/postgres/src/vector-store.ts`）と同じ意味論。それ以外は今日どおり
+      // AND のまま個別に効く。
+      //
+      // ⚠ **前任の作業者が実際に踏んだ漏れ2**（core commit 5e37afb の doc 参照）:
+      // `decayFloorSeqAfter`/`decayFloorAnyAxis` を一度も見ない実装のままだと、
+      // 'activity'/'either' の忘却ゲートが段1で正しく再現できない。ここで同じ漏れを
+      // 作らない。
+      const passesDecayFloorAt =
+        opts.filter.decayFloorAtAfter === undefined ||
         // 狭義の `>`（境界とちょうど同じものは除外）。postgres 実装の
         // `m.decay_floor_at > ${decayFloorAtAfter}` と揃える。
-        continue;
+        memory.decayFloorAt > opts.filter.decayFloorAtAfter;
+      // 契約: `decay_floor_seq IS NULL` の行は通す（ADR 0165 決めたこと4「NULL はこの軸には
+      // 床が無い＝活動時計では沈まない」）。
+      const passesDecayFloorSeq =
+        opts.filter.decayFloorSeqAfter === undefined ||
+        (memory.decayFloorSeq ?? null) === null ||
+        memory.decayFloorSeq! > opts.filter.decayFloorSeqAfter;
+
+      if (
+        opts.filter.decayFloorAnyAxis === true &&
+        opts.filter.decayFloorAtAfter !== undefined &&
+        opts.filter.decayFloorSeqAfter !== undefined
+      ) {
+        if (!(passesDecayFloorAt || passesDecayFloorSeq)) {
+          continue;
+        }
+      } else {
+        if (!passesDecayFloorAt) {
+          continue;
+        }
+        if (!passesDecayFloorSeq) {
+          continue;
+        }
       }
       // ADR 0056: 除外の列挙（status とは向きが逆）。`undefined`/空配列は no-op
       // （`VectorFilter.excludeProvenanceKinds` の doc 参照）。

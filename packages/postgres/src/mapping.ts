@@ -94,10 +94,32 @@ export interface MemoryRow {
   strength: number;
   half_life_hours: number;
   decay_floor_at: string;
+  // ADR 0165（Issue #305）: 活動時計の3つ組。`bigint` 列は node-postgres が精度損失を
+  // 避けるため文字列で返す——`parsePgBigint` で変換する（`parsePgTimestamp` と同じ形の
+  // 境界）。すべて NULL 許容（「この軸には床が無い」を意味する）。
+  decay_base_seq: string | number | null;
+  decay_floor_seq: string | number | null;
+  half_life_recalls: number | null;
   embedding_status: string;
   purged_at: string | null;
   created_at: string;
   updated_at: string;
+}
+
+/**
+ * Postgres の `bigint` 列（node-postgres が精度損失を避けるため文字列で返しうる。
+ * `parsePgTimestamp` の doc コメント参照——生 SQL 実行では drizzle の decode を経由しない）
+ * を `number` に変換する。`null` はそのまま通す（ADR 0165 決めたこと4「NULL はこの軸に
+ * 床が無いことを意味する」）。
+ *
+ * `Number.MAX_SAFE_INTEGER` を超える運用は想定していない（活動時計は「recall() の回数」を
+ * 数えるカウンタであり、そこまで到達する前に他の限界に当たる）。
+ */
+export function parsePgBigint(value: string | number | null): number | null {
+  if (value === null) {
+    return null;
+  }
+  return typeof value === "number" ? value : Number(value);
 }
 
 export function rowToMemory(row: MemoryRow): Memory {
@@ -124,6 +146,9 @@ export function rowToMemory(row: MemoryRow): Memory {
     strength: row.strength,
     halfLifeHours: row.half_life_hours,
     decayFloorAt: parsePgTimestamp(row.decay_floor_at),
+    decayBaseSeq: parsePgBigint(row.decay_base_seq),
+    decayFloorSeq: parsePgBigint(row.decay_floor_seq),
+    halfLifeRecalls: row.half_life_recalls,
     embeddingStatus: row.embedding_status as EmbeddingStatus,
     purgedAt: parsePgTimestamp(row.purged_at),
     createdAt: parsePgTimestamp(row.created_at),

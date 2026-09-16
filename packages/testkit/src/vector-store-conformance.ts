@@ -27,6 +27,12 @@ export interface PrepareMemoryIdAttrs {
   status?: MemoryStatus;
   subjectId?: string;
   decayFloorAt?: Date;
+  /**
+   * [ADR 0165](../../../docs/decisions/0165-decay-activity-clock.md) 決めたこと1・4・12
+   * （Issue #305）: `filter.decayFloorSeqAfter`/`decayFloorAnyAxis` の歯が使う。
+   * `null`/未指定は「この軸には床が無い」（NULL 通過の歯が使う）。
+   */
+  decayFloorSeq?: number | null;
   provenanceKind?: ProvenanceKind;
   /**
    * ADR 0059: `filter.occurredAfter`/`occurredBefore` の歯が使う。指定しなければ
@@ -521,6 +527,118 @@ export function describeVectorStoreConformance(options: VectorStoreConformanceOp
 
       expect(ids).not.toContain(onBoundaryId);
       expect(ids).toContain(afterBoundaryId);
+    });
+
+    // -------------------------------------------------------------------
+    // filter.decayFloorSeqAfter / decayFloorAnyAxis（ADR 0165、Issue #305）:
+    // 活動時計の忘却ゲート。`decayFloorAtAfter` と同じ**狭義の `>`**だが、`decay_floor_seq`
+    // は NULL 許容なので NULL は常に通す（ADR 0165 決めたこと4）という追加の契約を持つ。
+    //
+    // ⚠ **境界の非対称を1バイトも変えずに写す**（ADR 0165 決めたこと14）: ゲートは狭義
+    // （`>`、境界は落ちる）。掃引側（`archiveDecayed`）の境界を含む `<=` はこのテスト
+    // 対象ではない——ここは `VectorStore.search`（段1のゲート）だけを見る。
+    // -------------------------------------------------------------------
+
+    it("filter.decayFloorSeqAfter: 境界と*ちょうど同じ* decayFloorSeq は除外され、境界より後は返る（狭義の `>`）", async () => {
+      const store = await createStore();
+      const ctx: Ctx = { tenantId: "tenant-1" };
+      const boundary = 1000;
+      const onBoundaryId = await prepareMemoryId(ctx, { decayFloorSeq: boundary });
+      const afterBoundaryId = await prepareMemoryId(ctx, { decayFloorSeq: boundary + 1 });
+
+      await store.upsert(ctx, space, onBoundaryId, [1, 0, 0]);
+      await store.upsert(ctx, space, afterBoundaryId, [1, 0, 0]);
+
+      const hits = await store.search(ctx, space, [1, 0, 0], {
+        limit: 10,
+        filter: { tenantId: "tenant-1", decayFloorSeqAfter: boundary },
+      });
+      const ids = hits.map((hit) => hit.memoryId);
+
+      expect(ids).not.toContain(onBoundaryId);
+      expect(ids).toContain(afterBoundaryId);
+    });
+
+    it("filter.decayFloorSeqAfter: decayFloorSeq が NULL の Memory は境界に関わらず常に通す（ADR 0165 決めたこと4）", async () => {
+      const store = await createStore();
+      const ctx: Ctx = { tenantId: "tenant-1" };
+      const boundary = 1_000_000; // どんなに大きい境界でも NULL は通る、を示すため大きめの値にする。
+      const nullSeqId = await prepareMemoryId(ctx, { decayFloorSeq: null });
+      const decayedId = await prepareMemoryId(ctx, { decayFloorSeq: 0 });
+
+      await store.upsert(ctx, space, nullSeqId, [1, 0, 0]);
+      await store.upsert(ctx, space, decayedId, [1, 0, 0]);
+
+      const hits = await store.search(ctx, space, [1, 0, 0], {
+        limit: 10,
+        filter: { tenantId: "tenant-1", decayFloorSeqAfter: boundary },
+      });
+      const ids = hits.map((hit) => hit.memoryId);
+
+      expect(ids).toContain(nullSeqId);
+      expect(ids).not.toContain(decayedId);
+    });
+
+    it("filter.decayFloorAnyAxis: false/未指定（既定）では AND——片方の軸だけ生きていても、もう片方が死んでいれば通さない", async () => {
+      const store = await createStore();
+      const ctx: Ctx = { tenantId: "tenant-1" };
+      const atBoundary = new Date("2026-01-01T00:00:00.000Z");
+      const seqBoundary = 1000;
+      // 壁時計は生きている（境界より後）が、活動時計は死んでいる（境界以下）。
+      const wallAliveSeqDeadId = await prepareMemoryId(ctx, {
+        decayFloorAt: new Date(atBoundary.getTime() + 1000),
+        decayFloorSeq: seqBoundary - 1,
+      });
+
+      await store.upsert(ctx, space, wallAliveSeqDeadId, [1, 0, 0]);
+
+      const hits = await store.search(ctx, space, [1, 0, 0], {
+        limit: 10,
+        filter: {
+          tenantId: "tenant-1",
+          decayFloorAtAfter: atBoundary,
+          decayFloorSeqAfter: seqBoundary,
+          // decayFloorAnyAxis を渡さない（既定 false）——AND のまま。
+        },
+      });
+      const ids = hits.map((hit) => hit.memoryId);
+
+      expect(ids).not.toContain(wallAliveSeqDeadId);
+    });
+
+    it("filter.decayFloorAnyAxis: true では OR——壁時計は死んでいるが活動時計は生きていれば通す（'either'）", async () => {
+      const store = await createStore();
+      const ctx: Ctx = { tenantId: "tenant-1" };
+      const atBoundary = new Date("2026-01-01T00:00:00.000Z");
+      const seqBoundary = 1000;
+      // 壁時計は死んでいる（境界とちょうど同じ＝含まれない）が、活動時計は生きている
+      // （境界より後）。
+      const wallDeadSeqAliveId = await prepareMemoryId(ctx, {
+        decayFloorAt: atBoundary,
+        decayFloorSeq: seqBoundary + 1,
+      });
+      // 両方死んでいる——'either' でも通らないことの対照。
+      const bothDeadId = await prepareMemoryId(ctx, {
+        decayFloorAt: atBoundary,
+        decayFloorSeq: seqBoundary,
+      });
+
+      await store.upsert(ctx, space, wallDeadSeqAliveId, [1, 0, 0]);
+      await store.upsert(ctx, space, bothDeadId, [1, 0, 0]);
+
+      const hits = await store.search(ctx, space, [1, 0, 0], {
+        limit: 10,
+        filter: {
+          tenantId: "tenant-1",
+          decayFloorAtAfter: atBoundary,
+          decayFloorSeqAfter: seqBoundary,
+          decayFloorAnyAxis: true,
+        },
+      });
+      const ids = hits.map((hit) => hit.memoryId);
+
+      expect(ids).toContain(wallDeadSeqAliveId);
+      expect(ids).not.toContain(bothDeadId);
     });
 
     // -------------------------------------------------------------------

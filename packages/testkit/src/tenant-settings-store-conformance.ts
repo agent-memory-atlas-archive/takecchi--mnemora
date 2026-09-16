@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { DEFAULT_HALF_LIFE_HOURS, EVENT_RETENTION_DAYS_INVALID_MESSAGE } from "@mnemora/core";
-import type { Ctx, TenantSettingsStore } from "@mnemora/core";
+import {
+  DECAY_CLOCK_INVALID_MESSAGE,
+  DEFAULT_DECAY_CLOCK,
+  DEFAULT_HALF_LIFE_HOURS,
+  DEFAULT_HALF_LIFE_RECALLS,
+  EVENT_RETENTION_DAYS_INVALID_MESSAGE,
+} from "@mnemora/core";
+import type { Ctx, DecayClock, TenantSettingsStore } from "@mnemora/core";
 
 /**
  * `setEventRetention` に不正な `days` を渡したときのメッセージが `EVENT_RETENTION_DAYS_INVALID_MESSAGE`
@@ -8,6 +14,11 @@ import type { Ctx, TenantSettingsStore } from "@mnemora/core";
  * 使わない（`memory-store-conformance.ts` の `NOT_FOUND_ERROR_MESSAGE` と同じ理由・同じ形）。
  */
 const INVALID_DAYS_ERROR = new RegExp(EVENT_RETENTION_DAYS_INVALID_MESSAGE);
+/**
+ * `setDecayClock` に不正な値を渡したときのメッセージが `DECAY_CLOCK_INVALID_MESSAGE` を
+ * 含むことを見る。`INVALID_DAYS_ERROR` と同じ理由・同じ形。
+ */
+const INVALID_DECAY_CLOCK_ERROR = new RegExp(DECAY_CLOCK_INVALID_MESSAGE);
 
 export interface TenantSettingsStoreConformanceOptions {
   name: string;
@@ -18,6 +29,41 @@ export interface TenantSettingsStoreConformanceOptions {
    * 将来 setter を持たない読み取り専用 adapter が来た場合にも壊れないようにする）。
    */
   setDefaultHalfLifeHours?: (ctx: Ctx, hours: number) => Promise<void> | void;
+
+  /**
+   * [ADR 0165](../../../docs/decisions/0165-decay-activity-clock.md) 決めたこと13
+   * （Issue #305）: `getDecayClock`/`setDecayClock`/`getDefaultHalfLifeRecalls`/
+   * `getActivitySeq` の4メソッドを検査するかどうか。
+   *
+   * ⭐ **省略可にしない**——`packages/testkit/src/memory-store-conformance.ts` の
+   * `supportsArchiveDecayed`/`supportsPurgeMemory` 等（任意メソッドを検査するかどうかの
+   * 明示フラグ、いずれも「省略可にしない」という同じ規律）に倣う。4メソッドは
+   * `TenantSettingsStore` interface 上は任意（`?`、外部 adapter が壊れないための配慮、
+   * ADR 0165 決めたこと13）だが、**この repo に同梱される2実装
+   * （`PostgresTenantSettingsStore`/`InMemoryTenantSettingsStore`）はどちらも実装している**
+   * ——呼び出し側（`packages/postgres`/`packages/testkit` それぞれの配線ファイル）に
+   * `true`/`false` を明示させることで、「実装したのに配線を忘れて検査されていない」を
+   * 型ではなく歯で検出できるようにする。
+   */
+  supportsDecayClock: boolean;
+
+  /**
+   * `supportsDecayClock: true` のときに使う。テナントの `default_half_life_recalls` を
+   * 明示的に設定するためのフック（`setDefaultHalfLifeHours` の活動時計版）。省略時は
+   * このケースをスキップする。
+   */
+  setDefaultHalfLifeRecalls?: (ctx: Ctx, recalls: number) => Promise<void> | void;
+
+  /**
+   * `supportsDecayClock: true` のときに使う。`tenant_activity.activity_seq` を+1する
+   * （`MemoryStore.createRecall({ advanceActivityClock: true })` を呼ぶことを想定）。
+   * `getActivitySeq` は読み出し専用（ADR 0165 決めたこと2・5・13）なので、`TenantSettingsStore`
+   * 単体では進める口が無い——呼び出し側が `MemoryStore` と同じバッキング（in-memory なら
+   * 共有 Map、postgres なら同じ DB）を経由してこのフックを実装する。省略時は
+   * `getActivitySeq` を「進める」歯をスキップする（`0` を返すことの歯は
+   * `supportsDecayClock: true` だけで検査する）。
+   */
+  advanceActivitySeq?: (ctx: Ctx) => Promise<void> | void;
 }
 
 /**
@@ -28,7 +74,14 @@ export interface TenantSettingsStoreConformanceOptions {
 export function describeTenantSettingsStoreConformance(
   options: TenantSettingsStoreConformanceOptions,
 ): void {
-  const { name, createStore, setDefaultHalfLifeHours } = options;
+  const {
+    name,
+    createStore,
+    setDefaultHalfLifeHours,
+    supportsDecayClock,
+    setDefaultHalfLifeRecalls,
+    advanceActivitySeq,
+  } = options;
 
   describe(`TenantSettingsStore conformance (${name})`, () => {
     it("設定行が無いテナントには DEFAULT_HALF_LIFE_HOURS を返す", async () => {
@@ -147,5 +200,109 @@ export function describeTenantSettingsStoreConformance(
       await store.setEventRetention(ctx, { kind: "days", days: 365 });
       expect(await store.getEventRetention(ctx)).toEqual({ kind: "days", days: 365 });
     });
+
+    // -----------------------------------------------------------------
+    // getDecayClock / setDecayClock / getDefaultHalfLifeRecalls / getActivitySeq
+    // (ADR 0165, Issue #305)
+    //
+    // `supportsDecayClock` の理由は `TenantSettingsStoreConformanceOptions` の doc
+    // コメント参照——interface 上は任意だが、この repo の2実装は両方実装しているので、
+    // 呼び出し側に明示させることで配線漏れを歯で検出する。
+    // -----------------------------------------------------------------
+    if (supportsDecayClock) {
+      it("getDecayClock: 行が無いテナントには DEFAULT_DECAY_CLOCK（'wall'）を返す", async () => {
+        const store = await createStore();
+        const ctx: Ctx = { tenantId: `tenant-decay-clock-unset-${Math.random()}` };
+        expect(await store.getDecayClock!(ctx)).toBe(DEFAULT_DECAY_CLOCK);
+        expect(await store.getDecayClock!(ctx)).toBe("wall");
+      });
+
+      it("setDecayClock/getDecayClock: 設定した値を読み直せる（'wall'/'activity'/'either' の3値）", async () => {
+        const store = await createStore();
+        const values: DecayClock[] = ["wall", "activity", "either"];
+        for (const clock of values) {
+          const ctx: Ctx = { tenantId: `tenant-decay-clock-${clock}-${Math.random()}` };
+          await store.setDecayClock!(ctx, clock);
+          expect(await store.getDecayClock!(ctx)).toBe(clock);
+        }
+      });
+
+      it("setDecayClock: 3値のいずれでもない値を拒む", async () => {
+        const store = await createStore();
+        const ctx: Ctx = { tenantId: `tenant-decay-clock-invalid-${Math.random()}` };
+        await expect(store.setDecayClock!(ctx, "not-a-real-clock" as DecayClock)).rejects.toThrow(
+          INVALID_DECAY_CLOCK_ERROR,
+        );
+      });
+
+      it("getDefaultHalfLifeRecalls: 行が無いテナントには DEFAULT_HALF_LIFE_RECALLS（720）を返す", async () => {
+        const store = await createStore();
+        const ctx: Ctx = { tenantId: `tenant-half-life-recalls-unset-${Math.random()}` };
+        expect(await store.getDefaultHalfLifeRecalls!(ctx)).toBe(DEFAULT_HALF_LIFE_RECALLS);
+      });
+
+      if (setDefaultHalfLifeRecalls) {
+        it("getDefaultHalfLifeRecalls: 設定済みのテナントにはその値を返す", async () => {
+          const store = await createStore();
+          const ctx: Ctx = { tenantId: `tenant-half-life-recalls-custom-${Math.random()}` };
+          await setDefaultHalfLifeRecalls(ctx, 24);
+          expect(await store.getDefaultHalfLifeRecalls!(ctx)).toBe(24);
+        });
+
+        it("⚠ 値域の外の default_half_life_recalls を拒む（ADR 0165 が isHalfLifeHoursInRange と同じ値域を課す）", async () => {
+          // `isHalfLifeRecallsInRange` の doc コメント参照——`isHalfLifeHoursInRange`
+          // （Issue #231）と同じ理由・同じ値域。同期 throw の実装にも対応するため
+          // Promise チェーンで包む（上の half-life-hours の歯と同じ形）。
+          const store = await createStore();
+          const outOfRange: Array<[string, number]> = [
+            ["ちょうど 0", 0],
+            ["負", -1],
+            ["NaN", Number.NaN],
+            ["Infinity", Number.POSITIVE_INFINITY],
+          ];
+          for (const [label, recalls] of outOfRange) {
+            const ctx: Ctx = { tenantId: `tenant-half-life-recalls-oor-${Math.random()}` };
+            await expect(
+              Promise.resolve().then(() => setDefaultHalfLifeRecalls(ctx, recalls)),
+              `default_half_life_recalls=${recalls}（${label}）は拒まれなければならない`,
+            ).rejects.toThrow();
+          }
+
+          const ctx: Ctx = { tenantId: `tenant-half-life-recalls-in-range-${Math.random()}` };
+          await setDefaultHalfLifeRecalls(ctx, 48);
+          expect(await store.getDefaultHalfLifeRecalls!(ctx)).toBe(48);
+        });
+      }
+
+      it("getActivitySeq: 行が無いテナントには 0 を返す", async () => {
+        const store = await createStore();
+        const ctx: Ctx = { tenantId: `tenant-activity-seq-unset-${Math.random()}` };
+        expect(await store.getActivitySeq!(ctx)).toBe(0);
+      });
+
+      if (advanceActivitySeq) {
+        it("getActivitySeq: advanceActivitySeq を呼ぶたびに1ずつ進む（読み出し専用——このフック自身は MemoryStore.createRecall 経由）", async () => {
+          const store = await createStore();
+          const ctx: Ctx = { tenantId: `tenant-activity-seq-advance-${Math.random()}` };
+          expect(await store.getActivitySeq!(ctx)).toBe(0);
+          await advanceActivitySeq(ctx);
+          expect(await store.getActivitySeq!(ctx)).toBe(1);
+          await advanceActivitySeq(ctx);
+          await advanceActivitySeq(ctx);
+          expect(await store.getActivitySeq!(ctx)).toBe(3);
+        });
+
+        it("getActivitySeq: テナントごとに独立している", async () => {
+          const store = await createStore();
+          const ctxA: Ctx = { tenantId: `tenant-activity-seq-a-${Math.random()}` };
+          const ctxB: Ctx = { tenantId: `tenant-activity-seq-b-${Math.random()}` };
+          await advanceActivitySeq(ctxA);
+          await advanceActivitySeq(ctxA);
+          await advanceActivitySeq(ctxB);
+          expect(await store.getActivitySeq!(ctxA)).toBe(2);
+          expect(await store.getActivitySeq!(ctxB)).toBe(1);
+        });
+      }
+    }
   });
 }

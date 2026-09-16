@@ -10,6 +10,13 @@ import type {
 /**
  * 適合テスト（および testkit 自身の自己テスト）で使う、妥当な `NewMemory` のひな型。
  * 実際の adapter 実装向けではなく、テストデータの生成専用。
+ *
+ * [ADR 0165](../../../docs/decisions/0165-decay-activity-clock.md)（Issue #305）:
+ * 活動時計の3つ組（`decayBaseSeq`/`decayFloorSeq`/`halfLifeRecalls`）は `base` に含めない
+ * ——`overrides` で明示的に渡さない限り `undefined`（＝「この軸には床が無い」、ADR 0165
+ * 決めたこと4）のままになる。壁時計の3つ組（`strength`/`halfLifeHours`/`decayFloorAt`）と
+ * 違い、活動時計側は既定で「未使用」を表すのが正しい既定値であるため、計算済みの値を
+ * `base` へ持たせない。
  */
 export function buildNewMemoryFixture(overrides: Partial<NewMemory> = {}): NewMemory {
   const recordedAt = overrides.recordedAt ?? new Date("2026-01-01T00:00:00.000Z");

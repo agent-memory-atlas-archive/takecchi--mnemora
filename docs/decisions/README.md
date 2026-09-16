@@ -177,6 +177,7 @@ alteroid (github.com/takecchi/alteroid) を根拠として引く箇所は、確�
 | [0162](./0162-correction-scenario-example-chat.md) | `examples/chat` に訂正シナリオを足す — `contestedPair` は構造としての宣言、判定はしない | 採用 (2026-09) |
 | [0163](./0163-memory-usage-reporting-example-chat.md) | `examples/chat` が `memory_usage` を報告する — `reinforce` を実アプリで発火させる（Issue #301） | 採用 (2026-09) |
 | [0164](./0164-valid-from-until-recall.md) | recall に `validAt` ゲートを足す — 段1へ押し下げ、`expired`/`not_yet_valid` で名指しする（Issue #280、Issue #202 第2弾） | 採用 (2026-09) |
+| [0165](./0165-decay-activity-clock.md) | 減衰の時計を2本にする — 壁時計（`decay_floor_at`）に加えて活動時計（`decay_floor_seq`）を持ち、テナントが選ぶ | 採用 (2026-09) |
 | [0167](./0167-association-getvectors-order-nondeterminism.md) | 連想枠（段3.5）の非決定性の原因は HNSW ではなく `getVectors()` の返却順依存だった — アンカー処理順をランク順に固定して直す（Issue #316） | 採用 (2026-09) |
 
 <!-- ADR-INDEX:GENERATED:END -->

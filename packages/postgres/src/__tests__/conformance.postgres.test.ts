@@ -124,6 +124,7 @@ describeVectorStoreConformance({
         ...(attrs?.status !== undefined ? { status: attrs.status } : {}),
         ...(attrs?.subjectId !== undefined ? { subjectId: attrs.subjectId } : {}),
         ...(attrs?.decayFloorAt !== undefined ? { decayFloorAt: attrs.decayFloorAt } : {}),
+        ...(attrs?.decayFloorSeq !== undefined ? { decayFloorSeq: attrs.decayFloorSeq } : {}),
         ...(attrs?.provenanceKind !== undefined
           ? { provenance: buildProvenanceFixture(attrs.provenanceKind) }
           : {}),
@@ -225,6 +226,41 @@ describeTenantSettingsStoreConformance({
       VALUES (${ctx.tenantId}, ${hours}, 'open', now(), now())
       ON CONFLICT (tenant_id) DO UPDATE SET default_half_life_hours = EXCLUDED.default_half_life_hours
     `);
+  },
+  // ADR 0165 決めたこと13（Issue #305）: PostgresTenantSettingsStore は4メソッドとも実装している。
+  supportsDecayClock: true,
+  setDefaultHalfLifeRecalls: async (ctx: Ctx, recalls: number) => {
+    const { db } = await getTestClient();
+    await db.execute(sql`
+      INSERT INTO tenant_settings (tenant_id, default_half_life_recalls, taxonomy_mode, created_at, updated_at)
+      VALUES (${ctx.tenantId}, ${recalls}, 'open', now(), now())
+      ON CONFLICT (tenant_id) DO UPDATE SET default_half_life_recalls = EXCLUDED.default_half_life_recalls
+    `);
+  },
+  // `getActivitySeq` は読み出し専用（ADR 0165 決めたこと2・5・13）——進める唯一の口は
+  // `PostgresMemoryStore.createRecall({ advanceActivityClock: true })` であり、同じ DB
+  // （`tenant_activity`）を共有するので、`TenantSettingsStore` とは別 adapter でも
+  // 書いた値がそのまま読み直せる。
+  advanceActivitySeq: async (ctx: Ctx) => {
+    const { db } = await getTestClient();
+    await new PostgresMemoryStore(db).createRecall(ctx, {
+      tenantId: ctx.tenantId,
+      subjectId: null,
+      query: { text: "fixture" },
+      budget: null,
+      omitted: [],
+      usage: {
+        chars: 0,
+        estimatedTokens: 0,
+        counter: "heuristic",
+        byTier: { full: 0, digest: 0, index: 0 },
+        indexChars: 0,
+      },
+      indexBand: { groups: [], totalInScope: 0, countKind: "exact" },
+      explain: { stages: [] },
+      returnedMemories: [],
+      advanceActivityClock: true,
+    });
   },
 });
 

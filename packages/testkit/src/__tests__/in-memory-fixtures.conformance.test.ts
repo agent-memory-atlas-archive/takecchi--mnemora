@@ -137,6 +137,7 @@ describeVectorStoreConformance({
         ...(attrs?.status !== undefined ? { status: attrs.status } : {}),
         ...(attrs?.subjectId !== undefined ? { subjectId: attrs.subjectId } : {}),
         ...(attrs?.decayFloorAt !== undefined ? { decayFloorAt: attrs.decayFloorAt } : {}),
+        ...(attrs?.decayFloorSeq !== undefined ? { decayFloorSeq: attrs.decayFloorSeq } : {}),
         ...(attrs?.provenanceKind !== undefined
           ? { provenance: buildProvenanceFixture(attrs.provenanceKind) }
           : {}),
@@ -266,11 +267,19 @@ describeOutboxStoreConformance({
 });
 
 let latestTenantSettingsStore: InMemoryTenantSettingsStore | undefined;
+// [ADR 0165](../../../docs/decisions/0165-decay-activity-clock.md) 決めたこと2・5・13
+// （Issue #305）: `advanceActivitySeq` が `MemoryStore.createRecall({ advanceActivityClock:
+// true })` を呼ぶための、まさに同じ `InMemoryMemoryStore` インスタンス
+// （`InMemoryTenantSettingsStore` のコンストラクタへ `activitySeq` Map を共有渡ししたのと
+// 同じインスタンス）。`latestMemoryStoreForVectorFixtures` 等と同じパターン。
+let latestMemoryStoreForTenantSettingsFixtures: InMemoryMemoryStore | undefined;
 
 describeTenantSettingsStoreConformance({
   name: "in-memory placeholder",
   createStore: () => {
-    const store = new InMemoryTenantSettingsStore();
+    const memoryStore = new InMemoryMemoryStore();
+    latestMemoryStoreForTenantSettingsFixtures = memoryStore;
+    const store = new InMemoryTenantSettingsStore(memoryStore.activitySeq);
     latestTenantSettingsStore = store;
     return store;
   },
@@ -279,5 +288,36 @@ describeTenantSettingsStoreConformance({
       throw new Error("setDefaultHalfLifeHours より先に createStore() を呼ぶ必要がある");
     }
     latestTenantSettingsStore.setDefaultHalfLifeHours(ctx.tenantId, hours);
+  },
+  // ADR 0165 決めたこと13: `InMemoryTenantSettingsStore` は4メソッドとも実装している。
+  supportsDecayClock: true,
+  setDefaultHalfLifeRecalls: (ctx: Ctx, recalls: number) => {
+    if (!latestTenantSettingsStore) {
+      throw new Error("setDefaultHalfLifeRecalls より先に createStore() を呼ぶ必要がある");
+    }
+    latestTenantSettingsStore.setDefaultHalfLifeRecalls(ctx.tenantId, recalls);
+  },
+  advanceActivitySeq: async (ctx: Ctx) => {
+    if (!latestMemoryStoreForTenantSettingsFixtures) {
+      throw new Error("advanceActivitySeq より先に createStore() を呼ぶ必要がある");
+    }
+    await latestMemoryStoreForTenantSettingsFixtures.createRecall(ctx, {
+      tenantId: ctx.tenantId,
+      subjectId: null,
+      query: { text: "fixture" },
+      budget: null,
+      omitted: [],
+      usage: {
+        chars: 0,
+        estimatedTokens: 0,
+        counter: "heuristic",
+        byTier: { full: 0, digest: 0, index: 0 },
+        indexChars: 0,
+      },
+      indexBand: { groups: [], totalInScope: 0, countKind: "exact" },
+      explain: { stages: [] },
+      returnedMemories: [],
+      advanceActivityClock: true,
+    });
   },
 });

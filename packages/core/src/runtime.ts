@@ -31,6 +31,11 @@ import type {
 import { OutboxLeaseConflictError } from "./interfaces/outbox-store.js";
 import type { ClaimOutboxJobsOptions, OutboxStore } from "./interfaces/outbox-store.js";
 import type { OutboxJobKind } from "./interfaces/scheduler.js";
+import {
+  readActivitySeq,
+  readDecayClock,
+  readDefaultHalfLifeRecalls,
+} from "./interfaces/tenant-settings-store.js";
 import type { TenantSettingsStore } from "./interfaces/tenant-settings-store.js";
 import type { TokenCounter } from "./interfaces/token-counter.js";
 import type { VectorStore } from "./interfaces/vector-store.js";
@@ -1739,6 +1744,60 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
    * ⟹ 作成より前に content_hash を知る必要がある。組み立てと書き込みを分けないと、
    * この2つを同時に満たせない。
    */
+  /**
+   * [ADR 0165](../../docs/decisions/0165-decay-activity-clock.md) 決めたこと1・3・5・12:
+   * Memory 書き込み側3箇所（抽出・consolidate 手順6・reflect 手順7）が共通して要る、
+   * 活動時計の入力の組み立て。
+   *
+   * **`decay_clock === 'wall'` のテナントでは `tenant_activity` を一度も読まない**
+   * ——`{}` を返し、`activitySeq`/`halfLifeRecalls` は `undefined` のまま
+   * `buildNewMemoryFromCandidate` 等へ渡る。これらの関数は両方揃っているときだけ
+   * 活動時計の3つ組（`decayBaseSeq`/`decayFloorSeq`/`halfLifeRecalls`）を作る
+   * （`extraction.ts` の doc 参照）ので、`'wall'` のテナントで作られる Memory は
+   * 本 ADR の前後で1バイトも変わらない。
+   *
+   * ⚠ **これは 0163 の話であり、tick が consolidate/reflect を駆動する ADR 0157 とは無関係**
+   * ——ここで読むのは `decay_clock`/`activity_seq` だけで、tick のスケジューリングには触れない。
+   */
+  async function resolveActivityClockInputs(
+    ctx: Ctx,
+  ): Promise<{ activitySeq?: number; halfLifeRecalls?: number }> {
+    const decayClock = await readDecayClock(deps.tenantSettingsStore, ctx);
+    if (decayClock === "wall") {
+      return {};
+    }
+    const [activitySeq, halfLifeRecalls] = await Promise.all([
+      readActivitySeq(deps.tenantSettingsStore, ctx),
+      readDefaultHalfLifeRecalls(deps.tenantSettingsStore, ctx),
+    ]);
+    return { activitySeq, halfLifeRecalls };
+  }
+
+  /**
+   * [ADR 0165](../../docs/decisions/0165-decay-activity-clock.md) 決めたこと16:
+   * `reinforce` の呼び出し側2箇所（使用報告ループ・`restoreArchived`）が共通して要る、
+   * 活動時計の「いま」の解決。
+   *
+   * `resolveActivityClockInputs` と同じく `decay_clock === 'wall'` のテナントでは
+   * `tenant_activity` を一度も読まない。`reinforce` は Memory 単位の `halfLifeRecalls` を
+   * 対象の Memory 自身から読む（store 側の実装、`ReinforceOptions.nowSeq` の doc
+   * コメント参照）ので、ここでは `activitySeq` だけを読めば足り、
+   * `resolveActivityClockInputs` が読む `default_half_life_recalls` は不要——
+   * 読まない分だけ `'activity'`/`'either'` のテナントでも `tenant_settings` への
+   * 往復を1回減らせる。
+   */
+  async function resolveReinforceNowSeq(ctx: Ctx): Promise<number | undefined> {
+    const decayClock = await readDecayClock(deps.tenantSettingsStore, ctx);
+    if (decayClock === "wall") {
+      return undefined;
+    }
+    return readActivitySeq(deps.tenantSettingsStore, ctx);
+  }
+
+  function toReinforceOptions(nowSeq: number | undefined): { nowSeq: number } | undefined {
+    return nowSeq === undefined ? undefined : { nowSeq };
+  }
+
   async function buildNewMemoriesForCandidates(
     ctx: Ctx,
     observation: Observation,
@@ -1746,6 +1805,9 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
   ): Promise<NewMemory[]> {
     const halfLifeHours = await deps.tenantSettingsStore.getDefaultHalfLifeHours(ctx);
     const now = clock.now();
+    // ADR 0165 決めたこと3・5・12: 活動時計の3つ組を、書き込み側3箇所のうちの1つとして
+    // ここで織り込む。
+    const activityClockInputs = await resolveActivityClockInputs(ctx);
     return candidates.map((candidate) =>
       buildNewMemoryFromCandidate({
         ctx,
@@ -1758,6 +1820,7 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
         halfLifeHours,
         now,
         digestFallbackLength,
+        ...activityClockInputs,
       }),
     );
   }
@@ -2102,8 +2165,11 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
       input.usedMemoryIds,
     );
     const reinforcedAt = clock.now();
+    // ADR 0165 決めたこと16: 'wall' 以外のテナントでは活動時計の「いま」も一緒に渡し、
+    // decayBaseSeq/decayFloorSeq を同じ強化イベントとして進める。
+    const reinforceOpts = toReinforceOptions(await resolveReinforceNowSeq(ctx));
     for (const memoryId of insertedMemoryIds) {
-      await deps.memoryStore.reinforce(ctx, memoryId, reinforcedAt);
+      await deps.memoryStore.reinforce(ctx, memoryId, reinforcedAt, reinforceOpts);
     }
 
     return {
@@ -2383,6 +2449,7 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
       vectorStore: deps.vectorStore,
       lexicalStore: deps.lexicalStore,
       embeddingProvider: deps.embeddingProvider,
+      tenantSettingsStore: deps.tenantSettingsStore,
       clock,
       tokenCounter,
       outputValidation: deps.outputValidation,
@@ -2443,6 +2510,11 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
 
     const actor = opts?.actor ?? { type: "system" };
     const outcomes: RestoreArchivedOutcome[] = [];
+    // ADR 0165 決めたこと16: この呼び出し全体で1回だけ読む（`buildNewMemoriesForCandidates`
+    // が `resolveActivityClockInputs` を候補バッチ1つにつき1回だけ読むのと同じ理由——
+    // 対象 id ごとに読み直すと 'activity'/'either' のテナントで id の数だけ
+    // `tenant_activity` への往復が増える）。
+    const reinforceOpts = toReinforceOptions(await resolveReinforceNowSeq(ctx));
 
     for (let i = 0; i < ids.length; i += 1) {
       const id = ids[i]!;
@@ -2502,7 +2574,7 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
         const reinforcedAt = clock.now();
         let reinforceError: string | undefined;
         try {
-          const reinforced = await deps.memoryStore.reinforce(ctx, id, reinforcedAt);
+          const reinforced = await deps.memoryStore.reinforce(ctx, id, reinforcedAt, reinforceOpts);
           byId.set(id, reinforced);
         } catch (err) {
           reinforceError = err instanceof Error ? err.message : String(err);
@@ -3207,6 +3279,8 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
     // 6. 統合先を作る。
     const halfLifeHours = await deps.tenantSettingsStore.getDefaultHalfLifeHours(ctx);
     const now = clock.now();
+    // ADR 0165 決めたこと3・5・12: 書き込み側3箇所のうちの1つ（consolidate 手順6）。
+    const activityClockInputs = await resolveActivityClockInputs(ctx);
     const newMemory = buildConsolidatedMemory({
       ctx,
       eligible: eligibleMemories,
@@ -3215,6 +3289,7 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
       digestFallbackLength,
       halfLifeHours,
       now,
+      ...activityClockInputs,
     });
     const actor = opts.actor ?? { type: "system" };
     const buildCreatedEvent = () =>
@@ -3554,6 +3629,8 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
     // 7. 新しい Memory を1件作る（既存の行へは一切書き込まない——決定4）。
     const halfLifeHours = await deps.tenantSettingsStore.getDefaultHalfLifeHours(ctx);
     const now = clock.now();
+    // ADR 0165 決めたこと3・5・12: 書き込み側3箇所のうちの1つ（reflect 手順7）。
+    const activityClockInputs = await resolveActivityClockInputs(ctx);
     const newMemory = buildReflectedMemory({
       ctx,
       eligible: eligibleMemories,
@@ -3562,6 +3639,7 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
       digestFallbackLength,
       halfLifeHours,
       now,
+      ...activityClockInputs,
     });
     const { memory: reflectedMemory, created } = await deps.memoryStore.createMemoryWithOutbox(
       ctx,

@@ -61,6 +61,9 @@ const DOMAIN_TABLES = [
   "memories",
   "observations",
   "tenant_settings",
+  // ADR 0165（Issue #305）: 活動カウンタ。忘れるとテスト間で activity_seq が汚染される
+  // （`getActivitySeq`/`createRecall(advanceActivityClock: true)` の歯が偽陽性/偽陰性になる）。
+  "tenant_activity",
 ];
 
 /**

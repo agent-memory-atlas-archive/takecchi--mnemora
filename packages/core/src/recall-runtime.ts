@@ -5,6 +5,12 @@ import type { MemoryStore } from "./interfaces/memory-store.js";
 import type { TokenCounter } from "./interfaces/token-counter.js";
 import type { VectorStore, VectorHit } from "./interfaces/vector-store.js";
 import type { LexicalStore, LexicalHit } from "./interfaces/lexical-store.js";
+import type { DecayClock, TenantSettingsStore } from "./interfaces/tenant-settings-store.js";
+import {
+  DEFAULT_DECAY_CLOCK,
+  readActivitySeq,
+  readDecayClock,
+} from "./interfaces/tenant-settings-store.js";
 import type { MemoryId } from "./ids.js";
 import { NOT_INDEXED_REASONS } from "./recall.js";
 import type { Memory } from "./memory.js";
@@ -67,6 +73,18 @@ import type { RecallOutputValidationMode } from "./recall-output-validation.js";
 export interface RecallRuntimeDeps {
   memoryStore: MemoryStore;
   vectorStore: VectorStore;
+  /**
+   * [ADR 0165](../../docs/decisions/0165-decay-activity-clock.md): 忘却ゲート（段1・
+   * 後置フィルタ）と段2の再スコアが、そのテナントの `decay_clock`・活動時計の「いま」
+   * （`activity_seq`）を読むために使う。`Runtime`（`runtime.ts`）は既に
+   * `RuntimeDeps.tenantSettingsStore`（`getDefaultHalfLifeHours` 用に必須）を持っており、
+   * `recall` の配線（`runtime.ts` の `recall` 関数）がそれをここへそのまま渡す。
+   *
+   * **省略可能**（ADR 0165 決めたこと13）。`createRecallRuntime` を直接呼ぶ外部の
+   * 呼び出し側を壊さないため——省略すると `decay_clock` は `'wall'` 固定として動く
+   * （＝本 ADR 以前とまったく同じ挙動）。
+   */
+  tenantSettingsStore?: TenantSettingsStore;
   /**
    * 語彙チャンネル（ADR 0084）。**省略可能**——語彙チャンネルを無効にしたまま
    * mnemora は成立する（北極星の問い2）。
@@ -289,6 +307,74 @@ export async function runRecall(
   // ADR 0153 が明示的に上書きしている。
   const decayGateActive = validatedQuery.includeFullyDecayed !== true;
 
+  // ADR 0165: テナントの decay_clock を読み、忘却ゲート（段1・後置フィルタ）と段2の
+  // 再スコアに織り込む。`decayClock` は 'wall' 以外なら段2でも使うため、ゲートが
+  // 無効（includeFullyDecayed: true）でも常に読む——「ゲートを外す」ことと「順位付けに
+  // 使う時計を選ぶ」ことは別の軸である。
+  const decayClock: DecayClock =
+    deps.tenantSettingsStore === undefined
+      ? DEFAULT_DECAY_CLOCK
+      : await readDecayClock(deps.tenantSettingsStore, ctx);
+  // 活動時計の「いま」。'wall' のテナントでは一度も `tenant_activity` を読まない
+  // （ADR 0165 決めたこと5「activity_seq を進めるのは decay_clock != 'wall' のテナントに
+  // 限る」の読み側の対になる節約——'wall' のテナントの activity_seq は常に無意味な 0 なので
+  // 読む理由が無い）。
+  const nowSeq: number | undefined =
+    decayClock === "wall" || deps.tenantSettingsStore === undefined
+      ? undefined
+      : await readActivitySeq(deps.tenantSettingsStore, ctx);
+
+  /**
+   * 忘却ゲートの壁時計側の軸: `decayFloorAt` がまだ「いま」を過ぎていないか（狭義の `>`）。
+   */
+  const wallAxisAlive = (memory: Memory): boolean => memory.decayFloorAt > now;
+
+  /**
+   * 忘却ゲートの活動時計側の軸: `decayFloorSeq` が無い（NULL）なら「この軸には床が無い
+   * ＝活動時計では沈まない」（ADR 0165 決めたこと4）ので常に true。`nowSeq` 自体が
+   * 無い（`decayClock === 'wall'` で一度も読んでいない）場合も、判定できないので
+   * 緩い側（true）へ倒す。
+   */
+  const activityAxisAlive = (memory: Memory): boolean => {
+    const floorSeq = memory.decayFloorSeq;
+    if (floorSeq === undefined || floorSeq === null) return true;
+    if (nowSeq === undefined) return true;
+    return floorSeq > nowSeq;
+  };
+
+  /**
+   * ⭐ 全チャンネル共通の後置フィルタと段1（ANN）の押し下げが、同じ述語を2軸ぶん見る
+   * （ADR 0165 決めたこと1・12）。
+   * - `'wall'`: 壁時計の軸だけ。
+   * - `'activity'`: 活動時計の軸だけ。
+   * - `'either'`: **OR**（どちらかが生きていれば通す。最も緩い——決めたこと1）。
+   */
+  const survivesDecayGate = (memory: Memory): boolean => {
+    if (decayClock === "wall") return wallAxisAlive(memory);
+    if (decayClock === "activity") return activityAxisAlive(memory);
+    return wallAxisAlive(memory) || activityAxisAlive(memory);
+  };
+
+  /**
+   * 段2の再スコア（`strategies/scoring.ts`）へ渡す、活動時計まわりの入力（ADR 0165
+   * 決めたこと12）。`decayClock`/`nowSeq` はテナント単位、`decayBaseSeq`/`halfLifeRecalls` は
+   * Memory 単位——`computeDecay`（scoring.ts）が「揃っていなければ壁時計へフォールバック」
+   * するので、ここでは単に Memory の値をそのまま渡すだけでよい。
+   */
+  const decayScoringExtras = (
+    memory: Memory,
+  ): {
+    decayClock: DecayClock;
+    nowSeq: number | undefined;
+    decayBaseSeq: number | null | undefined;
+    halfLifeRecalls: number | null | undefined;
+  } => ({
+    decayClock,
+    nowSeq,
+    decayBaseSeq: memory.decayBaseSeq,
+    halfLifeRecalls: memory.halfLifeRecalls,
+  });
+
   // 🔴 配線されていない語彙チャンネルを明示的に要求されたら、ここで投げる（ADR 0084 §4）。
   // **黙って0件を返さない。**理由は RecallQuery.channels の doc に書いてある——
   // これは「探したが無かった」ではなく「探せる状態になっていない」であり、
@@ -361,7 +447,18 @@ export async function runRecall(
         // 段1の候補集合そのものから外す——over-fetch の窓（k'）を、まだ生きている記憶で
         // 埋める方向に働く。`includeFullyDecayed: true` を渡すと `undefined` になり、
         // ADR 0153 より前の挙動（decayFloorAtAfter を渡さない）に戻る。
-        decayFloorAtAfter: decayGateActive ? now : undefined,
+        //
+        // ADR 0165 決めたこと1・12: `decay_clock` に応じて2軸を押し下げる。
+        // - 'wall': decayFloorAtAfter のみ（従来どおり）。
+        // - 'activity': decayFloorSeqAfter のみ。
+        // - 'either': 両方 + decayFloorAnyAxis（OR で結ぶ、最も緩い）。
+        decayFloorAtAfter:
+          decayGateActive && (decayClock === "wall" || decayClock === "either") ? now : undefined,
+        decayFloorSeqAfter:
+          decayGateActive && (decayClock === "activity" || decayClock === "either")
+            ? nowSeq
+            : undefined,
+        decayFloorAnyAxis: decayGateActive && decayClock === "either",
         // Issue #280: `period` と同じ形で段1へ押し下げる（`scope.validAt` の doc 参照）。
         validAt: scope.validAt,
       },
@@ -392,6 +489,8 @@ export async function runRecall(
         kPrime,
         hits: annHits.length,
         decayGate: decayGateActive ? "pushed_down" : "disabled",
+        // ADR 0165 決めたこと1・12（北極星の問い3）: 実際に使った時計を名乗る。
+        clock: decayClock,
         // Issue #280: validAt ゲートは ANN・語彙の両チャンネルで同じ形（"pushed_down"）
         // ——decayGate と違い語彙側も SQL の WHERE で絞るので "post_filtered" は無い。
         validityGate: validityGateActive ? "pushed_down" : "disabled",
@@ -440,6 +539,8 @@ export async function runRecall(
         kPrime,
         hits: lexicalHits.length,
         decayGate: decayGateActive ? "post_filtered" : "disabled",
+        // ADR 0165 決めたこと1・12（北極星の問い3）: 実際に使った時計を名乗る。
+        clock: decayClock,
         // Issue #280: 語彙チャンネルも SQL の WHERE で絞る（decayGate の "post_filtered"
         // とは違う）——`LexicalFilter.validAt` の doc 参照。
         validityGate: validityGateActive ? "pushed_down" : "disabled",
@@ -533,13 +634,15 @@ export async function runRecall(
       if (memory.validFrom != null && memory.validFrom > scope.validAt) continue;
       if (memory.validUntil != null && memory.validUntil <= scope.validAt) continue;
     }
-    // 忘却ゲート（ADR 0153）: `LexicalFilter` に decayFloorAtAfter を足さず（マネージャー決定3）、
-    // ここで**全チャンネル共通**の述語を適用する——ANN の候補にも同じ述語が掛かる。
-    // 既定で押し下げている ANN の候補は `memory.decayFloorAt > now` を段1で既に満たして
-    // いるはずなので、通常はここでは何も落とさない（実際に落ちないことを歯で検算する。
-    // マネージャー決定「押し下げと後置が同じ述語であることの検算になる」）。
-    // 境界は `VectorFilter.decayFloorAtAfter` と同じ狭義の `>`（ちょうど境界の Memory は除外）。
-    if (decayGateActive && !(memory.decayFloorAt > now)) {
+    // 忘却ゲート（ADR 0153、ADR 0165 決めたこと12）: `LexicalFilter` に decayFloorAtAfter を
+    // 足さず（マネージャー決定3）、ここで**全チャンネル共通**の述語を適用する——ANN の候補にも
+    // 同じ述語が掛かる。既定で押し下げている ANN の候補は `survivesDecayGate` を段1で
+    // 既に満たしているはずなので、通常はここでは何も落とさない（実際に落ちないことを歯で
+    // 検算する。マネージャー決定「押し下げと後置が同じ述語であることの検算になる」）。
+    // ⭐ ADR 0165: `decay_clock` が 'activity'/'either' のテナントでは、この述語が
+    // 壁時計だけでなく活動時計の軸も見る（`survivesDecayGate` の doc コメント参照）——
+    // これを忘れると、語彙チャンネルだけ壁時計のまま残る（ADR 0165 決めたこと12 の表）。
+    if (decayGateActive && !survivesDecayGate(memory)) {
       decayFilteredCount += 1;
       continue;
     }
@@ -588,6 +691,7 @@ export async function runRecall(
         lastReinforcedAt: memory.lastReinforcedAt,
         strength: memory.strength,
         halfLifeHours: memory.halfLifeHours,
+        ...decayScoringExtras(memory),
       });
       return {
         memory,
@@ -736,6 +840,7 @@ export async function runRecall(
             lastReinforcedAt: companionMemory.lastReinforcedAt,
             strength: companionMemory.strength,
             halfLifeHours: companionMemory.halfLifeHours,
+            ...decayScoringExtras(companionMemory),
           });
           return {
             memory: companionMemory,
@@ -969,6 +1074,7 @@ export async function runRecall(
             lastReinforcedAt: memory.lastReinforcedAt,
             strength: memory.strength,
             halfLifeHours: memory.halfLifeHours,
+            ...decayScoringExtras(memory),
           });
           associationUnits.push({
             members: [
@@ -1340,6 +1446,11 @@ export async function runRecall(
       ...(m.companionOf !== undefined ? { companionOf: m.companionOf } : {}),
       ...(m.associationOf !== undefined ? { associationOf: m.associationOf } : {}),
     })),
+    // ADR 0165 決めたこと5: `decay_clock != 'wall'` のテナントに限り、この recall で
+    // `tenant_activity.activity_seq` を進める。「1単位 = recall() 1回」——この呼び出し
+    // そのものが1回の recall なので、既定のテナント（'wall'）では false のまま渡り、
+    // `activity_seq` は1本も UPDATE が増えない。
+    advanceActivityClock: decayClock !== "wall",
   });
 
   // -------------------------------------------------------------------

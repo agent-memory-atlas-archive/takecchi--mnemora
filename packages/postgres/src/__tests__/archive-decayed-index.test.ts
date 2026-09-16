@@ -47,6 +47,14 @@ const TENANT = "archive-decayed-index-tenant";
  */
 const ROW_COUNT = 20_000;
 
+/**
+ * [ADR 0165](../../../docs/decisions/0165-decay-activity-clock.md) 決めたこと15
+ * （Issue #305）: 活動時計側の `decay_base_seq`/`decay_floor_seq`/`half_life_recalls` も
+ * 同じ seed で populate する——`clock: 'activity'` の掃引（下記 `describe` の後半）が
+ * 同じデータを再利用できるようにするため。`decay_floor_seq` は `decay_floor_at` と
+ * 同じ「半分は過去（沈んでいる）・半分は未来（沈んでいない）」の分布にしてある
+ * （`i` が偶数なら `i` 自身、奇数なら `NOW_SEQ` よりずっと大きい値）。
+ */
 async function seedManyMemories(pool: Pool, tenant: string, rowCount: number): Promise<void> {
   await pool.query(
     `
@@ -54,6 +62,7 @@ async function seedManyMemories(pool: Pool, tenant: string, rowCount: number): P
       id, tenant_id, subject_id, content, content_hash, digest, digest_source,
       provenance_kind, provenance, status, tags, occurred_at, recorded_at,
       last_reinforced_at, strength, half_life_hours, decay_floor_at,
+      decay_base_seq, decay_floor_seq, half_life_recalls,
       embedding_status, created_at, updated_at
     )
     SELECT
@@ -83,6 +92,11 @@ async function seedManyMemories(pool: Pool, tenant: string, rowCount: number): P
       720,
       -- decay_floor_at: 半分は既に閾値を割っている（過去）、半分はまだ（未来）。
       CASE WHEN i % 2 = 0 THEN now() - (i || ' seconds')::interval ELSE now() + (i || ' seconds')::interval END,
+      0,
+      -- decay_floor_seq: 同じ「半分は沈んでいる・半分はまだ」の分布を数直線で作る
+      -- (nowSeq（= rowCount）より小さければ沈んでいる)。
+      CASE WHEN i % 2 = 0 THEN i ELSE $2::bigint * 10 + i END,
+      720,
       'ready',
       now() - (i || ' seconds')::interval,
       now() - (i || ' seconds')::interval
@@ -103,6 +117,14 @@ const CTX: Ctx = { tenantId: TENANT };
 /** `now` は seed の中央（`ROW_COUNT / 2` 秒前）に置く——過去・未来の両方が実在する。 */
 const NOW = new Date();
 const OPTS = { now: NOW, limit: 50 };
+
+/**
+ * ADR 0165 決めたこと15（Issue #305）: 活動時計軸の掃引オプション。`nowSeq = ROW_COUNT` が
+ * `seedManyMemories` の `decay_floor_seq` 分布（偶数の `i` は `i` 自身＝`ROW_COUNT` 以下、
+ * 奇数の `i` は `ROW_COUNT * 10 + i`＝はるかに大きい）の境界と一致する——偶数側だけが
+ * `decay_floor_seq <= nowSeq` を満たす。
+ */
+const OPTS_ACTIVITY = { now: NOW, nowSeq: ROW_COUNT, limit: 50, clock: "activity" as const };
 
 type Forcing = "none" | "btreeIndex" | "seqscan";
 
@@ -137,19 +159,27 @@ async function withForcing<T>(
   }
 }
 
-async function explainTarget(pool: Pool, forcing: Forcing): Promise<string> {
+async function explainTarget(
+  pool: Pool,
+  forcing: Forcing,
+  opts: Parameters<typeof buildArchiveDecayedTargetSelect>[1] = OPTS,
+): Promise<string> {
   return withForcing(pool, forcing, async (client) => {
     const dbOnClient = drizzle(client, { schema });
-    const target = buildArchiveDecayedTargetSelect(CTX, OPTS);
+    const target = buildArchiveDecayedTargetSelect(CTX, opts);
     const result = await dbOnClient.execute(sql`EXPLAIN (FORMAT TEXT) ${target}`);
     return planText(result.rows as unknown as { "QUERY PLAN": string }[]);
   });
 }
 
-async function targetRowIds(pool: Pool, forcing: Forcing): Promise<string[]> {
+async function targetRowIds(
+  pool: Pool,
+  forcing: Forcing,
+  opts: Parameters<typeof buildArchiveDecayedTargetSelect>[1] = OPTS,
+): Promise<string[]> {
   return withForcing(pool, forcing, async (client) => {
     const dbOnClient = drizzle(client, { schema });
-    const target = buildArchiveDecayedTargetSelect(CTX, OPTS);
+    const target = buildArchiveDecayedTargetSelect(CTX, opts);
     const result = await dbOnClient.execute(target);
     return (result.rows as unknown as { id: string }[]).map((row) => row.id);
   });
@@ -205,6 +235,59 @@ describe("archiveDecayed の対象選択索引（ADR 0114）", () => {
       const memory = await store.get(CTX, id);
       expect(memory?.status).toBe("active");
       expect(memory && memory.decayFloorAt.getTime() <= NOW.getTime()).toBe(true);
+      sawActive = true;
+    }
+    expect(sawActive).toBe(true);
+  }, 60_000);
+
+  /**
+   * [ADR 0165](../../../docs/decisions/0165-decay-activity-clock.md) 決めたこと8・9・15
+   * （Issue #305）: `clock: 'activity'` の掃引が、新しく追加した索引
+   * `idx_memories_recall_gate_seq`（`(tenant_id, status, decay_floor_seq)`）を使えることを
+   * 確かめる。マイグレーションのコメント（`migrations/0015_decay_activity_clock.sql`）が
+   * 「掃引のための索引を別に作らない——壁時計側もそうしている」と書いているとおり、
+   * ゲート用に足したこの索引を掃引側も再利用する。`recall-gate-index.test.ts` /
+   * 上の壁時計版と同じ形（選ばれることではなく選べることを測る）。
+   */
+  it("適用可能性（活動時計）: btree 経路だけに絞ると、clock: 'activity' の対象選択が idx_memories_recall_gate_seq を引ける", async () => {
+    const { pool } = await getTestClient();
+    await seedManyMemories(pool, TENANT, ROW_COUNT);
+
+    const naturalPlan = await explainTarget(pool, "none", OPTS_ACTIVITY);
+    console.log(
+      `=== EXPLAIN 活動時計（自然な計画・強制なし。assert しない観測）===\n${naturalPlan}`,
+    );
+
+    const forcedPlan = await explainTarget(pool, "btreeIndex", OPTS_ACTIVITY);
+    console.log(
+      `=== EXPLAIN 活動時計（enable_seqscan = off, enable_bitmapscan = off。この歯が assert する計画）===\n${forcedPlan}`,
+    );
+
+    expect(forcedPlan, forcedPlan).toContain("idx_memories_recall_gate_seq");
+    expect(forcedPlan, forcedPlan).not.toMatch(/Seq Scan on memories/);
+  }, 60_000);
+
+  it("同値（活動時計）: 自然な計画・btree を強制した計画・全走査を強制した計画が、同じ行集合を返す（active かつ decay_floor_seq <= nowSeq のみ）", async () => {
+    const { pool, db } = await getTestClient();
+    await seedManyMemories(pool, TENANT, ROW_COUNT);
+
+    const natural = await targetRowIds(pool, "none", OPTS_ACTIVITY);
+    const viaBtree = await targetRowIds(pool, "btreeIndex", OPTS_ACTIVITY);
+    const viaSeqScan = await targetRowIds(pool, "seqscan", OPTS_ACTIVITY);
+
+    expect(new Set(viaBtree)).toEqual(new Set(viaSeqScan));
+    expect(new Set(natural)).toEqual(new Set(viaSeqScan));
+    expect(natural.length).toBeGreaterThan(0);
+    expect(natural.length).toBeLessThanOrEqual(OPTS_ACTIVITY.limit);
+
+    const store = new PostgresMemoryStore(db);
+    const idSet = new Set(natural);
+    let sawActive = false;
+    for (const id of idSet) {
+      const memory = await store.get(CTX, id);
+      expect(memory?.status).toBe("active");
+      expect(memory?.decayFloorSeq).not.toBeNull();
+      expect((memory?.decayFloorSeq as number) <= OPTS_ACTIVITY.nowSeq).toBe(true);
       sawActive = true;
     }
     expect(sawActive).toBe(true);

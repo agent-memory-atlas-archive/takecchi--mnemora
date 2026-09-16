@@ -186,6 +186,7 @@ describe("runMigrations の排他（advisory lock）", () => {
       "outbox",
       "recall_usages",
       "recalls",
+      "tenant_activity",
       "tenant_settings",
     ]);
     const ledger = await pool.query<{ name: string }>(

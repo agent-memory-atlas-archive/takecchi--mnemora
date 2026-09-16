@@ -1,6 +1,6 @@
 import { sql } from "drizzle-orm";
 import type { SQL } from "drizzle-orm";
-import { defaultDecayStrategy } from "@mnemora/core";
+import { defaultActivityDecayStrategy, defaultDecayStrategy } from "@mnemora/core";
 import {
   ContestedWithoutCompanionError,
   EMBEDDING_STATUS_ROLLBACK,
@@ -33,6 +33,7 @@ import type {
   RecallRecord,
   RecallRecordReturnedMemories,
   RecallScope,
+  ReinforceOptions,
   RequeueEmbedJobsOptions,
   RequeueEmbedJobsResult,
   ScopeAggregate,
@@ -200,6 +201,7 @@ export class PostgresMemoryStore implements MemoryStore {
         tags,
         occurred_at, recorded_at, last_reinforced_at, valid_from, valid_until,
         strength, half_life_hours, decay_floor_at,
+        decay_base_seq, decay_floor_seq, half_life_recalls,
         embedding_status,
         created_at, updated_at
       ) VALUES (
@@ -212,6 +214,7 @@ export class PostgresMemoryStore implements MemoryStore {
         ${input.occurredAt ?? null}, ${input.recordedAt}, ${input.lastReinforcedAt ?? null},
         ${input.validFrom ?? null}, ${input.validUntil ?? null},
         ${input.strength}, ${input.halfLifeHours}, ${input.decayFloorAt},
+        ${input.decayBaseSeq ?? null}, ${input.decayFloorSeq ?? null}, ${input.halfLifeRecalls ?? null},
         ${input.embeddingStatus},
         now(), now()
       )
@@ -265,6 +268,7 @@ export class PostgresMemoryStore implements MemoryStore {
           tags,
           occurred_at, recorded_at, last_reinforced_at, valid_from, valid_until,
           strength, half_life_hours, decay_floor_at,
+          decay_base_seq, decay_floor_seq, half_life_recalls,
           embedding_status,
           created_at, updated_at
         ) VALUES (
@@ -277,6 +281,7 @@ export class PostgresMemoryStore implements MemoryStore {
           ${input.occurredAt ?? null}, ${input.recordedAt}, ${input.lastReinforcedAt ?? null},
           ${input.validFrom ?? null}, ${input.validUntil ?? null},
           ${input.strength}, ${input.halfLifeHours}, ${input.decayFloorAt},
+          ${input.decayBaseSeq ?? null}, ${input.decayFloorSeq ?? null}, ${input.halfLifeRecalls ?? null},
           ${input.embeddingStatus},
           now(), now()
         )
@@ -594,6 +599,7 @@ export class PostgresMemoryStore implements MemoryStore {
             tags,
             occurred_at, recorded_at, last_reinforced_at, valid_from, valid_until,
             strength, half_life_hours, decay_floor_at,
+            decay_base_seq, decay_floor_seq, half_life_recalls,
             embedding_status,
             created_at, updated_at
           ) VALUES (
@@ -606,6 +612,7 @@ export class PostgresMemoryStore implements MemoryStore {
             ${input.occurredAt ?? null}, ${input.recordedAt}, ${input.lastReinforcedAt ?? null},
             ${input.validFrom ?? null}, ${input.validUntil ?? null},
             ${input.strength}, ${input.halfLifeHours}, ${input.decayFloorAt},
+            ${input.decayBaseSeq ?? null}, ${input.decayFloorSeq ?? null}, ${input.halfLifeRecalls ?? null},
             ${input.embeddingStatus},
             now(), now()
           )
@@ -856,7 +863,7 @@ export class PostgresMemoryStore implements MemoryStore {
     return rowToMemory(result.rows[0] as unknown as MemoryRow);
   }
 
-  async reinforce(ctx: Ctx, id: MemoryId, at: Date): Promise<Memory> {
+  async reinforce(ctx: Ctx, id: MemoryId, at: Date, opts?: ReinforceOptions): Promise<Memory> {
     // id 列は uuid 型。この口の契約は「無い == 例外」なので、形式が壊れた入力も
     // クエリを投げる前に同じ「memory not found」の Error へ寄せる（mapping.ts の
     // isUuidLike の doc参照）。
@@ -877,6 +884,27 @@ export class PostgresMemoryStore implements MemoryStore {
       halfLifeHours: memory.halfLifeHours,
     });
 
+    // [ADR 0165](../../../docs/decisions/0165-decay-activity-clock.md) 決めたこと16:
+    // `opts.nowSeq` が渡され、かつこの Memory が `halfLifeRecalls` を持つときに限り、
+    // 活動時計側の起点・床（decay_base_seq/decay_floor_seq）も同じ強化イベントとして
+    // 進める。`halfLifeRecalls` が無い（'wall' のテナントで作られた、あるいは
+    // 活動時計を一度も使っていない）Memory はそもそも活動時計では沈まないので、
+    // ここで列を作らない（`ReinforceOptions.nowSeq` の doc コメント参照）。
+    //
+    // ⚠ **壁時計側の SET 句・WHERE 句は1バイトも変えない**——この条件片は同じ SET の
+    // 末尾に追記するだけであり、`opts.nowSeq` が無い呼び出し（既存の全呼び出し）では
+    // 空文字列になって従来の SQL とバイト単位で同じ文になる。
+    const activitySet =
+      opts?.nowSeq !== undefined && memory.halfLifeRecalls != null
+        ? sql`, decay_base_seq = ${opts.nowSeq}, decay_floor_seq = ${defaultActivityDecayStrategy.floorAt(
+            {
+              baseSeq: opts.nowSeq,
+              strength: memory.strength,
+              halfLifeRecalls: memory.halfLifeRecalls,
+            },
+          )}`
+        : sql``;
+
     // 🔴 減衰の起点を巻き戻さない（ADR 0048）。**この条件は WHERE 句に置く**——
     // 上の SELECT で読んだ値をアプリ側で比べて書くかどうか決めると、読みと書きの間に
     // 入った別の強化を上書きしうる（同じ形を `updateStatus` は ADR 0030 の
@@ -891,10 +919,14 @@ export class PostgresMemoryStore implements MemoryStore {
     // 「上で読んだ古い値をそのまま返す」実装との差が**外から観測できない枝**になる
     // （実際に変異を撃って確かめた。PR 本文参照）。1文なら、更新できた場合も
     // できなかった場合も同じ経路を通るので、その取り違えは歯で捕まる。
+    //
+    // ⚠ 活動時計側の3列も、壁時計側と**同じ WHERE 句**（同じ `at` の比較）で守る——
+    // 両方とも「同じ強化イベント」の一部であり（ADR 0165 文脈節「起点は両方の時計で
+    // 同じく『最後の書き込み』に置く」）、片方だけ別の条件で進むと2軸の起点がずれる。
     const result = await this.db.execute(sql`
       WITH updated AS (
         UPDATE memories
-        SET last_reinforced_at = ${at}, decay_floor_at = ${decayFloorAt}, updated_at = now()
+        SET last_reinforced_at = ${at}, decay_floor_at = ${decayFloorAt}, updated_at = now()${activitySet}
         WHERE tenant_id = ${ctx.tenantId} AND id = ${id}
           AND (last_reinforced_at IS NULL OR last_reinforced_at < ${at})
         RETURNING *
@@ -1117,6 +1149,15 @@ export class PostgresMemoryStore implements MemoryStore {
     };
   }
 
+  /**
+   * [ADR 0165](../../../docs/decisions/0165-decay-activity-clock.md) 決めたこと5:
+   * `record.advanceActivityClock === true` のとき、`recalls` への INSERT と**同一
+   * トランザクションで** `tenant_activity.activity_seq` を `+1` する（UPSERT——行が
+   * 無ければ `activity_seq = 1` の行を作る。`ON CONFLICT DO UPDATE` の `EXCLUDED` は
+   * 使わない——`+1` は既存値に依存するため）。**`false`/未指定なら `UPDATE` を1本も
+   * 撃たない**（既定 `'wall'` のテナントでは、この行を一度も触らない、という ADR の
+   * 意味論をそのまま満たす）。
+   */
   async createRecall(ctx: Ctx, record: NewRecallRecord): Promise<RecallId> {
     // Issue #298 / ADR 0155: 新しく書く行は常に breakdownCaptured: true。「内訳を持たない
     // 新規行」は無い（recall-runtime.ts が finalMemories から毎回内訳を計算しているため）。
@@ -1124,7 +1165,7 @@ export class PostgresMemoryStore implements MemoryStore {
       breakdownCaptured: true,
       memories: record.returnedMemories,
     };
-    const result = await this.db.execute(sql`
+    const insertRecall = sql`
       INSERT INTO recalls (
         id, tenant_id, subject_id, query, budget, omitted, usage, index_band, explain,
         returned_memories, created_at
@@ -1140,8 +1181,23 @@ export class PostgresMemoryStore implements MemoryStore {
         now()
       )
       RETURNING id
-    `);
-    return (result.rows[0] as unknown as { id: string }).id;
+    `;
+
+    if (record.advanceActivityClock !== true) {
+      const result = await this.db.execute(insertRecall);
+      return (result.rows[0] as unknown as { id: string }).id;
+    }
+
+    return this.db.transaction(async (tx) => {
+      const result = await tx.execute(insertRecall);
+      await tx.execute(sql`
+        INSERT INTO tenant_activity (tenant_id, activity_seq, updated_at)
+        VALUES (${ctx.tenantId}, 1, now())
+        ON CONFLICT (tenant_id) DO UPDATE
+          SET activity_seq = tenant_activity.activity_seq + 1, updated_at = now()
+      `);
+      return (result.rows[0] as unknown as { id: string }).id;
+    });
   }
 
   /**
@@ -1583,31 +1639,85 @@ export class PostgresMemoryStore implements MemoryStore {
 }
 
 /**
- * ADR 0114: `archiveDecayed` が「どの行を archived にするか」を選ぶ `SELECT`。
+ * ADR 0114 / [ADR 0165](../../../docs/decisions/0165-decay-activity-clock.md) 決めたこと15:
+ * `archiveDecayed` が「どの行を archived にするか」を選ぶ `SELECT`。
  *
  * **本体と `EXPLAIN` の歯（`packages/postgres/src/__tests__/archive-decayed-index.test.ts`）
  * が、同じものを使うために切り出してある**——`buildRequeueEmbedTargetSelect`
  * （ADR 0079、直上）と同じ理由。テスト側に述語を書き写すと、本体の述語を直したときに
  * 歯だけが古い述語を測り続ける。
  *
- * 既存索引 `idx_memories_recall_gate`（`migrations/0001_init.sql`、
- * `(tenant_id, status, decay_floor_at)`、`WHERE status IN ('active','contested')`）を
- * そのまま使う——**新しい索引は追加しない**。ここでの述語 `status = 'active'` は
- * 部分索引の述語 `status IN ('active','contested')` を含意するため、プランナはこの
- * 索引を選べる。
+ * `opts.clock` で述語を切り替える（省略時は `'wall'`、本 ADR 以前と1バイトも変わらない）:
+ * - `'wall'`: `decay_floor_at <= opts.now`（既存索引 `idx_memories_recall_gate`
+ *   `(tenant_id, status, decay_floor_at)` を使う——**新しい索引は追加しない**。
+ *   `status = 'active'` は部分索引の述語 `status IN ('active','contested')` を含意する）。
+ * - `'activity'`: `decay_floor_seq IS NOT NULL AND decay_floor_seq <= opts.nowSeq`
+ *   （`idx_memories_recall_gate_seq` を使う。`opts.nowSeq` 必須）。
+ * - `'either'`: **AND**（両方の軸で沈んでいるものだけ掃く。ゲートの `'either'` が OR
+ *   なのとは逆——`ArchiveDecayedOptions.clock` の doc コメント「⭐」参照）。
  *
- * ⚠ **`decay_floor_at <= opts.now`（境界を含む）。**
- * `VectorFilter.decayFloorAtAfter`（`packages/core/src/interfaces/vector-store.ts`）は
- * 狭義の `>`（境界を含まない）——この非対称は意図である
- * （`MemoryStore.archiveDecayed` の doc コメント参照）。
+ * ⚠ **`decay_floor_at <= opts.now`・`decay_floor_seq <= opts.nowSeq`（どちらも境界を含む）。**
+ * `VectorFilter.decayFloorAtAfter`/`decayFloorSeqAfter`
+ * （`packages/core/src/interfaces/vector-store.ts`）は狭義の `>`（境界を含まない）——
+ * この非対称は意図である（`ArchiveDecayedOptions.clock` の doc コメント「境界の非対称」参照）。
+ *
+ * ⚠ **`ORDER BY decay_floor_at ASC` は `'activity'`/`'either'` でもそのまま使う。**
+ * `MemoryStore.archiveDecayed`/`ArchiveDecayedResult.archived` の doc コメントは
+ * ADR 0165 導入後も「`decay_floor_at` 昇順」としか書いておらず（`decay_floor_seq` 順の
+ * 契約は無い）、返り値の型 `{ memoryId; decayFloorAt: Date }` も `decayFloorSeq` を
+ * 持たない——`decay_floor_at` は常に non-null なので、この列で安定した順序を作れる。
  */
 export function buildArchiveDecayedTargetSelect(ctx: Ctx, opts: ArchiveDecayedOptions): SQL {
+  const clock = opts.clock ?? "wall";
+  const wallCondition = sql`decay_floor_at <= ${opts.now}`;
+  const activityCondition = (): SQL => {
+    if (opts.nowSeq === undefined) {
+      throw new Error(
+        `PostgresMemoryStore.archiveDecayed: opts.nowSeq is required when clock is "${clock}"`,
+      );
+    }
+    return sql`(decay_floor_seq IS NOT NULL AND decay_floor_seq <= ${opts.nowSeq})`;
+  };
+
+  let clockCondition: SQL;
+  if (clock === "wall") {
+    clockCondition = wallCondition;
+  } else if (clock === "activity") {
+    clockCondition = activityCondition();
+  } else {
+    // 'either': 掃引は AND（両方の軸で沈んでいるものだけ掃く。ゲートの OR とは逆向き）。
+    clockCondition = sql`(${wallCondition} AND ${activityCondition()})`;
+  }
+
+  // ⭐ [ADR 0165](../../../docs/decisions/0165-decay-activity-clock.md) 決めたこと8:
+  // **並べる軸は、掃く軸に合わせる。** `clock: 'activity'` のときに `decay_floor_at` で
+  // 並べると、`idx_memories_recall_gate_seq`（`(tenant_id, status, decay_floor_seq)`）は
+  // **並び替えを満たせないので選ばれず**、プランナは壁時計側の索引を走査して
+  // `decay_floor_seq` を Filter に落とす——【実測】2026-09-16、CI の
+  // `archive-decayed-index.test.ts`「適用可能性（活動時計）」が実際にこれで赤くなった
+  // （EXPLAIN 逐語: `Filter: ((decay_floor_seq IS NOT NULL) AND (decay_floor_seq <= '20000'::bigint))`）。
+  // ⟹ 活動軸で沈んだ行が疎なテナントでは、`limit` 件を見つけるまで壁時計順に大量の行を
+  // 走査することになる。**正しさではなく処理量の問題である。**
+  //
+  // 意味論の上でも、活動時計のテナントで「いちばん沈んだものから掃く」なら、
+  // 並べるべきは活動軸である。
+  //
+  // ⚠ **これは `ArchiveDecayedResult.archived` の並び順の契約を変えない。**
+  // 呼び出し元（`archiveDecayed`）の外側のクエリが、返す行を常に
+  // `ORDER BY decay_floor_at ASC, id ASC` に並べ直している。ここで変わるのは
+  // 「`limit` が効くときに *どの行を選ぶか*」だけである。
+  //
+  // `'either'` は壁時計のまま——掃引の条件が AND（両方の軸で沈んだものだけ）であり、
+  // どちらの索引も単独では述語を満たしきれない。ADR 決めたこと9 が `'either'` について
+  // 「1本の btree で範囲スキャンできるとは主張しない」と書いているのと同じ理由である。
+  const targetOrder = clock === "activity" ? sql`decay_floor_seq ASC` : sql`decay_floor_at ASC`;
+
   return sql`
     SELECT id FROM memories
     WHERE tenant_id = ${ctx.tenantId}
       AND status = 'active'
-      AND decay_floor_at <= ${opts.now}
-    ORDER BY decay_floor_at ASC, id ASC
+      AND ${clockCondition}
+    ORDER BY ${targetOrder}, id ASC
     LIMIT ${opts.limit}
     FOR UPDATE SKIP LOCKED`;
 }

@@ -1,4 +1,5 @@
 import {
+  bigint,
   index,
   integer,
   jsonb,
@@ -86,6 +87,14 @@ export const memories = pgTable(
     halfLifeHours: real("half_life_hours").notNull(),
     decayFloorAt: timestamp("decay_floor_at", { withTimezone: true, mode: "date" }).notNull(),
 
+    // ADR 0165（Issue #305）: 活動時計の3つ組。壁時計の
+    // recordedAt/lastReinforcedAt → decayFloorAt → halfLifeHours と1対1に対応する。
+    // すべて NULL 許容——NULL は「この軸には床が無い＝活動時計では沈まない」を意味する
+    // （migrations/0015_decay_activity_clock.sql）。
+    decayBaseSeq: bigint("decay_base_seq", { mode: "number" }),
+    decayFloorSeq: bigint("decay_floor_seq", { mode: "number" }),
+    halfLifeRecalls: real("half_life_recalls"),
+
     embeddingStatus: text("embedding_status").notNull(),
 
     purgedAt: timestamp("purged_at", { withTimezone: true, mode: "date" }), // Phase 2
@@ -156,6 +165,20 @@ export const tenantSettings = pgTable("tenant_settings", {
   defaultHalfLifeHours: real("default_half_life_hours").notNull(),
   eventRetentionDays: integer("event_retention_days"),
   taxonomyMode: text("taxonomy_mode").notNull(),
+  // ADR 0165（Issue #305）: どちらの時計を使うか、と活動時計の既定の半減期。
+  decayClock: text("decay_clock").notNull(),
+  defaultHalfLifeRecalls: real("default_half_life_recalls").notNull(),
   createdAt: timestamp("created_at", { withTimezone: true, mode: "date" }).notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true, mode: "date" }).notNull(),
+});
+
+/**
+ * ADR 0165（Issue #305）: テナントごとに1行の活動カウンタ。`tenant_settings` の行に
+ * 相乗りさせない（recall のたびの UPDATE が設定の読み出しまで行ロックで待たせないため。
+ * `migrations/0015_decay_activity_clock.sql` 参照）。
+ */
+export const tenantActivity = pgTable("tenant_activity", {
+  tenantId: text("tenant_id").primaryKey(),
+  activitySeq: bigint("activity_seq", { mode: "number" }).notNull(),
   updatedAt: timestamp("updated_at", { withTimezone: true, mode: "date" }).notNull(),
 });

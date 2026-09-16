@@ -1,4 +1,13 @@
-import type { Ctx, EmbeddingProvider, Memory, MemoryStore, Runtime } from "@mnemora/core";
+import type {
+  Ctx,
+  DecayClock,
+  EmbeddingProvider,
+  Memory,
+  MemoryStore,
+  Runtime,
+  TenantSettingsStore,
+} from "@mnemora/core";
+import { writeDecayClock } from "@mnemora/core";
 import type { PostgresClient } from "@mnemora/postgres";
 import {
   buildArchiveSweepCostRunJson,
@@ -75,6 +84,15 @@ export interface RunArchiveSweepCostOptions {
   commit: string | null;
   /** 既定は `DEFAULT_HAYSTACK_SIZE`(`probe-set.ts`、既存 `retrieval`/`consolidation-cost` と同じ既定)。 */
   haystackSize?: number;
+  /**
+   * `--decay-clock`(ADR 0165 決めたこと11)が指定されたときだけ渡す。`compare.ts` の
+   * `CompareOptions.decayClock` と同じ形——「書くかどうか」を1個の optional な値の
+   * 有無だけで判定できるようにするため、`store`/`clock` を1つの欄にまとめる。
+   * この bench 専用テナント(`tenantId`)1つに対して、ingest を始める前に
+   * `writeDecayClock`(`@mnemora/core`)で書き込む。**省略時はこの関数を一度も
+   * 呼ばない。**
+   */
+  decayClock?: { store: TenantSettingsStore; clock: DecayClock };
 }
 
 /**
@@ -238,6 +256,9 @@ export async function runArchiveSweepCost(
   options: RunArchiveSweepCostOptions,
 ): Promise<Extract<ArchiveSweepCostRunJson, { status: "measured" }>> {
   const ctx: Ctx = { tenantId: options.tenantId };
+  if (options.decayClock !== undefined) {
+    await writeDecayClock(options.decayClock.store, ctx, options.decayClock.clock);
+  }
   const haystackSize = options.haystackSize ?? DEFAULT_HAYSTACK_SIZE;
 
   const halfLifeHours = await setTenantHalfLifeHours(

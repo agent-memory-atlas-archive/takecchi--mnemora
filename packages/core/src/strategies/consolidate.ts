@@ -4,7 +4,7 @@ import { resolveDigest } from "../extraction.js";
 import type { PromptSpec } from "../interfaces/llm-provider.js";
 import type { Memory, NewMemory } from "../memory.js";
 import type { ScoreBreakdown } from "../recall.js";
-import { defaultDecayStrategy } from "./decay.js";
+import { defaultActivityDecayStrategy, defaultDecayStrategy } from "./decay.js";
 
 /**
  * `runtime.consolidate`（Issue #103、ADR 0089）が LLM に返させる構造化スキーマ。
@@ -56,6 +56,14 @@ export interface BuildConsolidatedMemoryParams {
   digestFallbackLength: number;
   halfLifeHours: number;
   now: Date;
+  /**
+   * [ADR 0165](../../../docs/decisions/0165-decay-activity-clock.md) 決めたこと3・5:
+   * `extraction.ts` の `BuildNewMemoryParams.activitySeq`/`halfLifeRecalls` と同じ形
+   * ——両方揃っているときだけ活動時計の3つ組を作る。`'wall'` のテナントでは
+   * 呼び出し側がどちらも渡さない。
+   */
+  activitySeq?: number;
+  halfLifeRecalls?: number;
 }
 
 /**
@@ -101,6 +109,19 @@ export function buildConsolidatedMemory(params: BuildConsolidatedMemoryParams): 
     halfLifeHours: params.halfLifeHours,
   });
 
+  // ADR 0165 決めたこと3・5: 活動時計の3つ組（`extraction.ts` の
+  // `buildNewMemoryFromCandidate` と同じ規律）。
+  const hasActivityInputs =
+    params.activitySeq !== undefined && params.halfLifeRecalls !== undefined;
+  const decayBaseSeq = hasActivityInputs ? params.activitySeq : undefined;
+  const decayFloorSeq = hasActivityInputs
+    ? defaultActivityDecayStrategy.floorAt({
+        baseSeq: params.activitySeq!,
+        strength: 1,
+        halfLifeRecalls: params.halfLifeRecalls!,
+      })
+    : undefined;
+
   return {
     tenantId: params.ctx.tenantId,
     subjectId,
@@ -118,6 +139,9 @@ export function buildConsolidatedMemory(params: BuildConsolidatedMemoryParams): 
     strength: 1,
     halfLifeHours: params.halfLifeHours,
     decayFloorAt,
+    decayBaseSeq,
+    decayFloorSeq,
+    halfLifeRecalls: hasActivityInputs ? params.halfLifeRecalls : undefined,
     embeddingStatus: "pending",
   };
 }

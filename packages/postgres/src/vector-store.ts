@@ -70,8 +70,32 @@ export class PostgresVectorStore implements VectorStore {
     if (opts.filter.status !== undefined) {
       conditions.push(sql`m.status = ANY(${sql.param(opts.filter.status)}::text[])`);
     }
-    if (opts.filter.decayFloorAtAfter !== undefined) {
-      conditions.push(sql`m.decay_floor_at > ${opts.filter.decayFloorAtAfter}`);
+    // ADR 0165 決めたこと1・4・12: 忘却ゲートの2軸。`decayFloorAnyAxis` が true かつ
+    // 両方の境界が渡されているときだけ OR で結ぶ（`VectorFilter.decayFloorAnyAxis` の doc
+    // 参照）。それ以外は今日どおり AND のまま個別に効く。
+    const decayFloorAtCondition =
+      opts.filter.decayFloorAtAfter !== undefined
+        ? sql`m.decay_floor_at > ${opts.filter.decayFloorAtAfter}`
+        : undefined;
+    // `decay_floor_seq IS NULL` の行は通す（ADR 0165 決めたこと4——NULL は「この軸には
+    // 床が無い＝活動時計では沈まない」）。
+    const decayFloorSeqCondition =
+      opts.filter.decayFloorSeqAfter !== undefined
+        ? sql`(m.decay_floor_seq IS NULL OR m.decay_floor_seq > ${opts.filter.decayFloorSeqAfter})`
+        : undefined;
+    if (
+      opts.filter.decayFloorAnyAxis === true &&
+      decayFloorAtCondition !== undefined &&
+      decayFloorSeqCondition !== undefined
+    ) {
+      conditions.push(sql`(${decayFloorAtCondition} OR ${decayFloorSeqCondition})`);
+    } else {
+      if (decayFloorAtCondition !== undefined) {
+        conditions.push(decayFloorAtCondition);
+      }
+      if (decayFloorSeqCondition !== undefined) {
+        conditions.push(decayFloorSeqCondition);
+      }
     }
     if (opts.filter.subjectId !== undefined) {
       conditions.push(sql`m.subject_id = ${opts.filter.subjectId}`);
