@@ -167,12 +167,42 @@ tag から `scripts/apply-release-version.mjs` が runner の作業ツリー上�
 **⚠ 0.1〜0.4 がすべて通っても、次の3つは何も確かめられていない。**
 **当日の判断材料として読むための再掲であり、通過条件は無い。**
 
+⚠ **2026-09-17 の実測で、3つとも当初より状況が動いた。**内容は違う形で動いている——
+まとめて「全部確認できた」と読まないこと。
+
+- **3番目（lockfile 不整合）**は「CI と同じ条件を手元で再現していなかっただけ」の不安で、
+  **再現して測ったら通った**（詳細は3番目の項目と §2.3 を見ること）。
+- **1・2（provenance / 信頼発行元）**は、**この場で新しく確認できるようになったわけではない**
+  ——`v1.0.0` という新しい tag を実際に打つことも、npmjs.com の画面を直接見ることも、
+  引き続きこの器・このタスクの範囲外である。**動いたのは「過去の本番 run と registry の
+  実測データを読む」という、別の角度からの確認である**——`gh run list` と `npm view` は
+  この器からでも引ける。その結果、**「一度も確かめられていない」という記述は もう正確ではない**
+  ——**過去に何度も本番で通った実績がある**ことが分かった。**ただし「次の `v1.0.0` でも
+  必ず通る」ことまでは保証しない**——詳細は1・2番目の項目を見ること。
+
 1. **`npm publish --provenance` が通ること自体**（`publish.yml:227`）。
    **本番 tag を打つまで分からない。**⟹ **予行（`workflow_dispatch` / `dry_run: true`）が
    全ステップ success でも、これは何も保証しない**——`--dry-run` は書き込みの要求を投げないので、
    認証・認可・存在検査・サーバ側の検証を**構造的に**見られない（ADR 0067 逐語。**§2.2**）。
    実測の裏付けも §2.2 に在る（予行は全ステップ success、同じ commit の本番は
    `npm error 403 … OIDC permission denied for this action` で failure）。
+
+   **⭐ 追記（2026-09-17）— 「本番 tag を打つまで分からない」はもう正しくない。**
+   `v0.1.5`〜`v0.2.0` で、**すでに何度も本番 tag を打っている。**【実測】
+   `gh run list --workflow=publish.yml --limit 10` を引くと、`release` 契機の本番 run が
+   **6回連続 success**（`v0.1.5`・`v0.1.6`・`v0.1.7`・`v0.1.8`・`v0.1.9`・`v0.2.0`。
+   `v0.1.4` だけ failure）。さらに `npm view @mnemora/<pkg>@0.2.0 --json` を6パッケージ
+   すべてに対して引くと、**6本とも** `dist.attestations` に
+   `"provenance":{"predicateType":"https://slsa.dev/provenance/v1"}` が付いている——
+   `publish.yml:227` が `--provenance` を必ず付ける唯一の経路である以上、**この6本は
+   実際に OIDC 経由の `npm publish --provenance` を通っている。**⟹ **「一度も通ったことが
+   ない」のではなく、「複数回、実際に通っている」。**
+   ⚠ **ただし ADR 0067 の構造的な指摘そのものは変わらず生きている**——`--dry-run` が
+   書き込みの要求を投げないので認証・認可・存在検査・サーバ側の検証を構造的に見られない
+   ことは事実のままであり、**予行の green が本番を保証しないという結論は今も正しい。**
+   **残る未知は「`v1.0.0` という新しい tag でもう一度同じ経路が通るか」だけである**
+   ——過去に何度も通ったことは、次も通ることを保証しない（信頼発行元の設定は
+   `v0.2.0` 以降に変更されているかもしれない。下の2番目の追記を見ること）。
 2. **npm 側の信頼発行元（Trusted Publishing）の設定。**
    **この器から npmjs.com の画面は見られない**——**§4.2** の表（org=`takecchi` / repo=`mnemora` /
    workflow filename=`publish.yml` / 「直接 `npm publish` を許可」）を、**当日オーナーが
@@ -180,13 +210,45 @@ tag から `scripts/apply-release-version.mjs` が runner の作業ツリー上�
    （§4.2）。⚠ 特に `@mnemora/anthropic` と `@mnemora/local-embedding` は初版を手元 bootstrap で
    出した経緯があり、**現在 OIDC 経路に乗っているかの後続記録が見つかっていない**
    （末尾「現物を読んでも分からなかった点」5）。
-3. **lockfile 不整合。**§2.3 の手元の `pack:check` 実測は、**pnpm 12.4.2 ＋ 素の `pnpm install`**
-   で走らせており、CI が使う **corepack ＋ `packageManager` の `pnpm@11.25.0` ＋
-   `pnpm install --frozen-lockfile`** とは条件が違う。⟹ **その実測は lockfile について何も見ていない**
-   （§2.3「⚠ この実測が言っていないこと」）。赤くなるとすれば §1.2 のステップ5である。
-   ⚠ **0.1 の CI は `pnpm install --frozen-lockfile` で入れている**ため（`ci.yml:25` ほか。
-   【読んで確かめた】）、**0.1 が緑なら その sha については lockfile も一度通っている**——
-   **ただし §2.3 が「手元の実測では見ていない」と書いていることは、そのまま変わらない。**
+
+   **⭐ 追記（2026-09-17）— 「誰も確かめていない」から「機能していることは実証されている」へ。**
+   **設定の値そのものは、今回もこの器から見ていない**（§4.2 の「npm の画面で見る」の
+   価値はそのまま残る——下記参照）。**だが、その設定が現に機能していることは、上の
+   1番目の追記が引いた「6回連続 success ＋ 6本とも provenance あり」という実測で
+   実証されている。**信頼発行元が正しく設定されていなければ、`publish.yml:227` の
+   `npm publish --provenance` は §2.2 が引用した実例と同じ
+   `403 ... OIDC permission denied` で落ちる——**落ちずに6回連続で通り、6本とも
+   provenance が付いたという事実は、org/repo/workflow filename/直接publish許可が
+   `v0.2.0`（2026-09-16）の時点で正しく機能していたことの**強い状況証拠である。
+   ⟹ **残るリスクは「設定を誰も確かめていない」ではなく、「`v0.2.0` 以降に設定が
+   変更されていないか」だけに縮む。**§4.2 の確認項目はこの縮小を反映して当日の
+   確認を省いてよい、という意味ではない——**「保存時に値を検証しない」（§4.2）以上、
+   画面上の値そのものを目で見て確認する価値は消えていない。**
+   ⚠ **`@mnemora/anthropic` と `@mnemora/local-embedding` が現在 OIDC 経路に乗っているか
+   という懸念も、これで実証的に解消する。**【実測】`npm view` で両パッケージの版ごとの
+   `dist.attestations` を引くと、`@mnemora/anthropic` は `0.1.2` に provenance が**無く**
+   `0.1.3` 以降**すべて**（`0.2.0` まで）に**在り**、`@mnemora/local-embedding` は `0.1.4` に
+   provenance が**無く** `0.1.5` 以降**すべて**（`0.2.0` まで）に**在る**。⟹
+   **2つとも、初版こそ bootstrap だったが、次の版から現在（`0.2.0`）まで一貫して
+   OIDC 経路に乗り続けている。**詳細と時刻の突き合わせは末尾「現物を読んでも
+   分からなかった点」5の追記を見ること。
+3. **lockfile 不整合 → 2026-09-17、CI と同じ条件で実測済み【実測】。**
+   2026-09-16 までの §2.3 の実測は **pnpm 12.4.2 ＋ 素の `pnpm install`** で走らせており、
+   CI が使う **corepack ＋ `packageManager` の `pnpm@11.25.0` ＋ `pnpm install --frozen-lockfile`**
+   とは条件が違ったため、「lockfile について何も見ていない」状態だった。
+   2026-09-17、この器で `corepack enable` した上で `pnpm --version` が **`11.25.0`**
+   （`/usr/local/bin/pnpm` が corepack のシムであり、`package.json` の `packageManager` の値
+   `pnpm@11.25.0` を解決していることを確認済み）であることを確かめてから
+   `pnpm install --frozen-lockfile` を実行し、**exit 0・`ERR_PNPM_OUTDATED_LOCKFILE` 等のエラー無し**
+   だった（`origin/main` = `9e13ac874d36abd88d23200cd3df9d234dc0acd2`。詳細は §2.3
+   「実際に走らせた結果【実測】」の2026-09-17分）。⟹ **この commit については、lockfile と
+   各 `package.json` の不整合は無い。**
+   ⚠ ただし**その時点の1 commit を実測しただけ**であり、「今後もう二度と壊れない」ことを
+   意味しない——`pnpm-lock.yaml` や各 `package.json` に手を入れる commit が出るたびに、
+   また `--frozen-lockfile` が赤くなりうる余地は残る。赤くなるとすれば §1.2 のステップ5である。
+   ⚠ **0.1 の CI も `pnpm install --frozen-lockfile` で入れている**ため（`ci.yml:25` ほか。
+   【読んで確かめた】）、**0.1 が緑ならその sha については lockfile も一度通っている**——
+   今回の実測は、それを**この器（CI とは別の環境）でも独立に再現した**という位置づけである。
 
 **⟹ この3つは「止まる条件」ではなく、「失敗したときに何を疑うか」を先に読んでおく項目である。**
 失敗したときの兆候と回復は **§3** と **§4**、確認方法そのものが分かっていない点は
@@ -519,20 +581,57 @@ Actions → `Publish` → `Run workflow` → `dry_run` を `true`（既定）の
 これは「いまの並びを支えているのは依存の向きだけ（＝当時の未公開の経緯はもう効いていない）」という
 `scripts/publish-targets.mjs` のコメントと整合する。
 
-**⚠ この実測が言っていないこと**:
+#### 追記【実測】（2026-09-17、CI と同じ条件で）
 
-- **CI と同じ条件で走らせたのではない**【未検証】。pnpm は **12.4.2** で、CI が corepack で使う
-  `packageManager` の **`11.25.0`** とは違う。また `pnpm install --frozen-lockfile` ではなく
-  ただの `pnpm install` で入れた。⟹ **lockfile と `package.json` の不整合
-  （§1.2 のステップ5で赤くなりうる箇所）は、この実測では何も見ていない。**
-  **⟹ 上の `pack:check` の ✔ は、この2点の外側までは届かない。**当日の CI は
-  `packageManager` で pnpm の版を固定し `--frozen-lockfile` で入れるので、
-  **そこだけは手元の実測と条件が違う——lockfile 由来の赤は、当日まで分からない。**
-- **版は作業ツリーの `0.1.1` のままである。**`v1.0.0` の tag で
-  `apply-release-version.mjs` が版を書き換えた後の状態では `pack:check` を走らせていない。
-- `pack:check` 以外の門（`typecheck` / `lint` / `format:check` / `test` / `build`）は走らせていない。
-- **上の「何をカバーしないか」は1つも解消していない。**型の互換性と registry の状態は
-  【未検証】のままである。**この門が緑でも、publish が通ることは何も保証されない。**
+**上の実測（2026-09-16）は、pnpm の版とインストール方法が CI と違っていた。**
+今回はその差を埋めて測り直した。`origin/main` = `9e13ac874d36abd88d23200cd3df9d234dc0acd2`
+の、clean な作業ツリーで実行した。
+
+環境（前回との違いだけ記す。それ以外は前回と同じ）:
+
+| | 値 |
+|---|---|
+| `corepack enable` | 実行済み（exit 0） |
+| `pnpm --version` | **`11.25.0`**（実出力そのまま）。`/usr/local/bin/pnpm` が `../lib/node_modules/corepack/dist/pnpm.js` へのシムであることを `ls -la` で確認し、`package.json` の `"packageManager": "pnpm@11.25.0"`（10行目）と一致することを確かめた |
+| インストール | `pnpm install --frozen-lockfile`（前回はただの `pnpm install`） |
+
+結果:
+
+- **`pnpm install --frozen-lockfile` — exit 0。**
+  `ERR_PNPM_OUTDATED_LOCKFILE` 等のエラーは出なかった。出力は
+  `Lockfile passes supply-chain policies` → `Lockfile is up to date, resolution step is skipped`
+  → `Packages: +207` で、前回の素の `pnpm install` と同じ207件。
+  `packages/postgres/dist/bin/migrate.js` 未ビルドによる bin リンクの `WARN` が3本出るが、
+  これは前回（pnpm 12.4.2・素の `pnpm install`）でも出ていたのと同種のもので、
+  `prepack` 前の想定内の warning であり lockfile とは無関係。
+  ⟹ **`9e13ac874d36abd88d23200cd3df9d234dc0acd2` の時点で、lockfile と各 `package.json` の
+  不整合は無い。CI と同じ条件（corepack ＋ `packageManager` の `pnpm@11.25.0` ＋
+  `--frozen-lockfile`）で、この器でも独立に確認した。**
+- **`pnpm run pack:check`（同じ pnpm 11.25.0 の環境）— exit 0、違反0件。**
+  前回（pnpm 12.4.2）と同じく `✔ publish 梱包の門を通りました。`。
+- **`apply-release-version.mjs` を `RELEASE_TAG=v1.0.0 GITHUB_PRERELEASE=false` で実行 —
+  exit 0。**6パッケージとも `0.1.1` → `1.0.0` に変わり、`git diff` は各ファイルとも
+  `version` の1行だけだった（§1.3 の2026-09-16実測と同じ挙動を pnpm 11.25.0 環境で再確認）。
+  `$GITHUB_OUTPUT` には `version=1.0.0` / `npm_tag=latest` が書かれた。
+- **§2.3「この実測が言っていないこと」が指摘していた穴の1つを埋めた**: 版を `1.0.0` に
+  書き換えたその状態のまま `pnpm run pack:check` を実行し、**exit 0、
+  `✔ publish 梱包の門を通りました。`** だった（違反0件、6パッケージとも通過）。
+  ⟹ **`v1.0.0` へ版を書き換えた後の状態でも `pack:check` は通る**ことを、この器で確認した。
+- 確認後、`git checkout -- .` で作業ツリーを戻し、`git status` が
+  `nothing to commit, working tree clean` であることを確認した。commit・push はしていない。
+
+**⚠ この追記実測が言っていないこと**:
+
+- **今回測ったのは `9e13ac874d36abd88d23200cd3df9d234dc0acd2` という1つの commit についてだけである。**
+  以後 `pnpm-lock.yaml` や各 `package.json` に手を入れる commit が出れば、また
+  `--frozen-lockfile` が赤くなりうる。「一度通った」は「今後も通り続ける」を意味しない。
+  当日、tag を切る直前の `origin/main` の sha で §0.1 の CI が緑であることを見ることに変わりはない。
+- `typecheck` / `lint` / `format:check` / `test` / `build` は今回も走らせていない
+  （オーナー方針により `pnpm run test` の全体実行はしない。CI に任せる）。
+- **§2.3 の「何をカバーしないか」は今回も1つも解消していない。**型の互換性と registry の状態
+  （信頼発行元の設定・パッケージの存在・直接 publish の許可）は【未検証】のままである。
+  **この門が緑でも、publish が通ることは何も保証されない。**§0.5 の項目1・2は、
+  この追記でも変わらず未検証のままである。
 
 ---
 
@@ -881,6 +980,49 @@ done
    通常の OIDC 経路（信頼発行元設定済み・直接publish許可済み）に乗っているか。**
    ADR 0072・0096 の時点では2つとも「手元からの bootstrap」を経ており、その後
    信頼発行元が正しく設定されたかどうかの後続記録をこの作業者は見つけられなかった。
+
+   **⭐ 追記（2026-09-17）— 実測で埋まった。**【実測】各パッケージの`dist.attestations`
+   （`npm view <spec>@<version> --json`）と公開時刻（`npm view <pkg> time --json`）を、
+   最初の数版について引いた:
+
+   | パッケージ＠版 | provenance | npm 上の公開時刻 |
+   |---|---|---|
+   | `@mnemora/core@0.1.0` | **無し** | 2026-09-08T08:58:42Z |
+   | `@mnemora/anthropic@0.1.2` | **無し** | 2026-09-09T07:26:52Z |
+   | `@mnemora/anthropic@0.1.3` | **在り** | 2026-09-09T07:52:59Z |
+   | `@mnemora/local-embedding@0.1.4` | **無し** | 2026-09-10T08:05:57Z |
+   | `@mnemora/local-embedding@0.1.5` | **在り** | 2026-09-11T09:53:15Z |
+
+   `publish.yml:227` は `--provenance` を必ず付ける唯一の publish 経路なので、
+   **provenance の有無が「publish.yml（OIDC 経路）を通ったか」の指紋になっている**
+   【実測から読める事実】。この指紋を `gh run list --workflow=publish.yml` の run 履歴と
+   突き合わせると（`gh run list --workflow=publish.yml --limit 30` で確認）:
+
+   - `v0.1.2` の `release` run（`34307628422`、2026-09-09T03:34:10Z 開始、success）は
+     `@mnemora/anthropic@0.1.2` の公開時刻（07:26:52Z）より**後ではない**——run の開始が
+     03:34、公開が07:26で、この run の対象ではありえない。実際、`gh run list` を遡ると
+     `@mnemora/anthropic` を含む6パッケージ構成になったのは `v0.1.3` の run
+     （`34325940046`、2026-09-09T07:50:45Z 開始、2m17s で終了 ≈ 07:53:02Z、success）が
+     最初であり、終了予想時刻は公開時刻 07:52:59Z とほぼ同時（数秒差）だった。
+     それより前の run には `anthropic` が含まれていない
+     （【未検証・理屈上こうなるはず】——run 内で実際にどのパッケージが対象だったかは
+     ログを1本ずつ開いて確認したわけではなく、公開時刻と run の開始・終了時刻の近さから
+     推論している）。
+   - `@mnemora/local-embedding@0.1.4` の公開（08:05:57Z）は、`v0.1.4` の `release` run
+     （`34452890407`、2026-09-10T08:00:53Z 開始、**failure**、2m52sで終了 ≈ 08:03:45Z）が
+     **落ちた後**に起きている。ADR 0096 が記す「OIDC で出せず手元から出した」という記述と、
+     この時刻の並びは**矛盾しない**（【実測】は時刻の並びのみ。**誰が・どうやって
+     手元から出したかは、この器からは見えない**——ここは【未検証・理屈上こうなるはず】）。
+
+   ⟹ **provenance の有無で見る限り、両パッケージとも「初版だけ bootstrap、次の版
+   （`anthropic` は `0.1.3`、`local-embedding` は `0.1.5`）から OIDC 経路」という
+   `@mnemora/core` 等と同型の経緯を辿っており、その状態が現在の最新版（`0.2.0`。
+   §0.5 項目1・2の追記で確認した6パッケージとも provenance あり、に含まれる）まで
+   途切れず続いている。**⟹ **§0.5 項目2 が挙げていた「現在 OIDC 経路に乗っているか」
+   という懸念は、これで実証的に解消する。**
+   ⚠ **ただし「誰が・どのコマンドで手元 bootstrap を行ったか」の記録は、依然として
+   見つかっていない。**ここは解けていない——上の表は「いつ・provenance の有無」までしか
+   語らない。
 6. **今この repo の6パッケージの `package.json` の `version` が `0.1.1` であること**
    （この作業者がこの器で確認した実測）と、**npm registry 上の実際の最新版が
    何であるか**の関係。ADR 0070・0096 を読む限り、少なくとも一時点では registry 側が
