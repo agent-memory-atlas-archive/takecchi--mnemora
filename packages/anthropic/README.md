@@ -131,6 +131,30 @@ try {
 [`@mnemora/core`](../core/README.md) を参照。両実装が同じ契約に従うことは
 `src/__tests__/provider-parity.test.ts` で検査している。
 
+## 🔴 このアダプタは、適合テストに一度も当たっていない
+
+**採用する前に読むこと。**
+
+- **`LLMProvider` の適合テスト（conformance suite）が、そもそも存在しない**
+  （`@mnemora/testkit` に `describeLLMProviderConformance` は無い）。
+  ⟹ `@mnemora/openai` の `OpenAILLMProvider` も同じ状態である。
+  **`src/__tests__/provider-parity.test.ts` は2実装を突き合わせる歯であって、
+  契約そのものの歯ではない。**
+- **実 API（Anthropic）にも、一度も当てていない。**`src/__tests__/live.anthropic.test.ts`
+  の2本は `ANTHROPIC_API_KEY` と `MNEMORA_LIVE_ANTHROPIC` の二重 opt-in で、
+  **CI にはどちらの環境変数も無い。**
+- **⚠ これは「これから起きること」ではない。**`@mnemora/anthropic` は
+  **`0.1.2` から `0.2.0` まで、既に npm へ公開されている**
+  【実測 2026-09-17: `npm view @mnemora/anthropic versions` = 9版、`latest` = `0.2.0`】。
+  ⟹ **いま入れている人が居るかもしれない、という前提で読むこと。**
+
+**⛔ これは「動かない」という意味ではない。**このパッケージには固有の検査が在る
+（`llm-provider.test.ts` / `provider-parity.test.ts` / `json-schema.test.ts` /
+`refusal.test.ts`）。**足りないのは、adapter 非依存の契約を横断で測る層である。**
+
+何が測られていて何が測られていないかの全体像は
+**[docs/conformance.md](../../docs/conformance.md)** に在る。
+
 ## もっと詳しく
 
 - [docs/architecture.md](../../docs/architecture.md) §3.8・§4・§5.4 — `LLMProvider` の契約と provider 構成
