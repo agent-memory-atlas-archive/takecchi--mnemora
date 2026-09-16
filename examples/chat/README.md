@@ -86,6 +86,10 @@ pnpm --filter @mnemora/example-chat run test:db
 `recall()` の返り値のうち roadmap.md 段階7の完了条件そのものである `omitted` と
 `usage` を画面に出し、さらに小さな `budget`（`maxMemoryChars`）を渡した場合に実際に候補が
 落ちること（`omitted` に `budget_dropped` が現れ、`memories` の件数が減ること）を示す。
+続けて、実際にプロンプトへ積んだ Memory を `observe({ kind: 'memory_usage' })` で
+mnemora へ使用報告する——`reinforce` を実アプリで発火させる実演であり
+（[ADR 0163](../../docs/decisions/0163-memory-usage-reporting-example-chat.md)）、
+画面には `[memory_usage] N 件の Memory を使用報告した` と出る。
 
 ---
 
@@ -1174,6 +1178,49 @@ Job Summary へ内訳を残す。**⛔ 門ではない**——`retrieval-quality
 ⚠ **基準値ファイルはまだ無い**（`examples/chat/time-term-baseline.json` は本 PR では
 作らない）。値を捏造しないため——最初の CI 実行で得られる artifact を、後続 PR で基準値に
 する（`scripts/time-term-summary.mjs` は `--baseline` を省略しても動く）。
+
+---
+
+## `validity`: `validAt` ゲートが候補の有無をどう動かすかを測る（Issue #280、Issue #202 第2弾）
+
+**何を測るか**は [ADR 0164](../../docs/decisions/0164-valid-from-until-recall.md) を
+見ること（`src/validity-probe-set.ts`・`src/validity-arm.ts`）。要約: 「内容は同一・
+`validFrom`/`validUntil` だけ違う」2 probe のペアを使い、`RecallQuery.validAt`
+ゲートが**候補として返るかどうか自体**をどう動かすかを測る——`time-term` が順位
+（`outcome`）を測るのに対し、`validity` は**その記憶が候補に残るか、`omitted` に
+`expired`/`not_yet_valid` として落ちるか**を測る点が異なる。
+
+- `address` probe: 「去年の住所」（期限切れ）と「今の住所」のペア。既定
+  （`validAt` 省略 = いま）では「今の住所」だけが返り、過去の `validAt` を指定すると
+  逆に「去年の住所」が返って「今の住所」が `not_yet_valid` で落ちる。
+- `subscription-plan` probe: 「今のプラン」と「来月からの新プラン」のペア。既定では
+  「今のプラン」だけが返り、新プランは `not_yet_valid` で落ちる。
+- 両 probe とも `includeOutsideValidity: true`（ゲートの明示的な opt-out）で両方
+  返ることも測る。
+
+**書く経路は `Runtime.observe()` の `validFrom`/`validUntil`**（`MemoryStore` を直接
+叩かない）——issue が要求する「書き口が端から端まで通る」ことの実演を兼ねる。
+
+**provider は `deterministic` に固定される**（`time-term` と同じ理由——ペアの本文が
+厳密に同一なので `similarity` は構成上定数になり、`validFrom`/`validUntil` 由来の
+違いだけを見る）。
+
+```bash
+DATABASE_URL=... MNEMORA_VALIDITY_JSON=<path> pnpm --filter @mnemora/example-chat run validity
+```
+
+`MNEMORA_VALIDITY_JSON` を設定すると、2 probe すべての結果を機械可読な JSON
+（`examples/chat/src/validity-json.ts` の `buildValidityJson`）として書き出す。
+**未設定なら挙動を変えない**（`time-term`/`retrieval` と同じ規約）。
+
+CI の `validity` ジョブ（`ci.yml`）がこれを実行する。**⛔ 門ではない**——標本が
+probe 2件であり、`time-term`/`identifier-probes` と同じ理由（ADR 0088 §2.1）で
+閾値判定に足る母数ではない。**`compare`（ADR 0133、required 門）とは無関係**——
+`examples/chat/compare-baseline.json`/`scenario.ts`/`compare.ts` のいずれにも
+配線していない。
+
+⚠ **基準値ファイルはまだ無い**（`time-term` と同じ理由——最初の CI 実行で得られる
+artifact を、後続の PR で基準値にする）。
 
 ---
 

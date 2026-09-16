@@ -275,10 +275,37 @@
       `decay_clock` の既定が `'wall'` から動く日（「決めたこと」10）には、
       **この `?` を外すかどうかを一緒に判断すること。**
 
-      ⟹ ⭐ **この PR 全体が非破壊になる。** 公開 interface に対する変更は
-      「省略可能なフィールド・省略可能なメソッドの追加」だけであり、既存の実装・呼び出し側は
-      1行も直さずにコンパイルが通る。**`RecallRuntimeDeps.tenantSettingsStore` も同じ理由で
-      省略可能にした**（省略時は `'wall'` 固定として動く）。
+      ⟹ ⭐ **`@mnemora/core` の公開 interface に対する変更は、すべて非破壊である。**
+      「省略可能なフィールド・省略可能なメソッド・省略可能な末尾引数の追加」だけであり、
+      既存の実装・呼び出し側は1行も直さずにコンパイルが通る。
+      **`RecallRuntimeDeps.tenantSettingsStore` も同じ理由で省略可能にした**
+      （省略時は `'wall'` 固定として動く）。
+
+      ## 🔴 訂正（2026-09-16、v1.0 のリリース準備の棚卸しで判明した）
+
+      **この節の初版は「⟹ ⭐ この PR 全体が非破壊になる」と書いていた。これは誤りである。**
+
+      **`@mnemora/testkit` に破壊的変更が1件ある**——`TenantSettingsStoreConformanceOptions`
+      （`packages/testkit/src/tenant-settings-store-conformance.ts`）に、**必須**フィールド
+      `supportsDecayClock: boolean` を足している。⟹ 外部の adapter パッケージから
+      `describeTenantSettingsStoreConformance(...)` を呼んでいる側は、オブジェクトリテラルに
+      必須プロパティが無くなって**コンパイルできなくなる。**
+
+      **⚠ なぜ間違えたか**: `@mnemora/core` 側（`TenantSettingsStore` の4メソッド・
+      `Memory` の新フィールド・`reinforce` の末尾引数・`RecallRuntimeDeps`）を
+      すべて省略可能に設計して非破壊を達成したところで、**同じ PR が触っている
+      `packages/testkit` を検討の対象から落とした。**
+      ⟹ ⭐ **「非破壊である」と主張する範囲は、PR が触るすべての publish 対象パッケージで
+      あって、いちばん考えた1つではない。**
+
+      **⛔ ただしコードは直さない。** repo の慣習を確かめたところ、適合スイートの
+      `supports*` フラグは**8つとも必須**である（`supportsGetVectors` /
+      `supportsArchiveDecayed` / `supportsPurgeMemory` / `supportsMarkContestedPair` …）。
+      **呼ぶ側に「この adapter が対応しているか」を明示させるのが意図された設計**であり、
+      省略可能にすると歯が黙って飛ぶようになる。⟹ `supportsDecayClock` が必須なのは
+      慣習どおりであって、**誤っていたのは記述のほうである。**
+
+      ⟹ この破壊的変更は `docs/migration-v1.md`（v1.0 の移行ガイド）に記載した。
 
       ⚠ **カウンタを進める口（`bumpActivitySeq`）は、ここに置けない。**
       本 ADR の初版はここに置くと書いていたが、それは「決めたこと」5（`activity_seq` の前進は

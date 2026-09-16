@@ -35,7 +35,8 @@ npm i -D @mnemora/testkit @mnemora/core vitest
 append-only・並び順・外部キー相当の契約などを検査できる。**以下は `EventStore` を
 自作した場合の例（`describeEventStoreConformance` を使う。他に
 `describeMemoryStoreConformance` / `describeVectorStoreConformance` /
-`describeOutboxStoreConformance` / `describeTenantSettingsStoreConformance` がある)。
+`describeLexicalStoreConformance` / `describeOutboxStoreConformance` /
+`describeTenantSettingsStoreConformance` / `describeEmbeddingProviderConformance` がある)。
 
 ```ts
 // my-event-store.test.ts

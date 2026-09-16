@@ -71,7 +71,8 @@ await runtime.forget(ctx, { memoryIds: [] });
 ## いまの状態
 
 **Phase 1（MVP）の実装が一巡した。**`packages/core`（型・interface・runtime）、`packages/postgres`、
-`packages/openai`、`packages/testkit`（適合テスト）、`examples/chat`（サンプル CLI）がある。
+`packages/openai`、`packages/anthropic`、`packages/local-embedding`、
+`packages/testkit`（適合テスト）、`examples/chat`（サンプル CLI）がある。
 Phase 1 の範囲と、そこに入れなかったものは [docs/roadmap.md](./docs/roadmap.md) を参照。
 
 **まだ 0.x であり、公開 API は動く。**名前は `mnemora`（`@mnemora/*`）に確定しており、
@@ -98,15 +99,17 @@ Phase 1 の範囲と、そこに入れなかったものは [docs/roadmap.md](./
 **`recall()` が「必要な記憶だけを思い出せているか」を、CI で毎 PR 測っている。**
 API キーは要らない——**実 API が返した埋め込みの記録を再生している**（下の「⚠ 『実 embedding』の意味」）。
 
-| ジョブ（[.github/workflows/ci.yml](./.github/workflows/ci.yml)） | 何を測るか | 埋め込み |
+| ジョブ（[.github/workflows/ci.yml](./.github/workflows/ci.yml)、`jobs.<キー>`） | 何を測るか | 埋め込み |
 |---|---|---|
-| 想起の質（[ADR 0088](./docs/decisions/0088-retrieval-quality-measured-in-ci.md)）`ci.yml:453` | 意味的関連性 probe **7件**の `hit@1` / `hit@10` / MRR | 記録の再生 |
-| 識別子・固有名詞 probe（[ADR 0094](./docs/decisions/0094-identifier-probes-local-embedding.md)）`ci.yml:566` | 識別子・固有名詞 probe **12件** | `@mnemora/local-embedding`（プロセス内推論） |
-| 統合の費用（[ADR 0101](./docs/decisions/0101-how-to-measure-whether-consolidate-moved-the-north-star.md)）`ci.yml:692` | `consolidate()` が「載る量」に効いたか | 同上 |
+| 想起の質（[ADR 0088](./docs/decisions/0088-retrieval-quality-measured-in-ci.md)）`retrieval-quality` | 意味的関連性 probe **7件**の `hit@1` / `hit@10` / MRR | 記録の再生 |
+| 識別子・固有名詞 probe（[ADR 0094](./docs/decisions/0094-identifier-probes-local-embedding.md)）`identifier-probes` | 識別子・固有名詞 probe **12件** | `@mnemora/local-embedding`（プロセス内推論） |
+| 統合の費用（[ADR 0101](./docs/decisions/0101-how-to-measure-whether-consolidate-moved-the-north-star.md)）`consolidation-cost` | `consolidate()` が「載る量」に効いたか | 同上 |
 
-引き金は `ci.yml:3-6` の `push: branches: [main]` と `pull_request` である——
-**`schedule` ではなく、毎 PR 走る。**値は **Job Summary**（`ci.yml:553`）と
-成果物 `retrieval-quality.json`（`ci.yml:560`）に残り、
+**⚠ 行番号ではなくジョブ名（`jobs.<キー>`）で引く。**ジョブが増減すると行番号は動くが、
+ジョブ名は動かない——`.github/workflows/ci.yml` の該当ジョブを `grep -n "^  <ジョブ名>:"`
+で探すこと。引き金は `on.push.branches: [main]` と `on.pull_request` である——
+**`schedule` ではなく、毎 PR 走る。**値は `retrieval-quality` ジョブの **Job Summary**と
+成果物 `retrieval-quality.json`（同ジョブの `actions/upload-artifact` ステップ）に残り、
 `examples/chat/retrieval-baseline.json` の基準値と突き合わされる。
 **基準値は手で更新する**（CI が書き換えることはない）。
 
@@ -117,7 +120,7 @@ API キーは要らない——**実 API が返した埋め込みの記録を再
 - ⛔ **実 API を毎回叩いてはいない。**CI は `OPENAI_API_KEY` を持たない。
 - ✅ **実 API が返した埋め込みを再生している。**`examples/chat/cassettes/retrieval.json`
   （`text-embedding-3-small` / 256次元 / 152件）を `MNEMORA_PROVIDER_SOURCE=recorded`
-  （`ci.yml:513`）で再生する。
+  （`retrieval-quality` ジョブの env）で再生する。
 
 **⟹ 鍵の無い CI でも、擬似物ではない埋め込みで測れる。**
 （擬似 provider で測った想起の質は性能について何も言っていない。3層の区別は [AGENTS.md](./AGENTS.md) を見ること。）

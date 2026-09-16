@@ -181,6 +181,7 @@ alteroid (github.com/takecchi/alteroid) を根拠として引く箇所は、確�
 | [0166](./0166-recall-footprint-association-term.md) | `recall-footprint` の見積もりに連想枠の項を足す — 新しい自由係数は増やさず、構造から導く（PR #336 / ADR 0168 の前提） | 採用 (2026-09) |
 | [0167](./0167-association-getvectors-order-nondeterminism.md) | 連想枠（段3.5）の非決定性の原因は HNSW ではなく `getVectors()` の返却順依存だった — アンカー処理順をランク順に固定して直す（Issue #316） | 採用 (2026-09) |
 | [0168](./0168-examples-chat-uses-association.md) | `examples/chat` が recall() の連想枠を既定で使う — `maxCount=10`、既定 on は別の判断として分離する（Issue #291） | 採用 (2026-09) |
+| [0169](./0169-changelog-hand-curated.md) | CHANGELOG は手で書く。ADR 0070 は覆らない | 採用 (2026-09) |
 | [0170](./0170-association-search-tiebreak-nondeterminism.md) | 連想枠の非決定性・第2段 — `search()` の完全一致タイと、`memory_id` tie-break が fresh ingest ごとに揺れる根本原因を直す（Issue #339） | 採用 (2026-09) |
 | [0171](./0171-five-verbs-plus-three-layers.md) | 「5つの動詞」の記述を実態（14メソッド）に合わせる — 中核の5動詞 + 3つの層 | 採用 (2026-09) |
 
