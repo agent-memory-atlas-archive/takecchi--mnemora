@@ -43,6 +43,15 @@
  * **助けにしかならない**——`--next` が返した番号でも、他の PR が同時に同じ番号を
  * 選べば衝突しうる。確定させるのは、マージ直前に実行するこのツールの既定動作
  * （引数無し）のほうである。
+ *
+ * ## 付け替えたときの警告（Issue #405）
+ *
+ * 引数無しの既定動作が**実際に番号を付け替えたとき**（衝突が1件以上あったとき）
+ * だけ、標準エラーへ警告を出す——「PR タイトルと squash commit のタイトルは
+ * 機械が直せない。`gh pr edit <番号> --title ...` で直すこと」という趣旨。
+ * ⛔ **この道具自身は `gh` を呼ばない**——出力で促すだけである。付け替えが
+ * 起きなかったとき（衝突なし・追加された ADR が無い）は何も出さない
+ * （毎回出ると読み飛ばされるため）。
  */
 import { readFileSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
@@ -54,6 +63,7 @@ import {
   parseAdrFilename,
   pickNextFreeNumber,
   planRenumbering,
+  renumberedTitleWarning,
   rewriteReferencesInText,
 } from "./adr-renumber-lib.mjs";
 
@@ -331,6 +341,13 @@ function performRenumber() {
   console.log(
     `完了。${conflicts.length} 本の ADR を付け替え、${touchedFiles} ファイルの参照を書き換えました。`,
   );
+
+  // 付け替えが実際に起きたときだけ警告する（Issue #405）——PR タイトルと
+  // squash commit のタイトルは、ここまでの `git mv` / 行の書き換えでは直らない。
+  const warning = renumberedTitleWarning(conflicts);
+  if (warning) {
+    console.error(warning);
+  }
 }
 
 function main() {

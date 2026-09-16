@@ -217,6 +217,36 @@ export function rewriteReferencesInText(text, renames) {
   return { text: result, changes };
 }
 
+/**
+ * `adr-renumber.mjs`（引数無し）が ADR 番号を実際に付け替えたときに表示する
+ * 警告文を作る（[Issue #405](https://github.com/takecchi/mnemora/issues/405)）。
+ *
+ * **付け替えが1本も起きなかったとき（`renames` が空）は `null` を返す**——
+ * 毎回出ると読み飛ばされる。呼び出し側は `null` のとき何も出力しないこと。
+ *
+ * この警告が要る理由: `adr-renumber.mjs` はファイル名・見出し・このブランチが
+ * 追加した行の中の参照を書き換えるが、**PR タイトルと、squash merge が生成する
+ * コミットのタイトルだけは書き換えられない**（GitHub 側の状態であり、この
+ * リポジトリ内のファイルではないため）。⟹ 付け替えが起きたら、
+ * **マージする側が `gh pr edit <PR番号> --title ...` で PR タイトルを直す
+ * 必要がある**——`docs/autonomy.md` §4 が「マージ前でなければならない」と
+ * 説明している理由と同じで、squash commit のタイトルは PR タイトルから
+ * 作られるため、マージ後は履歴になって直せない。
+ *
+ * @param {{ oldNumber: string, newNumber: string }[]} renames 実際に付け替えた
+ *   ADR の一覧（`planRenumbering` が返す配列のうち `renamed: true` のもの）
+ * @returns {string | null}
+ */
+export function renumberedTitleWarning(renames) {
+  if (!renames || renames.length === 0) return null;
+  const mappings = renames.map((r) => `ADR ${r.oldNumber} -> ADR ${r.newNumber}`).join(", ");
+  return [
+    `⚠ ADR 番号を付け替えました（${mappings}）。`,
+    "PR タイトルと squash commit のタイトルは機械が直せません。",
+    'マージ前に次を実行して直すこと: gh pr edit <PR番号> --title "...（ADR <新番号>）"',
+  ].join("\n");
+}
+
 const HUNK_HEADER_RE = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@/;
 
 /**

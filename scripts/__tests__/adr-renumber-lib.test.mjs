@@ -4,6 +4,7 @@ import {
   parseAdrFilename,
   pickNextFreeNumber,
   planRenumbering,
+  renumberedTitleWarning,
   rewriteReferencesInText,
 } from "../adr-renumber-lib.mjs";
 
@@ -212,5 +213,41 @@ describe("addedLineNumbers — origin/main から継承した行を巻き込ま�
     const added = addedLineNumbers(diff);
     expect(added.has(1)).toBe(false); // 継承した1行目は対象外
     expect(added.has(2)).toBe(true); // このブランチが足した2行目だけが対象
+  });
+});
+
+describe("renumberedTitleWarning — 付け替えたときだけ PR タイトルの警告を出す（Issue #405）", () => {
+  it("付け替えが無い（空配列）なら null——毎回出ると読み飛ばされるため出さない", () => {
+    expect(renumberedTitleWarning([])).toBeNull();
+  });
+
+  it("undefined/null を渡しても null（呼び出し側の防御）", () => {
+    expect(renumberedTitleWarning(undefined)).toBeNull();
+    expect(renumberedTitleWarning(null)).toBeNull();
+  });
+
+  it("1件付け替えたら、旧番号->新番号と gh pr edit の使い方を含む警告を返す", () => {
+    const warning = renumberedTitleWarning([{ oldNumber: "0192", newNumber: "0193" }]);
+    expect(warning).not.toBeNull();
+    expect(warning).toContain("ADR 0192 -> ADR 0193");
+    expect(warning).toContain("PR タイトル");
+    expect(warning).toContain("squash commit");
+    expect(warning).toContain("gh pr edit <PR番号> --title");
+  });
+
+  it("複数件付け替えたら、両方の旧番号->新番号を列挙する", () => {
+    const warning = renumberedTitleWarning([
+      { oldNumber: "0173", newNumber: "0174" },
+      { oldNumber: "0173", newNumber: "0175" },
+    ]);
+    expect(warning).toContain("ADR 0173 -> ADR 0174");
+    expect(warning).toContain("ADR 0173 -> ADR 0175");
+  });
+
+  it("⛔ gh を呼べという指示は含むが、この関数自身は gh を実行しない（文字列を返すだけ）", () => {
+    // 純関数であることの確認——副作用が無いことは型シグネチャからも自明だが、
+    // 「文字列を組み立てるだけ」であることをここでも明示する。
+    const warning = renumberedTitleWarning([{ oldNumber: "0001", newNumber: "0002" }]);
+    expect(typeof warning).toBe("string");
   });
 });
