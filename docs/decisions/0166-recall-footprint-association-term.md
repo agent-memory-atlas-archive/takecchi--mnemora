@@ -172,7 +172,7 @@ ADR 0168 は 42〜162ターン行で **費用が減り**、322〜642ターン行
 この ADR 本文の表だけが追随しなかった。** ⟹ その後 [Issue #340](https://github.com/takecchi/mnemora/issues/340)
 がこの古い数字を引いて「誤差 2.304%・許容 2.5% に対し余裕 約8%」と書くことになった。
 
-**【実測】2026-09-17、現行の `main` で取り直した値**（`examples/chat/src/__tests__/recall-footprint-baseline.test.ts`
+**【実測】2026-09-17、`main` が `12abe48` の時点で取り直した値**（⚠ **いつ測ったかを添えるのは、「測ったと書いてある」と「いまの実装を測ってある」が別だからである**——日付と sha が無いと、次に読む人が同じ検算をやり直すことになる。この数字を引くときは `main` がここから動いていないかを見ること。`examples/chat/src/__tests__/recall-footprint-baseline.test.ts`
 と同じ手順——同梱の既定プロファイルを使わず、hold-in 7行から `calibrateRecallFootprint` で
 較正し直し、`estimateRecallFootprint` で12行を予測する。**DB も API キーも要らない**——
 この歯は commit 済みの `compare-baseline.json` を読む純粋計算である）:
