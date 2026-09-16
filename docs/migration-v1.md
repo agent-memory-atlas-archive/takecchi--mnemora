@@ -1,6 +1,14 @@
-# v0.1.9 → v0.2.0 移行ガイド
+# 移行ガイド（v0.1.9 → v0.2.0 → v1.0.0）
 
-**この文書は v0.1.9 の利用者が v0.2.0 へ上げるときに、何をどう直すかだけを扱う。**
+**この文書は、利用者が版を上げるときに何をどう直すかだけを扱う。**⭐ **2世代を持つ:**
+
+| 世代 | 破壊的変更 | どこ |
+|---|---|---|
+| **v0.1.9 → v0.2.0**（出荷済み） | **7件** | 「🔴 破壊的変更（v0.1.9 → v0.2.0）」の **1〜7** |
+| **v0.2.0 → v1.0.0**（未リリース） | **3件** | 「🔴 破壊的変更（v0.2.0 → v1.0.0）」の **8〜10** |
+
+⚠ **番号は通しである**（1〜10）。⛔ **「破壊的変更が10件ある」と読まないこと**——
+**どちらの版へ上げるかで、読む範囲が変わる。**
 各変更の設計判断・検討した代替案・引き受けた負債は、リンク先の ADR を見ること
 ——ここでは複製しない（`AGENTS.md` の反重複規律）。ユーザー向けの新機能・バグ修正の
 一覧は [CHANGELOG.md](../CHANGELOG.md) を見ること。
@@ -16,9 +24,20 @@
 `npm view @mnemora/<pkg> dist-tags` が6パッケージとも `latest: 0.2.0`）。
 ⟹ **表題と本文の版を `v0.2.0` に直した。手順の中身は1件も変えていない。**
 
-⛔ **`v1.0.0` はまだ切られていない。**⟹ **`v0.2.0` → `v1.0.0` の移行手順は、
-この文書には無い**——**`v1.0.0` に何が入るかが決まっていないため、まだ書けない。**
-経緯は [docs/roadmap.md](./roadmap.md) §7.12 に在る。
+⛔ **`v1.0.0` はまだ切られていない。**経緯は [docs/roadmap.md](./roadmap.md) §7.12 に在る。
+
+⭐ **この文書はかつて「`v0.2.0` → `v1.0.0` の移行手順は、この文書には無い」と宣言していた。
+2026-09-17、その宣言を撤回した**（[Issue #432](https://github.com/takecchi/mnemora/issues/432)）。
+
+🔴 **撤回した理由は、宣言のほうが現物から遅れていたからである。**【実測】撤回の時点で、
+**この文書は既に `v0.2.0` → `v1.0.0` の記述を2箇所持っていた**——「DB マイグレーション」の
+「`v0.2.0` 以降に追加されたマイグレーション（`0016`/`0017`）」と、破壊的変更の **8**。
+**どちらも `v0.2.0` より後に入ったものである。**
+
+⟹ ⛔ **中身を宣言に合わせて削ると、現に在る有用な記述を捨てることになる。**
+**宣言を現実に合わせるほうを採った。**そして**欠けていた 9・10 を足した**——
+`CHANGELOG.md` と `v1.0.0` の Release 本文がどちらもこの文書を移行の送り先として
+名指ししており、**リンクを踏んだ先に3件のうち1件しか無い**状態だったためである。
 
 **ファイル名が `migration-v1.md` のままである理由**: この名前は
 [`docs/roadmap.md`](./roadmap.md)・[ADR 0165](./decisions/0165-decay-activity-clock.md)・
@@ -32,10 +51,11 @@
 **ほとんどの利用者は何もしなくてよい。** `createRuntime()`（`@mnemora/postgres` /
 `@mnemora/openai` などの実装を渡して組み立てる）で作った `Runtime` を、
 `observe()`/`recall()`/`reflect()`/`consolidate()`/`forget()` の5つの動詞だけで
-使っているなら、v0.2.0 でコードの変更は要らない。
+使っているなら、v0.2.0 でも v1.0.0 でもコードの変更は要らない。
 
-下の🔴6+1件はすべて「**独自の adapter・独自の `Runtime` 実装・独自のテスト基盤コードを
-書いている場合**」にだけ影響する。あなたが該当するかどうかは、次の表で判定できる:
+下の🔴10件はすべて「**独自の adapter・独自の `Runtime` 実装・独自のテスト基盤コードを
+書いている場合**」にだけ影響する。あなたが該当するかどうかは、次の表で判定できる
+（⚠ **`8`〜`10` が `v0.2.0` → `v1.0.0` の分である**）:
 
 | していること | 影響 |
 |---|---|
@@ -48,6 +68,8 @@
 | `TICK_SUPPORTED_JOB_KINDS` の値を網羅的に分岐している | 🟡「`TICK_SUPPORTED_JOB_KINDS`」を見ること |
 | v0.1.9 で `MemoryStore.createMemory` を直接呼び、`validFrom`/`validUntil` に non-null を書いていた | 🟡「`validAt` ゲート」を見ること |
 | `RecallFootprintEstimate` オブジェクトを自分で組み立てている（`estimateRecallFootprint()` の戻り値をそのまま使うだけではない） | 🔴 7 を見ること |
+| **`FilteredOmission` を自分で組み立てている**（自作 adapter の `aggregateScope` 実装・テストダブル） | 🔴 **9** を見ること（`v1.0.0`） |
+| **`Omission` の `over_limit` を自分で組み立てている** | 🔴 **10** を見ること（`v1.0.0`） |
 
 ---
 
@@ -114,7 +136,9 @@ PostgreSQL 17、`0001`〜`0015` を先に適用した DB に対して実際の�
 
 ---
 
-## 🔴 破壊的変更
+## 🔴 破壊的変更（v0.1.9 → v0.2.0）—— **1〜7。出荷済み**
+
+⭐ **`v0.2.0` から `v1.0.0` へ上げるだけの人は、この節を読まなくてよい。**次の節（8〜10）へ飛ぶこと。
 
 対象はすべて `@mnemora/core` と `@mnemora/testkit`。`@mnemora/openai` / `@mnemora/anthropic` /
 `@mnemora/local-embedding` に破壊的変更は無い（`src` に v0.1.9 からの差分が無いことを確認済み）。
@@ -293,6 +317,20 @@ describeTenantSettingsStoreConformance({
 
 ---
 
+## 🔴 破壊的変更（v0.2.0 → v1.0.0）—— **8〜10。未リリース**
+
+⛔ **`v1.0.0` の tag はまだ切られていない。**⟹ **この節は「切られたときにこうなる」ものである。**
+
+**3件ある。壊れ方が2種類ある:**
+
+- **9・10 は「返り値の型に必須フィールドが増えた」形**（どちらも `@mnemora/core`）。
+  ⟹ **読むだけ・消費するだけなら影響しない。**自分で組み立てている側だけがコンパイルで落ちる。
+- 🔴 **8 は「公開クラスのメソッドの署名が変わった」形**（`@mnemora/testkit`）。
+  ⟹ **呼んでいれば壊れる。**同期から `Promise` へ変わったので、**引数を直すだけでは足りない。**
+
+⚠ **`@mnemora/openai` / `@mnemora/anthropic` / `@mnemora/local-embedding` / `@mnemora/postgres` に
+破壊的変更は無い。**一覧と根拠 ADR は [CHANGELOG.md](../CHANGELOG.md) の `[1.0.0]` を見ること。
+
 ### 8. ⭐ `InMemoryTenantSettingsStore.setDefaultHalfLifeRecalls`（`@mnemora/testkit`）のシグネチャが変わった
 
 **【現物】2026-09-17、ADR 0197（Issue #338 の第1弾）で変わった**:
@@ -330,7 +368,74 @@ interface 側は `?` 付きの追加、`PostgresTenantSettingsStore` はメソ�
 
 ---
 
-## 🟡 後方互換だが挙動が変わりうるもの
+### 9. `FilteredOmission` に必須フィールド `scopeRelation` が増えた（`@mnemora/core`）
+
+**誰が影響を受けるか**: `FilteredOmission` を**自分で組み立てている**場合だけ
+——自作 adapter の `aggregateScope` 実装や、`omitted` を作るテストダブルなど。
+⭕ **`recall()` の戻り値を読むだけなら影響しない。**
+
+**何をすればよいか**: `scopeRelation` を足す。⭐ **値を自分で決めないこと**——
+`condition` から引く公開定数が `@mnemora/core` に在る。
+
+```diff
++import { FILTERED_CONDITION_SCOPE_RELATION } from "@mnemora/core";
+
+ omitted.push({
+   kind: "filtered",
+   condition,
++  scopeRelation: FILTERED_CONDITION_SCOPE_RELATION[condition],
+   count,
+   countKind,
+ });
+```
+
+⚠ **式を手で書き写さないこと。**`FilteredOmission.scopeRelation` の doc コメントが逐語で
+「**`FILTERED_CONDITION_SCOPE_RELATION` である——ここでは決めない・重複させない
+（式を2箇所に書くと必ずずれる、ADR 0038 が実測した穴）**」と書いている。
+
+**何を意味する欄か**: `decayed` **だけ**が `totalInScope` の**内側**を数える
+（`"within_scope"`）という非対称を、契約として名乗るための欄である。他の condition は
+すべて `"outside_scope"`。⟹ **この非対称は以前から在ったが、型としては見えていなかった。**
+
+根拠: [Issue #352](https://github.com/takecchi/mnemora/issues/352) /
+[ADR 0174](./decisions/0174-filtered-omission-scope-relation.md)。
+
+---
+
+### 10. `Omission` の `over_limit` に必須フィールド `stage` が増えた（`@mnemora/core`）
+
+**誰が影響を受けるか**: `OverLimitOmission` を**自分で組み立てている**場合だけ。
+⭕ **`omission.count` を読むだけなら影響しない。**
+
+**何をすればよいか**: `stage` を足す。値は2つで、**どちらで切ったかで決まる**:
+
+```diff
+ omitted.push({
+   kind: "over_limit",
++  stage: "rescore",       // 段2 の limit で打ち切った分
+   count,
+   countKind,
+ });
+```
+
+| 値 | いつ |
+|---|---|
+| `"rescore"` | **段2 の `RecallQuery.limit` で打ち切った**分（従来から在った唯一の経路） |
+| `"association"` | **連想枠（段3.5）の `RecallAssociationQuery.maxCount` で切り捨てた**分 |
+
+⭐ **従来の `over_limit` はすべて `"rescore"` に相当する。**⟹ **既存のコードは
+`stage: "rescore"` を足せば意味が変わらない。**
+
+**なぜ増えたか**: 連想枠の切り捨てを段1 の打ち切りと**区別して名乗る**ため。
+⚠ **区別が要る理由は、次の一手が違うからである**——`"rescore"` は `limit` を上げれば減るが、
+`"association"` は `limit` では直らない（切り捨ての件数を決めているのは `maxCount` だけである）。
+
+根拠: [Issue #375](https://github.com/takecchi/mnemora/issues/375) /
+[ADR 0188](./decisions/0188-association-over-limit-omission.md)。
+
+---
+
+## 🟡 後方互換だが挙動が変わりうるもの（v0.1.9 → v0.2.0）
 
 ### `RecallQuery.validAt` ゲートが既定で有効になった
 
@@ -372,6 +477,17 @@ recall したいなら、`RecallQuery.includeOutsideValidity: true` を渡す。
 recall の結果が意味的に変わることは無い**——同点だった候補の並び順が固定されるだけ。
 
 根拠: [ADR 0167](./decisions/0167-association-getvectors-order-nondeterminism.md)。
+
+---
+
+## 🟡 v0.2.0 → v1.0.0 で、挙動が変わるが手順は要らないもの
+
+⭐ **`v0.2.0` → `v1.0.0` には、`🟡` に相当する変更が3件ある**（`ann_unreached` の発火条件・
+`sweepArchive` が従う時計・語彙チャンネルの tie-break）**が、いずれも利用者側の手順を要さない。**
+⟹ **この文書には節を置かない。**中身と根拠 ADR は [CHANGELOG.md](../CHANGELOG.md) の
+`[1.0.0]` の `### 変更（挙動）` / `### 変更（性能）` を見ること——**ここには複製しない。**
+
+⚠ **DB マイグレーションは別である**——`0016`/`0017` の適用が要る。上の「DB マイグレーション」節を見ること。
 
 ---
 
