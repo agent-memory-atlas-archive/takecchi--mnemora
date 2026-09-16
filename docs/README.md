@@ -36,7 +36,10 @@
 
 ## 外から見える API
 
-`observe()` / `recall()` / `reflect()` / `consolidate()` / `forget()` の5つ。**6つ目は作らない。**
+**記憶そのものを動かす中核**は `observe()` / `recall()` / `reflect()` / `consolidate()` /
+`forget()` の5つ。**ここは増やさない。**`Runtime` には他に9個のメソッドがあるが、
+保守操作・是正取り消し・説明の3層に分かれる（[docs/vision.md](./vision.md)「外から見える
+API」、[ADR 0171](./decisions/0171-five-verbs-plus-three-layers.md)）。
 
 ## オーナーの判断を待っている点
 

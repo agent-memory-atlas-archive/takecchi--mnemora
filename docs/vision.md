@@ -46,9 +46,9 @@ mnemora の設計全体を貫く規律はひとつしかない。**文脈を剥�
 
 この原則の具体的な実装（`status` によるフィルタ、`omitted` の分類、`provenance.kind` の判別可能ユニオンなど）は `docs/architecture.md`・`docs/recall.md`・`docs/memory-model.md` に譲る。ここでは「なぜこの原則を置くか」だけを言っておく。**記憶を扱うシステムが信頼を失う典型的な経路は、間違った答えを返すことよりも、答えの根拠や限界を見せずに断定的に返すことにある。** mnemora はこれを最初から設計原則に組み込む。
 
-## 外から見える API: 5つの動詞
+## 外から見える API: 中核の5動詞
 
-mnemora が外部に公開する操作は5つの動詞に限る。**6つ目は作らない。**
+mnemora が外部に公開する、**記憶そのものを動かす**操作は5つの動詞に限る。**ここは増やさない。**
 
 ```ts
 observe(ctx, input)      // -> Observation
@@ -63,6 +63,27 @@ forget(ctx, target)      // -> ForgetResult
 - `reflect` — 入力が無い状態で、既存の記憶から新しい記憶を作る（内省・背景思考）。
 - `consolidate` — 複数の記憶を統合して、より上位の記憶を作る。
 - `forget` — 記憶を落とす、あるいは失効させる。
+
+### 中核を守る3つの層
+
+`Runtime`（`@mnemora/core` の実装）には、上の5つ以外にも9個のメソッドがある
+（`tick` / `getRecall` / `reextract` / `reembed` / `sweepArchive` / `restoreArchived` /
+`purge` / `markContested` / `resolveContested`）。これらは「6つ目の動詞」ではなく、
+中核を5つに保つために別の層へ出した口であり、3つに分かれる
+（検討過程は [ADR 0171](./decisions/0171-five-verbs-plus-three-layers.md)）。
+
+- **保守操作**（`tick` / `reembed` / `reextract` / `sweepArchive`）——「いつ動かすか」を
+  呼び出し側が決める口。自動では走らない。
+- **是正・取り消し**（`markContested` / `resolveContested` / `restoreArchived` / `purge`）——
+  呼び出し側（人・上位のアプリケーション層・将来の自動検出）が既に下した判断
+  （矛盾の指摘・決着・復帰・完全削除）を、決められた形で書き込む口。どちらが正しいかを
+  mnemora 自身は判定しない。
+- **説明**（`getRecall`）——なぜそれが想起されたかを、後から読み戻す口。
+
+**この分類が守っているのは「中核は増やさない」という制約そのものである。**新しく何かを
+足したくなったとき、それが記憶そのものを動かす操作なら中核には足せない。保守・是正・説明の
+どれかに当たるなら、その層の性格に合っているかを問う——合わないなら、そもそも mnemora が
+持つべき機能かどうかを疑う。
 
 一点、判断が必要になったのが「どの記憶を実際に使ったか」というフィードバックをどう受けるかである。**これは新しい動詞を作らず `observe()` で受ける**（`observe(ctx, { kind: 'memory_usage', recallId, usedMemoryIds })`）。理由は三つ。「起きたことを記録する」入口をひとつに保てること、冪等キーの扱いが一箇所で済むこと、そして動詞を増やさないという要求を満たせることである。
 

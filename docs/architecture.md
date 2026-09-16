@@ -49,10 +49,15 @@ Application と Agent/LLM は mnemora の**利用側**であり、mnemora が知
 Runtime とその下（Storage / LLM / Queue の interface）だけである。プロンプトの組み立ては呼び出し側の
 責務であり mnemora は行わない（この限界は [docs/recall.md](./recall.md) で詳説）。
 
-### 3.2 Runtime 内部 — 5 つの動詞がどこを通るか
+### 3.2 Runtime 内部 — 中核の5動詞がどこを通るか
 
-API 表面は 5 動詞に固定する（6 つ目を足さない。理由は [docs/decisions/](./decisions/) の ADR）。
-それぞれが Runtime 内部でどの部品を通るかで分類する。
+**記憶そのものを動かす中核操作**は5動詞に固定する（ここは増やさない）。`Runtime` には他に
+9個のメソッド（保守操作 `tick`/`reembed`/`reextract`/`sweepArchive`、是正・取り消し
+`markContested`/`resolveContested`/`restoreArchived`/`purge`、説明 `getRecall`）があるが、
+これらは中核を狭く保つために別の層へ出した口である——詳細は
+[ADR 0171](./decisions/0171-five-verbs-plus-three-layers.md) と
+[docs/vision.md](./vision.md)「外から見える API」を見ること。以下はこの中核5動詞それぞれが
+Runtime 内部でどの部品を通るかで分類する。
 
 **書き込み系 — `observe(ctx, input)`**
 

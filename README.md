@@ -44,7 +44,7 @@ Application → Agent / LLM → Cognitive Runtime → Storage / LLM / Queue
 
 外から見える API は小さく保つ:
 
-**⚠ `brain` のような受け皿オブジェクトは無い。**上の5つの動詞は
+**⚠ `brain` のような受け皿オブジェクトは無い。**下の**中核の5動詞**は
 `createRuntime()`（`@mnemora/core`）が返す `runtime` のメソッドであり、
 **すべて第一引数に `ctx`（`tenantId` 必須）を取る。**
 
@@ -63,7 +63,7 @@ await runtime.consolidate(ctx, { target: { memoryIds: [] } });
 await runtime.forget(ctx, { memoryIds: [] });
 ```
 
-**⟹ 5つの動詞の正式なシグネチャは「## 外から見える API」節、`ctx` の意味は
+**⟹ 中核の5動詞の正式なシグネチャは「## 外から見える API」節、`ctx` の意味は
 「## 記憶を誰に紐づけるか」節を見ること。**
 
 ---
@@ -217,7 +217,30 @@ consolidate(ctx, opts)   // 複数の記憶を統合する
 forget(ctx, target)      // 記憶を落とす / 失効させる
 ```
 
-**内部が複雑でも、外側はこの5つに保つ。6つ目は作らない。**
+**内部が複雑でも、記憶そのものを動かす中核操作はこの5つに保つ。ここは増やさない。**
+
+### `Runtime` の残り9個 — 中核を守る3つの層
+
+**`Runtime` には他に9個のメソッドがある**（`tick` / `getRecall` / `reextract` / `reembed` /
+`sweepArchive` / `restoreArchived` / `purge` / `markContested` / `resolveContested`）。
+これらは「6つ目の動詞」ではなく、**中核を狭く保つために別の層へ出した口**であり、
+3つに分かれる（詳細と検討過程は [ADR 0171](./docs/decisions/0171-five-verbs-plus-three-layers.md)）。
+
+- **保守操作**（`tick` / `reembed` / `reextract` / `sweepArchive`）——「いつ動かすか」を
+  呼び出し側が決める口。自動では走らない（`sweepArchive` の doc コメント自身が
+  「呼び出し側が明示的にこれを呼んだときだけ走る保守操作である」と書いている）。
+- **是正・取り消し**（`markContested` / `resolveContested` / `restoreArchived` / `purge`）——
+  呼び出し側（人・上位のアプリケーション層・将来の自動検出）が既に下した判断
+  （矛盾の指摘・決着・復帰・完全削除）を、決められた形で書き込む口。
+  どちらが正しいかを mnemora 自身は判定しない。
+- **説明**（`getRecall`）——なぜそれが想起されたかを、後から読み戻す口
+  （`docs/north-star.md`「目指す姿」の3番目）。
+
+**この分類の要点は、歯止めが *どこに* 効くかである。**新しく何かを足したくなったとき、
+それが記憶そのものを動かす操作（中核5動詞と同じ性質）なら、足せない。保守・是正・説明の
+どれかに当たるなら、その層の性格に合っているかを問う——**「分類できるから足してよい」では
+ない。**3層はあくまで既存の9個を説明する後付けの整理であり、新しい口を作る免罪符には
+しない。
 
 ### 「mnemora を使うべきか」を判定する（動詞ではない）
 
@@ -237,9 +260,12 @@ const verdict = compareWithFullLog({
 // verdict.reasons                 → なぜそう判定したか（コードで分岐できる形）
 ```
 
-⚠ **これは「6つ目の動詞」ではない。**`Runtime` のメソッドではなく、`ctx` も取らない
-純関数であり、**`recall()` を一度も呼んでいない時点でも使える**——「mnemora を入れるべきか」を
-判断したいのは、まさにその時点だからである。
+⚠ **これは「6つ目の動詞」でも、上の保守・是正・説明のどの層でもない。**`Runtime` の
+メソッドですらなく、`ctx` も取らない純関数であり、**`recall()` を一度も呼んでいない時点でも
+使える**——「mnemora を入れるべきか」を判断したいのは、まさにその時点だからである。
+`Runtime` のメソッドにすると DB も provider も配線済みの環境でしか呼べなくなってしまい、
+それでは問いに答えられない（[ADR 0147](./docs/decisions/0147-recall-footprint-estimator.md)
+決定5、[ADR 0171](./docs/decisions/0171-five-verbs-plus-three-layers.md)）。
 
 ⚠ **見ているのは量だけである。**「削っても目的の記憶が落ちていないか」には答えない
 （下の「想起の質をどう測っているか」を見ること）。**量で負けていても、想起のために
