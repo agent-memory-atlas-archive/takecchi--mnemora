@@ -72,6 +72,41 @@ describe("examples/chat: runComparison（本物の Postgres）", () => {
       await handle.close();
     }
   });
+
+  /**
+   * ⭐ Issue #301 / ADR 0163: `runComparison` が各行で `reportMemoryUsage` を実際に
+   * 呼び、`recall_usages` へ行を入れていることを本物の Postgres で検査する。
+   *
+   * **`recall.memories.length` は常に非0**（`fillerPairsSequence` に0を含めても
+   * 冒頭の事実表明が必ず1件は返るため）なので、全行で `memoryUsageReported: true`
+   * になるはずである。
+   */
+  it("各行で使用報告が実際に行われ、recall_usages に returnedCount と同じ件数の行が入る", async () => {
+    await resetTestDatabase();
+    await getTestClient();
+    const handle = await createExampleRuntime(requireDatabaseUrl(), {});
+    try {
+      const rows = await runComparison(handle.runtime, {
+        fillerPairsSequence: [0, 3, 10],
+        tenantPrefix: "example-compare-usage-report-test",
+        memoryStore: handle.memoryStore,
+      });
+
+      for (const row of rows) {
+        expect(row.returnedCount).toBeGreaterThan(0);
+        expect(row.memoryUsageReported).toBe(true);
+      }
+
+      const totalReturned = rows.reduce((sum, r) => sum + r.returnedCount, 0);
+      const usageCount = await handle.pool.query<{ count: string }>(
+        `SELECT COUNT(*)::text AS count FROM recall_usages
+         WHERE tenant_id LIKE 'example-compare-usage-report-test-%'`,
+      );
+      expect(Number(usageCount.rows[0]?.count ?? "0")).toBe(totalReturned);
+    } finally {
+      await handle.close();
+    }
+  });
 });
 
 afterAll(async () => {

@@ -71,6 +71,7 @@ function baseRow(overrides: Partial<ComparisonRow> = {}): ComparisonRow {
     returnedCount: 10,
     annCandidateCount: 321,
     factStatementSurvived: true,
+    memoryUsageReported: true,
     ...overrides,
   };
 }

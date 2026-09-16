@@ -109,3 +109,51 @@ export function buildMnemoraPrompt(recall: RecallResult): string {
   const indexLine = `(索引: スコープ内 ${recall.index.totalInScope} 件のうち ${recall.memories.length} 件を提示)`;
   return [digestLines, indexLine].filter((s) => s.length > 0).join("\n");
 }
+
+/**
+ * `reportMemoryUsage` の戻り値。
+ *
+ * `reported: false` は「呼ばなかった」ことをそのまま返す——`observe()` を呼んで
+ * 失敗したのではなく、載せる記憶が0件だったので**そもそも呼んでいない**
+ * （`ObserveMemoryUsageInputSchema.usedMemoryIds` は `min(1)` であり、空配列を
+ * 渡すと zod に弾かれる。呼び出し側はこの分岐を自分で持つ必要がある）。
+ */
+export type MemoryUsageReport =
+  | { reported: true; recallId: RecallResult["recallId"]; usedMemoryIds: string[] }
+  | { reported: false };
+
+/**
+ * `recall` が実際にプロンプトへ載せた Memory（＝ `buildMnemoraPrompt` が積んでいるのと
+ * 同じ集合、`recall.memories`）を、使用報告として `observe({ kind: 'memory_usage' })` で
+ * mnemora へ伝え返す（Issue #301、ADR 0009）。
+ *
+ * **これを呼ばないと `reinforce` が発火しない**（`runtime.observe` の
+ * `handleMemoryUsage` → `recordUsage` → `insertedMemoryIds` ごとに `reinforce`。
+ * `packages/core/src/runtime.ts`）——使われた記憶と使われなかった記憶が同じ速さで
+ * 遠ざかっていた、というのが Issue #301 の欠落そのものである。
+ *
+ * **明示的な opt-in 関数である。**`tick()` や Scheduler には一切乗せていない
+ * ——呼ばない呼び出し側でも `observe`/`recall` はそれまでどおり成立する
+ * （ADR 0114 決定3・0115 決定7 と同じ規律。北極星の問い2「これを無効にしたとき、
+ * Memory Framework として成立するか」に当てた結果は該当 ADR に書く）。
+ *
+ * **報告は、呼び出し側が `recall` の測定・表示を終えたあとに呼ぶことを想定している**
+ * ——この関数自身は `recall` を撃たない（引数で受け取るだけ）ので、呼んでも
+ * その `recall` の測定値（`usage`/`omitted`/`index` 等）は一切変わらない。
+ */
+export async function reportMemoryUsage(
+  runtime: Runtime,
+  ctx: Ctx,
+  recall: RecallResult,
+): Promise<MemoryUsageReport> {
+  const usedMemoryIds = recall.memories.map((m) => m.memoryId);
+  if (usedMemoryIds.length === 0) {
+    return { reported: false };
+  }
+  await runtime.observe(ctx, {
+    kind: "memory_usage",
+    recallId: recall.recallId,
+    usedMemoryIds,
+  });
+  return { reported: true, recallId: recall.recallId, usedMemoryIds };
+}

@@ -1,6 +1,6 @@
-import { describe, expect, it } from "vitest";
-import type { RecallResult } from "@mnemora/core";
-import { buildMnemoraPrompt } from "../mnemora-path.js";
+import { describe, expect, it, vi } from "vitest";
+import type { Ctx, ObserveInput, ObserveResult, RecallResult, Runtime } from "@mnemora/core";
+import { buildMnemoraPrompt, reportMemoryUsage } from "../mnemora-path.js";
 
 function recallWith(memories: RecallResult["memories"]): RecallResult {
   return {
@@ -41,5 +41,63 @@ describe("buildMnemoraPrompt", () => {
     );
     expect(prompt).toContain("- テストの digest");
     expect(prompt).toContain("1 件のうち 1 件");
+  });
+});
+
+/**
+ * `reportMemoryUsage`（Issue #301 / ADR 0163）——DB を一切使わず、`runtime.observe`
+ * の呼び出し方だけを検査する配線の歯。本物の Postgres 上で `reinforce` が実際に
+ * 発火することの検査は `__tests__/memory-usage-reinforce.postgres.test.ts` にある。
+ */
+describe("reportMemoryUsage", () => {
+  function fakeRuntime(): { runtime: Runtime; observe: ReturnType<typeof vi.fn> } {
+    const observe = vi.fn(async (): Promise<ObserveResult> => ({
+      observationId: "obs-1",
+      memoryIds: [],
+      extraction: "skipped",
+      extractionFailure: null,
+    }));
+    return { runtime: { observe } as unknown as Runtime, observe };
+  }
+
+  const ctx: Ctx = { tenantId: "t1" };
+
+  it("memories が0件なら observe() を呼ばず、reported:false を返す", async () => {
+    const { runtime, observe } = fakeRuntime();
+    const result = await reportMemoryUsage(runtime, ctx, recallWith([]));
+    expect(result).toEqual({ reported: false });
+    expect(observe).not.toHaveBeenCalled();
+  });
+
+  it("memories が在れば、載せた memoryId 集合そのものを usedMemoryIds として observe() する", async () => {
+    const { runtime, observe } = fakeRuntime();
+    const memories: RecallResult["memories"] = [
+      {
+        memoryId: "m1",
+        digest: "d1",
+        retrievedVia: "ann",
+        provenanceKind: "stated",
+        score: { decay: 1, tagMatch: 1, freshness: 1, strength: 1, total: 1 },
+      },
+      {
+        memoryId: "m2",
+        digest: "d2",
+        retrievedVia: "ann",
+        provenanceKind: "stated",
+        score: { decay: 1, tagMatch: 1, freshness: 1, strength: 1, total: 1 },
+      },
+    ];
+    const recall = recallWith(memories);
+    const result = await reportMemoryUsage(runtime, ctx, recall);
+
+    expect(result).toEqual({ reported: true, recallId: "recall-1", usedMemoryIds: ["m1", "m2"] });
+    expect(observe).toHaveBeenCalledTimes(1);
+    const [calledCtx, calledInput] = observe.mock.calls[0] as [Ctx, ObserveInput];
+    expect(calledCtx).toBe(ctx);
+    expect(calledInput).toEqual({
+      kind: "memory_usage",
+      recallId: "recall-1",
+      usedMemoryIds: ["m1", "m2"],
+    });
   });
 });

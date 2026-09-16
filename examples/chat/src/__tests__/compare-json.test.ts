@@ -37,6 +37,7 @@ function makeRow(overrides: Partial<ComparisonRow> = {}): ComparisonRow {
     returnedCount: 8,
     annCandidateCount: 10,
     factStatementSurvived: true,
+    memoryUsageReported: true,
     ...overrides,
   };
 }
