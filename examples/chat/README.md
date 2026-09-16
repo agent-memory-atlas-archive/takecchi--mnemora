@@ -998,6 +998,10 @@ DATABASE_URL=... pnpm --filter @mnemora/example-chat run identifier-probes
 
 - Issue #106 が名指しした5領域（人名・チャンネル名・社内システム名・案件コード・
   チケット番号）を、まず**12件**（領域あたり2〜3件）で覆う。
+  ⟹ その後 2026-09-13（Issue #109、`3350e18`）に**領域あたり6件・計30件**へ拡張した
+  （内訳: project-code 2→6 / ticket 2→6 / system 2→6 / channel 3→6 / person 3→6。
+  `identifier-probe-baseline.json` の `provenance.probeSetGrowth`）。**以下の実測は
+  この30件時点のものである。**
 - **既存 `probe-set.ts` と probe の設計が「逆」である。**既存は gold の質問が
   gold の事実と内容語を共有しない（本物の埋め込みでしか引けないことを確かめるため）。
   `identifier-probes` は**query に識別子そのものを含める**——「その文字列を含むか」で
@@ -1017,29 +1021,43 @@ DATABASE_URL=... pnpm --filter @mnemora/example-chat run identifier-probes
     （`findIdentifierTopicKeywordViolations`。違反があれば例外——`probe-set.ts` の
     `findTopicKeywordViolations` と同じ作法）。
 
-### 3群を別々に集計する（⛔ 混ぜた単一の MRR にしない）
+### 5群を別々に集計する（⛔ 混ぜた単一の MRR にしない）
 
 `identifier-probes` は擬似LLM（`DeterministicLLMProvider`）＋ローカル埋め込みで、
-3群を走らせる。LLM 層は `retrieval` の arm B と同一——差は埋め込みだけであり、
+5群を走らせる。LLM 層は `retrieval` の arm B と同一——差は埋め込みだけであり、
 `@mnemora/local-embedding` の README が「確かめていないこと」として名指しした
 「`@mnemora/openai` と比べて想起の質がどうなるか」を、ここで初めて測る。
+
+⚠ **後発の2群（`japaneseNamesSparse`/`japaneseNamesDense`）は、2026-09-13
+（Issue #109、`4602678`）に足された**——ASCII の識別子だけでなく、**日本語の
+固有名詞**（人名・組織名・製品名・地名）を埋め込みが弁別できるかを測るためである。
 
 | 群 | probe | haystack | 直接比較できる相手 |
 |---|---|---|---|
 | `japanese` | 既存の日本語意味 probe 7件（`probe-set.ts`、変更していない） | sparse | `retrieval` の arm B（embedding=recorded、実質 `text-embedding-3-small`/256次元） |
-| `identifiersSparse` | ASCII 識別子 probe 12件 | sparse（識別子0件） | `identifiersDense`（同じ12 probe、haystack だけが違う） |
-| `identifiersDense` | 同じ12 probe | dense（識別子60件） | `identifiersSparse` |
+| `identifiersSparse` | ASCII 識別子 probe **30件**（領域あたり6件） | sparse（識別子0件） | `identifiersDense`（同じ30 probe、haystack だけが違う） |
+| `identifiersDense` | 同じ30 probe | dense（識別子60件） | `identifiersSparse` |
+| `japaneseNamesSparse` | 日本語固有名詞 probe 12件（person4/org3/product3/place2） | sparse（固有名詞0件） | `japaneseNamesDense`（同じ12 probe、haystack だけが違う） |
+| `japaneseNamesDense` | 同じ12 probe | dense（固有名詞60件、密度5:1） | `japaneseNamesSparse` |
 
-### 実測結果（2026-09-10、`ruri-v3-30m/sym`・256次元、`DeterministicLLMProvider`）
+### 実測結果（[identifier-probe-baseline.json](./identifier-probe-baseline.json)、`ruri-v3-30m/sym`・256次元、`DeterministicLLMProvider`）
 
 🔴 **数字には必ず arm 名・`(provider, model, dimensions)`・haystack 条件を添える**
 （この repo で「条件を落とした数字」が実際に3度壊れているため。ADR 0068・ADR 0081 §3.2）。
 
+**provenance**: commit `3350e18`（identifiersSparse/Dense を30件へ拡張した時点）、
+`measuredAt` **2026-09-13T14:08:56.811Z**。⚠ **`japaneseNamesSparse`/`japaneseNamesDense`
+の2群は、この commit を土台にした未コミットの作業ツリー上で測定されている**
+（`identifier-probe-baseline.json` の `provenance.note`）——`japanese`/`identifiersSparse`/
+`identifiersDense` の3群の値は、その拡張以降1バイトも動いていない。
+
 | 群 | `(provider, model, dimensions)` | haystack | MRR | hit@1 | hit@10 |
 |---|---|---|---|---|---|
 | `japanese`(7件) | `local`/`ruri-v3-30m/sym`/256次元 | sparse | **0.810** | 5/7 | 7/7 |
-| `identifiersSparse`(12件) | `local`/`ruri-v3-30m/sym`/256次元 | sparse | **1.000** | 12/12 | 12/12 |
-| `identifiersDense`(12件) | `local`/`ruri-v3-30m/sym`/256次元 | dense | **1.000** | 12/12 | 12/12 |
+| `identifiersSparse`(30件) | `local`/`ruri-v3-30m/sym`/256次元 | sparse | **1.000** | 30/30 | 30/30 |
+| `identifiersDense`(30件) | `local`/`ruri-v3-30m/sym`/256次元 | dense | **1.000** | 30/30 | 30/30 |
+| 🔴 `japaneseNamesSparse`(12件) | `local`/`ruri-v3-30m/sym`/256次元 | sparse | **0.958** | 11/12 | 12/12 |
+| 🔴 `japaneseNamesDense`(12件) | `local`/`ruri-v3-30m/sym`/256次元 | dense | **0.958** | 11/12 | 12/12 |
 
 比較のため、既存 `retrieval` の基準値（[retrieval-baseline.json](./retrieval-baseline.json)、
 再掲）:
@@ -1053,7 +1071,7 @@ DATABASE_URL=... pnpm --filter @mnemora/example-chat run identifier-probes
 （2回実行し、`measuredAt` を除いて完全一致した——ただし ADR 0088 §2 と同じ理由で
 「決定的である」の証明ではない）。
 
-#### 読み方: `identifiersSparse` の hit@1=12/12 を「易しすぎた」と即断しない
+#### 読み方: `identifiersSparse` の hit@1=30/30 を「易しすぎた」と即断しない
 
 `TICKET-48213`/`TICKET-48214` は1文字違いで、query は両者と「不具合の報告」という
 語彙を共有しており、識別子だけが弁別子である——それを正しく1位にできたのは実際の発見。
@@ -1061,10 +1079,29 @@ DATABASE_URL=... pnpm --filter @mnemora/example-chat run identifier-probes
 報告した「同じ形式の識別子が多数居て埋もれる」状況を表していない。**`dense` 条件は、
 易しくした/難しくした値を見てから作ったものではない**——`identifiersSparse` の実測後に
 1度だけ設計し、1度だけ測った（識別子は既存24件と衝突しない値を選び、構築時の
-機械的検査で衝突が無いことを確認済み）。結果は `identifiersSparse` と同じく
-hit@1=12/12・`distractorBeatsGold` 0件——**密な haystack でも gold は常に1位のままだった。**
+機械的検査で衝突が無いことを確認済み。⚠ この「24件」は `identifiersSparse`/`identifiersDense`
+がまだ各12 probe だった設計当時の数——後日 30件へ拡張したときも haystack の識別子60件は
+増やしていない）。結果は `identifiersSparse` と同じく
+hit@1=30/30・`distractorBeatsGold` 0件——**密な haystack でも gold は常に1位のままだった。**
 distractor の順位そのものは密度の影響を受けている（例:
 `channel-c` の `distractorRank` は sparse で2位、dense で8位）。
+
+#### 🔴 読み方: `japaneseNamesSparse`/`japaneseNamesDense` は「12/12で完璧」ではない
+
+**上の識別子2群（ASCII）と違い、日本語固有名詞の2群には天井に張り付いていない実データがある。**
+`identifier-probe-baseline.json` の `japaneseNamesSparse` の `description` を逐語で引く:
+
+> hit@1=11/12。外したのは org-b（「開発一課」対「開発二課」）で、`distractorBeatsGold=true`
+> ——1文字違いの日本語組織名を弁別できていない。
+
+`japaneseNamesDense` でも同じ1件（org-b）が落ちる——**haystack を疎にしても密にしても
+結果は変わらない**（`description` 逐語:「密度を上げても下げても同じ1件が落ちる」）。
+一方で ASCII 側の1文字違い（`TICKET-48213` 対 `TICKET-48214` 等）は30件すべて hit@1 である。
+⟹ **「1文字違いが弁別できない」のではなく、「日本語の1文字違いが弁別できない」。**
+
+⚠ **標本は12件である**（下記「このベンチが測れないこと」参照）。ここから「日本語の
+固有名詞全般が弱い」と一般化しない——言えるのは「この12件のうち、org-bという1件が
+この埋め込みでは distractor に負けた」までである。
 
 ### 🔴 このベンチが測れないこと（正直に書く）
 
@@ -1072,10 +1109,11 @@ distractor の順位そのものは密度の影響を受けている（例:
   埋め込み空間が違えば、同じ MRR の値でも意味が違う（`local`/`ruri-v3-30m/sym`/256次元 と
   `openai`/`text-embedding-3-small`/256次元は、次元数が同じでも別の空間である）。
 - **`identifiersSparse`/`identifiersDense` の probe は `openai`/`text-embedding-3-small`
-  では測れない。**`retrieval` のカセット（`cassettes/retrieval.json`）にこの12 probe の
+  では測れない。**`retrieval` のカセット（`cassettes/retrieval.json`）にこの30 probe の
   記録が無いため、`RecordedEmbeddingProvider` は例外を投げる。**⟹「OpenAI の埋め込みなら
   失敗する／成功する」はこのベンチからは一切言えない。**
-- **標本は7件・12件である**（[ADR 0033](../../docs/decisions/0033-what-decided-the-rank-in-the-retrieval-bench.md) §3）。
+- **標本は7件・30件・12件である**（`japanese`・`identifiersSparse`/`identifiersDense`・
+  `japaneseNamesSparse`/`japaneseNamesDense` の順。[ADR 0033](../../docs/decisions/0033-what-decided-the-rank-in-the-retrieval-bench.md) §3）。
   ここから失敗率・成功率を統計的に主張しない——言えるのは「今回、この母数のうち
   何件引けたか」までである。
 - **埋め込みは否定・時制・矛盾を解かない**

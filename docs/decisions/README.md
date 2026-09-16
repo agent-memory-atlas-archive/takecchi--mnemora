@@ -205,5 +205,6 @@ alteroid (github.com/takecchi/alteroid) を根拠として引く箇所は、確�
 | [0195](./0195-six-gates-verified-in-ci.md) | 6つの門の緑は CI で確かめる——手元で全体を走らせることを止まる条件にしない（Issue #407） | 採用 (2026-09) |
 | [0196](./0196-locale-c-is-encoding-agnostic.md) | `--locale=C` はどの encoding とも両立する — 表の誤りを実測で正し、`ANY_ENCODING` を入れる（Issue #395） | 採用 (2026-09) |
 | [0197](./0197-set-default-half-life-recalls.md) | `TenantSettingsStore` に `setDefaultHalfLifeRecalls` を本番の経路として足す | 採用 (2026-09) |
+| [0199](./0199-identifier-probes-readme-freshness-tooth.md) | `examples/chat/README.md` の `identifier-probes` 節と基準値 JSON の一致を、既存 vitest に相乗りする歯で見張る | 採用 (2026-09) |
 
 <!-- ADR-INDEX:GENERATED:END -->
