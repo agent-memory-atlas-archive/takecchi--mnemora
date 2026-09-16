@@ -194,6 +194,7 @@ describe("recall() — omitted.kind = 'filtered'（スコープを定義する�
     expect(result.omitted).toContainEqual({
       kind: "filtered",
       condition: "archived",
+      scopeRelation: "outside_scope",
       count: 1,
       countKind: "exact",
     });
@@ -217,12 +218,14 @@ describe("recall() — omitted.kind = 'filtered'（スコープを定義する�
     expect(result.omitted).toContainEqual({
       kind: "filtered",
       condition: "superseded",
+      scopeRelation: "outside_scope",
       count: 3,
       countKind: "exact",
     });
     expect(result.omitted).toContainEqual({
       kind: "filtered",
       condition: "forgotten",
+      scopeRelation: "outside_scope",
       count: 5,
       countKind: "exact",
     });
@@ -249,6 +252,7 @@ describe("recall() — omitted.kind = 'filtered'（スコープを定義する�
     expect(result.omitted).toContainEqual({
       kind: "filtered",
       condition: "period",
+      scopeRelation: "outside_scope",
       count: 1,
       countKind: "exact",
     });

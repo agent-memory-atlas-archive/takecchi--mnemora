@@ -51,6 +51,41 @@ export interface StageSkippedOmission {
     | "no_anchor";
 }
 
+/**
+ * `FilteredOmission.condition` が分かれる2つの群の名前（Issue #352 / ADR 0174）。
+ *
+ * **なぜ2群か（真偽値ではなく名前のある値にした理由も含む）**:
+ *
+ * - `"outside_scope"` — **問うている切り口そのものを定義するゲート**で落ちた。
+ *   `expired`/`not_yet_valid` は「その事実はいま真ではない」ことを言う。これは
+ *   `period`（いつ起きたか）・tenant/subject（誰について）と同じく、**問うている
+ *   切り口そのものを定義する次元**である。だから `IndexBand.totalInScope` から
+ *   **引かれる**。
+ * - `"within_scope"` — **スコープの中に居るまま、到達しにくさのゲート**で落ちた。
+ *   `decayed` は「その記憶は**まだ真**で、**まだ切り口の中に在る**が、遠ざかった」
+ *   ことを言う——**到達しにくさ**のゲートであって、切り口のゲートではない。だから
+ *   `totalInScope` から**引かれない**（内訳・部分集合として残る）。
+ *
+ *   **決め手は `docs/north-star.md`「目指す姿」の逐語である**:
+ *   > 使われない記憶が、静かに遠ざかる。——消えるのではなく、遠ざかる。
+ *
+ *   `decayed` を `"outside_scope"` 側に置く（＝`totalInScope` から引く）と、
+ *   減衰した記憶は `totalInScope` からも目次帯からも消える（`digestEligible`/
+ *   `digests` は同じ述語に乗っている）。**呼び手から見て、減衰は削除と区別が
+ *   付かなくなる。**正典が名指しで否定した振る舞いになるため、この型は
+ *   `decayed` を `"within_scope"` 側に固定する。
+ *
+ * **真偽値にしない**——このリポジトリは `superseded`/`forgotten` を分けたときと
+ * 同じく、名前のある値を好む（ADR 0027）。`isOutsideScope: boolean` のような形は、
+ * 読み手が「true が何を意味するか」を毎回コードへ戻って確認する必要が生まれる。
+ */
+export type ScopeRelation = "outside_scope" | "within_scope";
+
+export const ScopeRelationSchema = z.enum([
+  "outside_scope",
+  "within_scope",
+]) satisfies z.ZodType<ScopeRelation>;
+
 export interface FilteredOmission {
   kind: "filtered";
   /**
@@ -101,6 +136,14 @@ export interface FilteredOmission {
    * **⚠ `"archived"` 等と違い、この件数は `IndexBand.totalInScope` から除かれていない**
    * ——減衰しきった Memory はスコープ内に在る（`ScopeAggregate.filteredDecayed` の doc）。
    *
+   * **`scopeRelation` は `"within_scope"` である（Issue #352 / ADR 0174）。**
+   * `decayed` は**スコープ内に在るまま到達しなかった側**である。`totalInScope` から
+   * 引かれない。引くと、正典が否定した「消える」になる——
+   * `docs/north-star.md`「目指す姿」の逐語:
+   * 「使われない記憶が、静かに遠ざかる。——消えるのではなく、遠ざかる。」
+   * これに対し `"archived"`/`"expired"`/`"not_yet_valid"` は `scopeRelation:
+   * "outside_scope"` であり、`totalInScope` から引かれる（各条件の doc 参照）。
+   *
    * **`"expired"`/`"not_yet_valid"`（Issue #280、Issue #202 第2弾、マネージャー決定3）**:
    * `RecallQuery.validAt` ゲート（既定 `now`）が落とした Memory を名指しする。
    * - `"expired"`: `validUntil` が `validAt` 以前（`validUntil <= validAt`）——
@@ -114,11 +157,18 @@ export interface FilteredOmission {
    * **issue が禁じる「片方だけ名指しして残りが黙って減る」形になる**——
    * `"superseded"`/`"forgotten"` を分けた ADR 0027 と同じ判断。
    *
-   * **`count`/`countKind` は `"period"` と同じ扱い（`"decayed"` とは違う）**:
+   * **`count`/`countKind` は `"period"` と同じ扱い**:
    * 段1（ANN・語彙の両チャンネル）へ SQL の `WHERE` として押し下げているため
-   * （`VectorFilter.validAt`/`LexicalFilter.validAt`。`"decayed"` は ANN にしか
-   * 押し下げていないので `lower_bound` になるのと対照的）、`MemoryStore.aggregateScope`
+   * （`VectorFilter.validAt`/`LexicalFilter.validAt`）、`MemoryStore.aggregateScope`
    * の `count(*) FILTER` で厳密集計できる。⟹ `countKind` は常に `"exact"`。
+   *
+   * **⚠ 2026-09 訂正（Issue #352 / ADR 0174）**: 以前この段落は「`"decayed"` は ANN にしか
+   * 押し下げていないので `lower_bound` になるのと対照的」と書いていたが、これは
+   * ADR 0173（2026-09-16）で古くなっていた——`"decayed"` の `countKind` はその ADR で
+   * `"lower_bound"` から `"exact"` へ上がっている（`decayed` の doc 参照）。**`"expired"`/
+   * `"not_yet_valid"` と `"decayed"` の `countKind` は今日どちらも `"exact"` であり、
+   * 対照は無い。** 両者が実際に違うのは `countKind` ではなく `scopeRelation`
+   * （下記）である。
    */
   condition:
     | "tenant"
@@ -130,9 +180,50 @@ export interface FilteredOmission {
     | "decayed"
     | "expired"
     | "not_yet_valid";
+  /**
+   * この `condition` が `IndexBand.totalInScope` の内側と外側のどちらの群に属するかを
+   * 名乗る（Issue #352 / ADR 0174）。**どの条件がどちらかを決める唯一の場所は
+   * `FILTERED_CONDITION_SCOPE_RELATION` である**——ここでは決めない・重複させない
+   * （式を2箇所に書くと必ずずれる、ADR 0038 が実測した穴）。
+   */
+  scopeRelation: ScopeRelation;
   count: number;
   countKind: CountKind;
 }
+
+/**
+ * `FilteredOmission.condition` のどの値がどちらの `ScopeRelation` かを決める、
+ * **唯一の場所**（Issue #352 / ADR 0174）。`omitted` を組み立てる側
+ * （`recall-runtime.ts`）は、この定数から読むだけにする——式をここと組み立て側の
+ * 2箇所に書くと、どちらか一方だけ直して他方を直し忘れたときに黙ってずれる
+ * （ADR 0038 が実測した穴と同じ形）。
+ *
+ * `Record<FilteredOmission["condition"], ScopeRelation>` という型そのものが、
+ * `condition` の union に値を足したときにこの定数の更新漏れを型エラーにする
+ * （キー不足・キー余剰のどちらも赤くなる）。実行時にも網羅性を検査する歯が
+ * `packages/core/src/__tests__/` に在る（`OmissionSchema`/`condition` の enum と
+ * このオブジェクトのキー集合を突き合わせる、`omission-kind-generation.test.ts` と
+ * 同じ作法）。
+ *
+ * - `tenant`/`superseded`/`forgotten`/`archived`/`taxonomy`/`period`/`expired`/
+ *   `not_yet_valid` → `"outside_scope"`（スコープを定義するゲートで落ちた）。
+ * - `decayed` → `"within_scope"`（スコープ内に居るまま到達しなかった。`ScopeRelation`
+ *   の doc コメントに理由の全文がある）。
+ */
+export const FILTERED_CONDITION_SCOPE_RELATION: Record<
+  FilteredOmission["condition"],
+  ScopeRelation
+> = {
+  tenant: "outside_scope",
+  superseded: "outside_scope",
+  forgotten: "outside_scope",
+  archived: "outside_scope",
+  taxonomy: "outside_scope",
+  period: "outside_scope",
+  expired: "outside_scope",
+  not_yet_valid: "outside_scope",
+  decayed: "within_scope",
+};
 
 export interface BelowThresholdOmission {
   kind: "below_threshold";
@@ -341,6 +432,7 @@ const FilteredOmissionSchema = z.object({
     "expired",
     "not_yet_valid",
   ]),
+  scopeRelation: ScopeRelationSchema,
   count: z.number().int().nonnegative(),
   countKind: CountKindSchema,
 }) satisfies z.ZodType<FilteredOmission>;

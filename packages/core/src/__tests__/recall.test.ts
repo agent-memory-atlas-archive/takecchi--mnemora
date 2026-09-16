@@ -9,6 +9,7 @@ import {
   RecallUsageSchema,
 } from "../recall.js";
 import type { FilteredOmission } from "../recall.js";
+import { FILTERED_CONDITION_SCOPE_RELATION } from "../recall.js";
 
 describe("OmissionSchema — 10 の kind すべて", () => {
   // ⚠ 題は以前「7つの kind すべて」だった。ann_unreached（ADR 0026）が入った時点で 8 に
@@ -36,6 +37,7 @@ describe("OmissionSchema — 10 の kind すべて", () => {
     const result = OmissionSchema.safeParse({
       kind: "filtered",
       condition: "period",
+      scopeRelation: "outside_scope",
       count: 3,
       countKind: "exact",
     });
@@ -46,6 +48,7 @@ describe("OmissionSchema — 10 の kind すべて", () => {
     const result = OmissionSchema.safeParse({
       kind: "filtered",
       condition: "period",
+      scopeRelation: "outside_scope",
       count: -1,
       countKind: "exact",
     });
@@ -91,6 +94,7 @@ describe("OmissionSchema — 10 の kind すべて", () => {
       const result = OmissionSchema.safeParse({
         kind: "filtered",
         condition,
+        scopeRelation: FILTERED_CONDITION_SCOPE_RELATION[condition],
         count: 0,
         countKind: "exact",
       });
@@ -480,7 +484,15 @@ describe("RecallResultSchema", () => {
     const result = RecallResultSchema.safeParse({
       recallId: "rcl-1",
       memories: [],
-      omitted: [{ kind: "filtered", condition: "period", count: 3, countKind: "exact" }],
+      omitted: [
+        {
+          kind: "filtered",
+          condition: "period",
+          scopeRelation: "outside_scope",
+          count: 3,
+          countKind: "exact",
+        },
+      ],
       index: {
         groups: [{ axis: "subject", key: "project/mnemora", count: 412, countKind: "exact" }],
         totalInScope: 412,

@@ -14,6 +14,7 @@ import {
   ContestedWithoutCompanionError,
   defaultActivityDecayStrategy,
   defaultDecayStrategy,
+  FILTERED_CONDITION_SCOPE_RELATION,
   MemoryPurgeConflictError,
   MemoryStatusConflictError,
 } from "@mnemora/core";
@@ -4455,6 +4456,184 @@ export function describeMemoryStoreConformance(options: MemoryStoreConformanceOp
       expect(aggregate.filteredExpired.count).toBe(1);
       expect(aggregate.filteredDecayed.count).toBe(1);
       expect(aggregate.totalInScope).toBe(1);
+    });
+
+    // -------------------------------------------------------------------
+    // ⭐ 被覆の算術（Issue #352 / ADR 0174）
+    //
+    // `FilteredOmission.condition` は2群に分かれる——(甲) スコープを定義するゲートで
+    // 落ちた＝`totalInScope` の**外**（`scopeRelation: "outside_scope"`。
+    // archived/superseded/forgotten/period/expired/not_yet_valid）と、
+    // (乙) スコープ内に居るまま到達しなかった＝`totalInScope` の**内**
+    // （`scopeRelation: "within_scope"`。decayed）。
+    //
+    // **2群を名乗るだけでは、札と実際の数え方がずれても誰も気づかない。**
+    // 型（`FILTERED_CONDITION_SCOPE_RELATION`）が「decayed は within_scope」と
+    // 名乗っていても、`aggregateScope` の実装が実際にそう数えているかは別の検査を
+    // 要る——ここではその**算術**を、既知の内訳を持つ fixture で検査する:
+    //
+    //   1. (乙) within_scope の filtered 件数は `totalInScope` の**部分集合**である
+    //      （`count <= totalInScope`、かつ引くと実際に返りうる件数になる）。
+    //   2. テナント内の全件数 = `totalInScope` + Σ(`outside_scope` の filtered 件数)。
+    //
+    // 各群を1件以上踏ませる（スコープ内で減衰していないもの5件・減衰しきったもの4件・
+    // expired 3件・archived 2件・superseded/forgotten/period/not_yet_valid 各1件）。
+    // -------------------------------------------------------------------
+
+    it("⭐ 被覆の算術: within_scope(decayed) は totalInScope の部分集合、outside_scope の総和 + totalInScope = テナント全件数", async () => {
+      const store = await createStore();
+      const ctx: Ctx = { tenantId: "tenant-1" };
+      const decayGate = new Date("2026-06-01T00:00:00.000Z");
+      const validAt = new Date("2026-06-01T00:00:00.000Z");
+      const periodCutoff = new Date("2026-01-01T00:00:00.000Z");
+      const inPeriod = new Date("2026-03-01T00:00:00.000Z");
+
+      // (甲) outside_scope 群 — スコープを定義するゲートで落ちる。
+      const ARCHIVED_N = 2;
+      for (let i = 0; i < ARCHIVED_N; i += 1) {
+        await store.createMemory(
+          ctx,
+          buildNewMemoryFixture({
+            tenantId: "tenant-1",
+            status: "archived",
+            occurredAt: inPeriod,
+            contentHash: `coverage-archived-${i}`,
+          }),
+        );
+      }
+      await store.createMemory(
+        ctx,
+        buildNewMemoryFixture({
+          tenantId: "tenant-1",
+          status: "superseded",
+          occurredAt: inPeriod,
+          contentHash: "coverage-superseded",
+        }),
+      );
+      await store.createMemory(
+        ctx,
+        buildNewMemoryFixture({
+          tenantId: "tenant-1",
+          status: "forgotten",
+          occurredAt: inPeriod,
+          contentHash: "coverage-forgotten",
+        }),
+      );
+      await store.createMemory(
+        ctx,
+        buildNewMemoryFixture({
+          tenantId: "tenant-1",
+          occurredAt: new Date("2020-01-01T00:00:00.000Z"), // periodCutoff より前 ⟹ 外
+          contentHash: "coverage-period",
+        }),
+      );
+      const EXPIRED_N = 3;
+      for (let i = 0; i < EXPIRED_N; i += 1) {
+        await store.createMemory(
+          ctx,
+          buildNewMemoryFixture({
+            tenantId: "tenant-1",
+            occurredAt: inPeriod,
+            validUntil: new Date(validAt.getTime() - 1000),
+            contentHash: `coverage-expired-${i}`,
+          }),
+        );
+      }
+      await store.createMemory(
+        ctx,
+        buildNewMemoryFixture({
+          tenantId: "tenant-1",
+          occurredAt: inPeriod,
+          validFrom: new Date(validAt.getTime() + 1000),
+          contentHash: "coverage-not-yet-valid",
+        }),
+      );
+
+      // (乙) within_scope 群 — スコープ内に居るまま、到達しにくさ（decayed）で落ちる。
+      const DECAYED_N = 4;
+      for (let i = 0; i < DECAYED_N; i += 1) {
+        await store.createMemory(
+          ctx,
+          buildNewMemoryFixture({
+            tenantId: "tenant-1",
+            occurredAt: inPeriod,
+            decayFloorAt: new Date(decayGate.getTime() - 1000),
+            contentHash: `coverage-decayed-${i}`,
+          }),
+        );
+      }
+      // スコープ内で、減衰していない（まだ生きている）記憶。
+      const ALIVE_N = 5;
+      for (let i = 0; i < ALIVE_N; i += 1) {
+        await store.createMemory(
+          ctx,
+          buildNewMemoryFixture({
+            tenantId: "tenant-1",
+            occurredAt: inPeriod,
+            decayFloorAt: new Date(decayGate.getTime() + 1000),
+            contentHash: `coverage-alive-${i}`,
+          }),
+        );
+      }
+
+      const TOTAL_CREATED =
+        ARCHIVED_N +
+        1 /* superseded */ +
+        1 /* forgotten */ +
+        1 /* period */ +
+        EXPIRED_N +
+        1 /* not_yet_valid */ +
+        DECAYED_N +
+        ALIVE_N; // = 18
+
+      const aggregate = await store.aggregateScope(ctx, {
+        occurredAfter: periodCutoff,
+        validAt,
+        decayFloorAtAfter: decayGate,
+      });
+
+      // 前提: 各群が実際に1件以上踏まれていること（fixture がずれていないことの検算）。
+      expect(aggregate.filteredArchived.count).toBe(ARCHIVED_N);
+      expect(aggregate.filteredSuperseded.count).toBe(1);
+      expect(aggregate.filteredForgotten.count).toBe(1);
+      expect(aggregate.filteredPeriod.count).toBe(1);
+      expect(aggregate.filteredExpired.count).toBe(EXPIRED_N);
+      expect(aggregate.filteredNotYetValid.count).toBe(1);
+      expect(aggregate.filteredDecayed.count).toBe(DECAYED_N);
+      expect(aggregate.totalInScope).toBe(DECAYED_N + ALIVE_N);
+
+      // --- 1. (乙) within_scope: filteredDecayed は totalInScope の部分集合 ---
+      expect(FILTERED_CONDITION_SCOPE_RELATION.decayed).toBe("within_scope");
+      expect(aggregate.filteredDecayed.count).toBeLessThanOrEqual(aggregate.totalInScope);
+      // 引くと、実際に返りうる件数（=生きている記憶の件数）になる。
+      const aliveInScope = aggregate.totalInScope - aggregate.filteredDecayed.count;
+      expect(aliveInScope).toBe(ALIVE_N);
+
+      // --- 2. (甲) outside_scope: totalInScope + Σ(outside_scope の filtered 件数) = 全件数 ---
+      const OUTSIDE_SCOPE_COUNTS: Record<
+        "archived" | "superseded" | "forgotten" | "period" | "expired" | "not_yet_valid",
+        number
+      > = {
+        archived: aggregate.filteredArchived.count,
+        superseded: aggregate.filteredSuperseded.count,
+        forgotten: aggregate.filteredForgotten.count,
+        period: aggregate.filteredPeriod.count,
+        expired: aggregate.filteredExpired.count,
+        not_yet_valid: aggregate.filteredNotYetValid.count,
+      };
+      for (const condition of Object.keys(
+        OUTSIDE_SCOPE_COUNTS,
+      ) as (keyof typeof OUTSIDE_SCOPE_COUNTS)[]) {
+        // この等式は、各 condition が実際に "outside_scope" を名乗っている前提の上でだけ成り立つ
+        // ——`FILTERED_CONDITION_SCOPE_RELATION` の値を1つでも取り違えると、この前提が崩れる
+        // ことをまず固定してから、和を取る。
+        expect(FILTERED_CONDITION_SCOPE_RELATION[condition]).toBe("outside_scope");
+      }
+      const outsideScopeTotal = Object.values(OUTSIDE_SCOPE_COUNTS).reduce(
+        (sum, count) => sum + count,
+        0,
+      );
+      expect(aggregate.totalInScope + outsideScopeTotal).toBe(TOTAL_CREATED);
     });
 
     it("aggregateScope は notIndexed を理由ごと（pending/failed/skipped）に分けて数え、totalInScope からは除かない", async () => {

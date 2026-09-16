@@ -459,6 +459,7 @@ describe("runtime.forget — recall() との裏取り（recall 側は変更し�
     expect(afterForget.omitted).toContainEqual({
       kind: "filtered",
       condition: "forgotten",
+      scopeRelation: "outside_scope",
       count: 1,
       countKind: "exact",
     });

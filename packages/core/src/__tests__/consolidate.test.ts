@@ -488,6 +488,7 @@ describe("runtime.consolidate — recall() との裏取り（recall 側は変更
     expect(afterConsolidate.omitted).toContainEqual({
       kind: "filtered",
       condition: "superseded",
+      scopeRelation: "outside_scope",
       count: 2,
       countKind: "exact",
     });

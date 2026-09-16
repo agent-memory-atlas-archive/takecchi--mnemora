@@ -65,18 +65,26 @@ recall は次の7段からなる。各段は「入力」「出力」「落ちる
 
 上の段落は「スコープ」を tenant / subject / 時間窓 / taxonomy と書いているが、これだけでは外延が確定しない。§4 の `FilteredOmission.condition` には `'status'` / `'archived'` が別途存在し、§5 の被覆不変条件（「スコープ内の全 Memory は、返るか群カウントに乗るかのどちらか」）を検査しようにも、「スコープ」に `status` が入るのか入らないのかが決まらなければ、この不変条件は機械的に検査できない。ここでその外延を確定する。
 
-**決定: スコープ = tenant + subject + 時間窓(period) + taxonomy + status ゲート。** status ゲートは段1の候補生成と同じ `status IN ('active', 'contested')` である。
+**決定: スコープ = tenant + subject + 時間窓(period) + 有効性(validAt) + taxonomy + status ゲート。** status ゲートは段1の候補生成と同じ `status IN ('active', 'contested')` である。
+
+> **⚠ 2026-09 追記（Issue #352 / [ADR 0174](./decisions/0174-filtered-omission-scope-relation.md)）: 「有効性(validAt)」を列挙に足した。これは新しい判断ではなく、記録漏れの補完である。**
+> [Issue #280 / ADR 0164](./decisions/0164-valid-from-until-recall.md) は `RecallQuery.validAt` ゲート（`validFrom`/`validUntil`、既定 `now`）を追加し、`expired`/`not_yet_valid` で落ちた件数を `totalInScope` から引く実装を既に入れていた——**コードは最初からこの通りに動いていた。**
+> しかし当時、この節の決定文（上の1行）は更新されず、`validAt` は一度も列挙に現れなかった。**振る舞いは1バイトも変えていない**——ADR 0164 が既に決めて実装したことを、この節の文章がここまで書き漏らしていただけである。
 
 - **tenant と subject はスコープの外側の境界である。** 呼び出し側が明示した境界の外は「失われた」のではなく「そもそも問うていない」——ちょうどこの段落が「スコープ外は『無い』ではなく『そもそも問うていない』」と述べているのと同じ扱いであり、`Omission`（§4）としては報告しない（`FilteredOmission.condition` に `'tenant'`/`'subject'` の値が無いことと対応する。`'tenant'` という値自体は型として残っているが、Phase 1 の recall はテナント境界の外を問うことが構造的に無いため、実際には発生しない）。
-- **period・status（archived / superseded / forgotten）が実際に `filtered` として報告される次元である。** status ゲートで落ちる Memory はさらに三分する——`status = 'archived'`（`condition: 'archived'`）、`status = 'superseded'`（`condition: 'superseded'`）、`status = 'forgotten'`（`condition: 'forgotten'`）。分ける理由: `archived` は「使われなくなって静かに遠ざかった」ものであり、強化すれば戻ってくる可能性がある（次の一手が違う）。`superseded` はより新しい Memory が既に別の形で返るはずのもの（**機構の都合**であり、`superseded_by_id` で置き換え先を辿れる）、`forgotten` は利用者が明示的に忘れさせたもの（**製品の振る舞い**であり、置き換え先を持たない）で、互いに次の一手が異なる（[ADR 0027](./decisions/0027-split-superseded-forgotten-omission.md)）。以前はこの2つを単純に `'status'` という1つの condition へ丸めていたが、それでは「利用者が忘れてほしいと言ったのか、こちらが作り直しただけなのか」を呼び出し側が判定できなくなる。
+- **period・status（archived / superseded / forgotten）・validAt（expired / not_yet_valid）が実際に `filtered` として報告される次元である。** status ゲートで落ちる Memory はさらに三分する——`status = 'archived'`（`condition: 'archived'`）、`status = 'superseded'`（`condition: 'superseded'`）、`status = 'forgotten'`（`condition: 'forgotten'`）。分ける理由: `archived` は「使われなくなって静かに遠ざかった」ものであり、強化すれば戻ってくる可能性がある（次の一手が違う）。`superseded` はより新しい Memory が既に別の形で返るはずのもの（**機構の都合**であり、`superseded_by_id` で置き換え先を辿れる）、`forgotten` は利用者が明示的に忘れさせたもの（**製品の振る舞い**であり、置き換え先を持たない）で、互いに次の一手が異なる（[ADR 0027](./decisions/0027-split-superseded-forgotten-omission.md)）。以前はこの2つを単純に `'status'` という1つの condition へ丸めていたが、それでは「利用者が忘れてほしいと言ったのか、こちらが作り直しただけなのか」を呼び出し側が判定できなくなる。validAt ゲートも同様に二分する——`expired`（`validUntil` が `validAt` 以前。その事実はもう真ではない）と `not_yet_valid`（`validFrom` が `validAt` より後。その事実はまだ真になっていない）——束ねると「まだ来ていない」のか「もう過ぎた」のかを呼び出し側が判定できなくなる（ADR 0164、`FilteredOmission.condition` の doc）。
 - **taxonomy は Phase 1 に実体が無い**（labels/memory_labels は Phase 2、[./memory-model.md](./memory-model.md) §8）。したがって Phase 1 のスコープの taxonomy 次元は常に無条件であり、`Omission { kind: 'filtered', condition: 'taxonomy' }` は Phase 1 では発生しない（型としては残す）。
 
 **件数はすべて単一の集約から取る。** `IndexBand.totalInScope` と `groups`、および `filtered` 系 Omission の件数・`not_indexed` の件数は、すべて同じ1回の集約クエリ（`MemoryStore.aggregateScope`）から得る。ADR 0011 が段1の `count(*) OVER ()` を締め出したのと同じ理由——**別々のクエリから出すと、その間の書き込みで総和が一致しなくなる**——がここでも成り立つ。
 
-**帰結**: スコープ内で落ちたもの(`not_indexed` / `below_threshold` / `over_limit` / `budget_dropped` / `ann_truncated`)はすべて群カウントに乗っている。スコープを定義するフィルタ(period / taxonomy / status)で落ちたものは群カウントには乗らない。これが被覆不変条件の実質的な中身である——「在るなら出せるはず」と読める形で `forgotten`/`superseded` まで群カウントに数えることはしない。
+**`totalInScope` が何を数えているかを一言で言うと**: 「tenant + subject + period + validAt + taxonomy + status ゲートを**すべて通過した** Memory の件数」である。通過したかどうかは、この段落より上で確定した外延だけで決まる——**到達しにくさ（減衰・閾値・件数超過・予算・索引未整備）は `totalInScope` に影響しない**（下記「2群」参照）。
+
+**帰結**: スコープ内で落ちたもの(`not_indexed` / `below_threshold` / `over_limit` / `budget_dropped` / `ann_truncated`)はすべて群カウントに乗っている。スコープを定義するフィルタ(period / taxonomy / status / validAt)で落ちたものは群カウントには乗らない。これが被覆不変条件の実質的な中身である——「在るなら出せるはず」と読める形で `forgotten`/`superseded` まで群カウントに数えることはしない。
+
+#### `filtered` の2群（Issue #352 / [ADR 0174](./decisions/0174-filtered-omission-scope-relation.md)）
 
 **⚠ 2026-09-16 追記（[ADR 0173](./decisions/0173-decayed-omission-counted-by-aggregate-scope.md)）: 忘却ゲート（`decay_floor_at`/`decay_floor_seq`）はこの外延に入らない。**
-上の決定（スコープ = tenant + subject + period + taxonomy + status ゲート）に忘却ゲートは
+上の決定（スコープ = tenant + subject + period + validAt + taxonomy + status ゲート）に忘却ゲートは
 **書かれていない**。ADR 0153 がゲートを既定 ON にしたときも、この外延は動かさなかった。
 ⟹ **減衰しきった Memory はスコープ内に在る**——`IndexBand.totalInScope` にも群カウントにも
 目次帯にも現れ続け、`omitted` の `filtered(condition: 'decayed')` は
@@ -87,6 +95,21 @@ recall は次の7段からなる。各段は「入力」「出力」「落ちる
 ⚠ **これを「スコープに入れる」（＝ `totalInScope` から引く）判断は、あり得るが別の判断である**
 ——それは「減衰しきった記憶は目次帯にも出さない」という製品の振る舞いの変更であり、
 ⭐門（`examples/chat` の `compare`）の基準値も動く。ADR 0173「採らなかった案」4番。
+
+**上の `decayed` の扱いは、`archived`/`period`/`expired`/`not_yet_valid` の扱いと構造が同じに見えて逆である**（[Issue #352](https://github.com/takecchi/mnemora/issues/352) が指摘した非対称）。ADR 0174 はこれを偶然ではなく**2つの群がある**と整理し、`FilteredOmission.condition` に `scopeRelation`（`"outside_scope"` | `"within_scope"`）という欄を足して型で見分けられるようにした。
+
+| 群 | `scopeRelation` | 何が起きたか | `totalInScope` との関係 | 該当する `condition` |
+|---|---|---|---|---|
+| (甲) | `"outside_scope"` | **問うている切り口そのものを定義するゲート**で落ちた——period（いつ）・tenant/subject（誰について）と同じ次元 | **除かれる**（`totalInScope` に入らない） | `archived` / `superseded` / `forgotten` / `period` / `expired` / `not_yet_valid`（`tenant`/`taxonomy` は型に在るが生成されない） |
+| (乙) | `"within_scope"` | **スコープの中に居るまま、到達しにくさのゲート**で落ちた——`below_threshold`/`over_limit`/`budget_dropped`/`ann_truncated`/`not_indexed` と同じ側 | **除かれない**（`totalInScope` の内訳・部分集合） | `decayed` |
+
+**決め手は `docs/north-star.md`「目指す姿」の逐語である**:
+
+> 使われない記憶が、静かに遠ざかる。——消えるのではなく、遠ざかる。
+
+`decayed` を (甲) 側に置く（＝ `totalInScope` から引く）と、減衰した記憶は `totalInScope` からも目次帯からも消える——目次帯（`digestEligible`/`digests`）は `totalInScope` と同じ述語に乗っているためである。**呼び手から見て、減衰は削除と区別が付かなくなる。**正典が名指しで否定した振る舞いになるため、ADR 0174 は `decayed` を (乙) 側に固定した。**塞いだ穴は「どちらが正しいか」ではなく、この2群が型で見分けられないことである**——`condition` を持つ値はどちらも同じ形 `{ count, countKind }` であり、`scopeRelation` を足すまでは呼び手が読み分けられなかった（ADR 0173「引き受けた負債」4番）。
+
+`FILTERED_CONDITION_SCOPE_RELATION`（`packages/core/src/recall.ts`）が、どの `condition` がどちらの群かを決める唯一の場所である。`omitted` を組み立てる側（`recall-runtime.ts`）はここから読むだけで、式を2箇所に書かない（ADR 0038 が実測した「実装が2つあると食い違う」穴と同じ理由）。
 
 ### 段1: 候補生成（索引が効く）
 
@@ -279,12 +302,21 @@ ANN 1本（`DEFAULT_RECALL_CHANNELS`）であり、押し下げで落ちた記�
 §5「スコープの外延」の「件数はすべて単一の集約から取る」という契約がそもそも前者である。
 
 **⚠ `decayed` の件数だけは `IndexBand.totalInScope` から引かれていない。**
-忘却ゲートは §2 段0「スコープの外延」が列挙する次元（tenant + subject + period + taxonomy +
-status）に**入っていない**——減衰しきった Memory は**スコープ内に在り**、群カウントにも
+忘却ゲートは §2 段0「スコープの外延」が列挙する次元（tenant + subject + period + validAt +
+taxonomy + status）に**入っていない**——減衰しきった Memory は**スコープ内に在り**、群カウントにも
 目次帯にも現れ続ける。⟹ `filtered(decayed)` は `totalInScope` から除かれた件数ではなく、
 **その内訳（部分集合）**である。**被覆不変条件（群カウントの総和 = `totalInScope`）は
 これによって崩れない。**この点で `decayed` は `archived`/`period`/`expired` より
 `below_threshold`（スコープ内で落ちたもの）の側に近い。
+
+**⚠ 2026-09 追記（Issue #352 / [ADR 0174](./decisions/0174-filtered-omission-scope-relation.md)）:
+`FilteredOmission` は本節冒頭の型例には無い `scopeRelation` も持つ（型例は書き換えない
+——追記としてここに足す）。**上の段落が述べている非対称（`decayed` だけ `totalInScope` の
+内側にある）を、呼び手が型で読み分けられるようにした欄である。値は `"outside_scope"`
+（`totalInScope` から引かれる。`archived`/`superseded`/`forgotten`/`period`/`expired`/
+`not_yet_valid`）と `"within_scope"`（引かれない。`decayed`）の2つ。どの `condition` が
+どちらかを決める唯一の場所は `packages/core/src/recall.ts` の
+`FILTERED_CONDITION_SCOPE_RELATION` であり、§2 段0「`filtered` の2群」に表がある。
 
 **⚠ 2026-09-16 追記**: `reason` は以前 `'budget_exhausted'` も持っていたが、
 生成するコードが一度も無かった（Issue #206 / [ADR 0117](./decisions/0117-unreachable-union-values-inventory.md)
@@ -354,7 +386,7 @@ alteroid の「全文か目次1行かのどちらかに必ず現れる」とい�
 
 **recall のスコープ内にある全ての Memory は、返り値の中に (1) 全文 / (2) digest 1行 / (3) それが属する群の件数 のいずれかで必ず現れる。かつ (3) の件数の総和は、スコープ内の総数と一致する。**
 
-**「スコープ」の外延は §2 段0「スコープの外延」で確定した(tenant + subject + 時間窓 + taxonomy + status ゲート)。この不変条件が指す「スコープ内の総数」はその定義そのものであり、status ゲートで落ちた Memory(`archived`/`superseded`/`forgotten`)は「スコープ内」に含まれない——したがって群カウントにも乗らない。乗るのは、スコープには入ったが段1〜4のどこかで(索引未整備・閾値・件数超過・予算のいずれかで)落ちたものだけである。**この区別を曖昧にすると、この不変条件は「在るなら出せるはず」という誤読を生む——忘れられた Memory まで「在る」と数えて見せることは、原則3(結果は、そこから漏れたものと必ず同時に提示する)の逆効果になる。**
+**「スコープ」の外延は §2 段0「スコープの外延」で確定した(tenant + subject + 時間窓 + 有効性(validAt) + taxonomy + status ゲート)。この不変条件が指す「スコープ内の総数」はその定義そのものであり、status ゲートで落ちた Memory(`archived`/`superseded`/`forgotten`)・validAt ゲートで落ちた Memory(`expired`/`not_yet_valid`)は「スコープ内」に含まれない——したがって群カウントにも乗らない。乗るのは、スコープには入ったが段1〜4のどこかで(索引未整備・閾値・件数超過・予算・忘却ゲートのいずれかで)落ちたものだけである(`decayed` を含む——§2 段0「`filtered` の2群」参照)。**この区別を曖昧にすると、この不変条件は「在るなら出せるはず」という誤読を生む——忘れられた Memory まで「在る」と数えて見せることは、原則3(結果は、そこから漏れたものと必ず同時に提示する)の逆効果になる。**
 
 二階建てが mnemora で成り立たない理由は単純である。1テナントが100万件の Memory を持ちうる設計で、digest 1行ずつでもプロンプトに載せれば数十万文字になる。alteroid の二階建てが成立していたのは、想定するのが単一所有者・文書数が少ないという前提の上だからである(§1 参照)。mnemora はこの前提を持たない。
 

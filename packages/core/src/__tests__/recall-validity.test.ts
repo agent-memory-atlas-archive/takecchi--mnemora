@@ -185,6 +185,7 @@ describe("recall() — validAt ゲートが実際に候補を落とす／浮上�
     expect(result.omitted).toContainEqual({
       kind: "filtered",
       condition: "not_yet_valid",
+      scopeRelation: "outside_scope",
       count: 1,
       countKind: "exact",
     });
@@ -211,6 +212,7 @@ describe("recall() — validAt ゲートが実際に候補を落とす／浮上�
     expect(result.omitted).toContainEqual({
       kind: "filtered",
       condition: "expired",
+      scopeRelation: "outside_scope",
       count: 1,
       countKind: "exact",
     });
@@ -237,6 +239,7 @@ describe("recall() — validAt ゲートが実際に候補を落とす／浮上�
     expect(result.omitted).toContainEqual({
       kind: "filtered",
       condition: "not_yet_valid",
+      scopeRelation: "outside_scope",
       count: 1,
       countKind: "exact",
     });

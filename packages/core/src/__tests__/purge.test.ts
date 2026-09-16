@@ -622,6 +622,7 @@ describe("runtime.purge — recall()/aggregateScope への影響（ADR 0124 決�
     expect(beforePurge.omitted).toContainEqual({
       kind: "filtered",
       condition: "forgotten",
+      scopeRelation: "outside_scope",
       count: 1,
       countKind: "exact",
     });
@@ -638,6 +639,7 @@ describe("runtime.purge — recall()/aggregateScope への影響（ADR 0124 決�
     expect(afterPurge.omitted).toContainEqual({
       kind: "filtered",
       condition: "forgotten",
+      scopeRelation: "outside_scope",
       count: 1,
       countKind: "exact",
     });

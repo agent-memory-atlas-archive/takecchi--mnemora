@@ -144,6 +144,7 @@ describe("recall() の occurredAfter は、occurredAt を渡したときだけ�
     expect(result.omitted).toContainEqual({
       kind: "filtered",
       condition: "period",
+      scopeRelation: "outside_scope",
       count: 1,
       countKind: "exact",
     });
@@ -223,6 +224,7 @@ describe("recall() の period は境界を含み、返り値と omitted が食�
     expect(result.omitted).toContainEqual({
       kind: "filtered",
       condition: "period",
+      scopeRelation: "outside_scope",
       count: 1,
       countKind: "exact",
     });
@@ -290,6 +292,7 @@ describe("recall() の period は境界を含み、返り値と omitted が食�
     expect(result.omitted).toContainEqual({
       kind: "filtered",
       condition: "period",
+      scopeRelation: "outside_scope",
       count: 1,
       countKind: "exact",
     });

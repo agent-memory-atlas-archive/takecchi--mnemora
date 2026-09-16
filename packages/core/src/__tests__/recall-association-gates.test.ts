@@ -529,6 +529,7 @@ describe("recall() — 連想用 adapter がゲートを無視しても、後置
     expect(result.omitted).toContainEqual({
       kind: "filtered",
       condition: "decayed",
+      scopeRelation: "within_scope",
       count: 1,
       countKind: "exact",
     });

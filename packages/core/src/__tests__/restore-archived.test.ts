@@ -470,6 +470,7 @@ describe("runtime.restoreArchived — 往復（sweepArchive → archived → res
     expect(duringArchive.omitted).toContainEqual({
       kind: "filtered",
       condition: "archived",
+      scopeRelation: "outside_scope",
       count: 1,
       countKind: "exact",
     });

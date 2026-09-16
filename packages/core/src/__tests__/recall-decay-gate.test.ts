@@ -166,6 +166,7 @@ describe("recall() — 忘却ゲートが実際に候補を落とす（ANN チ�
     expect(result.omitted).toContainEqual({
       kind: "filtered",
       condition: "decayed",
+      scopeRelation: "within_scope",
       count: 1,
       countKind: "exact",
     });
@@ -252,6 +253,7 @@ describe("recall() — 忘却ゲートが語彙チャンネルにも同じ述語
     expect(result.omitted).toContainEqual({
       kind: "filtered",
       condition: "decayed",
+      scopeRelation: "within_scope",
       count: 1,
       countKind: "exact",
     });
@@ -353,6 +355,7 @@ describe("recall() — 押し下げと後置フィルタは同じ述語である
     expect(result.omitted).toContainEqual({
       kind: "filtered",
       condition: "decayed",
+      scopeRelation: "within_scope",
       count: 1,
       countKind: "exact",
     });
@@ -381,6 +384,7 @@ describe("recall() — 押し下げと後置フィルタは同じ述語である
     expect(result.omitted).toContainEqual({
       kind: "filtered",
       condition: "decayed",
+      scopeRelation: "within_scope",
       count: 1,
       countKind: "exact",
     });
@@ -428,6 +432,7 @@ describe("recall() — 押し下げと後置フィルタは同じ述語である
     expect(scoped.omitted).toContainEqual({
       kind: "filtered",
       condition: "decayed",
+      scopeRelation: "within_scope",
       count: 2,
       countKind: "exact",
     });
@@ -436,6 +441,7 @@ describe("recall() — 押し下げと後置フィルタは同じ述語である
     expect(wholeTenant.omitted).toContainEqual({
       kind: "filtered",
       condition: "decayed",
+      scopeRelation: "within_scope",
       count: 3,
       countKind: "exact",
     });
@@ -491,6 +497,7 @@ describe("recall() — 忘却ゲートの時計選択（ADR 0165 決めたこと
     expect(result.omitted).toContainEqual({
       kind: "filtered",
       condition: "decayed",
+      scopeRelation: "within_scope",
       count: 1,
       countKind: "exact",
     });
@@ -589,6 +596,7 @@ describe("recall() — 忘却ゲートの時計選択（ADR 0165 決めたこと
     expect(result.omitted).toContainEqual({
       kind: "filtered",
       condition: "decayed",
+      scopeRelation: "within_scope",
       count: 1,
       countKind: "exact",
     });
