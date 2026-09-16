@@ -122,6 +122,13 @@ node scripts/generate-adr-index.mjs
 `docs/decisions/README.md は最新です（ADR 169 本）。`・exit 0 だった。**
 ⚠ **走らせたのは `main` の作業ツリーではない。**
 
+⭐ **追記（2026-09-17）— 上の「169本」はもう腐っている。**【実測】`origin/main` で
+`docs/decisions/README.md` の本数を数え直すと、上の値とは既に違っている
+（ADR は増え続けるので当然そうなる）。⛔ **本数の数字そのものを通過条件にしないこと**
+——**見るのは `--check` の exit code だけである。**当日、この項目を確認するときは
+必ずその場で `--check` を走らせて数え直すこと。⛔ **この追記でも新しい本数は書かない**
+（書けば、それもまた同じ理由で腐る）。
+
 ⛔ **索引の表を手で編集しないこと**（`docs/decisions/README.md`「この表は手で編集しない。」、ADR 0137）。
 再生成は、ADR を足す PR を **squash merge する直前に PR ブランチ上で**マージする側が行う
 （`scripts/generate-adr-index.mjs:11-22`。【読んで確かめた】）。⚠ **「マージした直後に `main` 上で」ではない**
@@ -424,7 +431,7 @@ manifest を持つ tarball を上げるだけなので `workspace:` を見るこ
 
 **v1.0.0 は通常のリリース（pre-release チェックなし・semver に `-` なし）であれば `latest` になる。**
 
-### 1.6 publish する6パッケージと順序
+### 1.6 publish するパッケージと順序
 
 `scripts/publish-targets.mjs` の `PUBLISH_TARGETS` 配列がこの repo で唯一の定義であり、
 **この順に publish される**（【読んで確かめた】）:
@@ -440,6 +447,30 @@ manifest を持つ tarball を上げるだけなので `workspace:` を見るこ
 `scripts/__tests__/publish-targets.test.mjs` が package.json の現物から機械的に検査する
 （`publish-targets.mjs:1-18`のコメント）。**⚠ 新しい7つ目のパッケージが増えたら、この配列に
 手で足す必要がある——見落としを機械的に検知する仕組みは無い**（同コメント14-17行）。
+
+⭐ **追記（2026-09-17）— 上の一覧は手で書いた記録であり、権威ではない。**
+**権威は `scripts/publish-targets.mjs` の `PUBLISH_TARGETS` そのものである。**
+当日、この一覧が最新か不安なら、手で数えず次のコマンドで機械的に数え直すこと
+【実測。このコマンドを実際に打って、下の出力を得た】:
+
+```bash
+node -e 'import("./scripts/publish-targets.mjs").then(m=>{for(const t of m.PUBLISH_TARGETS)console.log(t.name)})'
+```
+
+出力（2026-09-17、`origin/main` = `806f23f`）:
+
+```
+@mnemora/core
+@mnemora/testkit
+@mnemora/openai
+@mnemora/postgres
+@mnemora/anthropic
+@mnemora/local-embedding
+```
+
+⭐ **当日はこのコマンドで数え直すこと。上の一覧・下の §3.1 と §5.1 の `for` ループの
+名前列は、いずれも書いた時点の記録である。**7つ目が増えても、この3箇所は黙って
+見落とす（手書きの名前列挙のままなら）。
 
 ---
 
@@ -458,6 +489,17 @@ Actions → `Publish` → `Run workflow` → `dry_run` を `true`（既定）の
 - OIDC のトークン取得・payload の組み立てまで（`--dry-run` は「梱包・認証トークンの取得・
   payload の組み立ては行うが、実際の書き込み `PUT` は行わない」という npm 自身の設計。
   ADR 0067、124-130行。【読んで確かめた】）
+
+⭐ **追記（2026-09-17）— `dry_run: false` での `workflow_dispatch` は、この repo で
+一度も実行されたことがない。**【実測】`gh run list --workflow=publish.yml --limit 30` を
+引くと、`workflow_dispatch` 契機の run は **`34262743432`・`34248494960` の2件だけ**
+（どちらも2026-09-08）で、両方のログを見ると両方とも
+`予行（--dry-run）です。registry へは何も上がりません。` と出ており、**どちらも
+`dry_run: true`（予行）だった。** `dry_run: false` で起動した `workflow_dispatch` の
+run はログ上に1本も見当たらない。
+⚠ **当日この経路（`workflow_dispatch` を `dry_run: false` で起動すること）を使わないこと。**
+本番の入り口は Release を作る経路（§1.1）であり、`workflow_dispatch` はあくまで
+予行専用として使われてきた、という実績しかない。
 
 ### 2.2 🔴 何が本番 tag まで分からないか（ADR 0067、逐語）
 
@@ -637,6 +679,61 @@ Actions → `Publish` → `Run workflow` → `dry_run` を `true`（既定）の
 
 ## 3. 🔴 途中で失敗したときの確認手順と回復手順
 
+### 3.0 🔴 戻せない操作は、どこから始まるか
+
+⭐ **追記（2026-09-17）— この節は §3 の他の項目より先に読むこと。**以下は
+すべて **【実測】2026-09-17**（tag `v0.2.0`、run `35077566069` を対象にした実測。
+コマンドはすべて読み取りのみで、書き込みは行っていない）。
+
+**承認ゲートは無い。**
+
+```bash
+gh api repos/takecchi/mnemora/environments
+```
+
+は `{"total_count":0,"environments":[]}` を返す。⟹ **Release を published にした
+瞬間に `publish.yml` の job が走り出す。途中で人が承認する段は1つも無い。**
+
+**時間軸の実測**（`gh release view v0.2.0 --json publishedAt` と
+`gh api repos/takecchi/mnemora/actions/runs/35077566069/jobs` から）:
+
+| 出来事 | 時刻（UTC） | Release 公開からの経過 |
+|---|---|---|
+| Release を published にした | `09:06:57Z` | — |
+| workflow が起動した | `09:06:59Z` | **2秒** |
+| step 10（typecheck〜build）開始 | `09:07:22Z` | 25秒 |
+| step 14（`npm publish`）**開始 ＝ ここから戻せない** | `09:10:01Z` | **約3分** |
+| 6本の publish 完了 | `09:10:34Z` | 約3分37秒 |
+
+⭐ **step 13 までは registry へ1文字も書かない。**⟹ **Release を公開してからおおむね
+3分の間なら、Actions で run をキャンセルすれば1本も上がらない。**
+
+⚠ **この「3分」は毎回同じではない。**【実測】直近の本番 run3本（`35018364786` /
+`34928369051` / `34586212543`）でも `npm publish` の step はいずれも run 開始から
+**2分半〜3分後**に始まり、**28〜33秒**で終わっている——`v0.2.0` の実測と近いが、
+同じではない。**当日は自分で Actions の画面を見て、この run の step 14 がいつ
+始まるかを確認すること。数字を当てにしないこと。**
+
+🔴 **戻せなくなる瞬間は、step 14 のログに最初の `✔ @mnemora/... を publish した`
+が出たときである。**そこから先は、その版のそのパッケージは registry に永久に残る
+（§3.5）。
+
+**`npm unpublish` は「戻す」手段にならない**（【読んで確かめた】。
+出典: https://docs.npmjs.com/policies/unpublish ）:
+
+- publish から **72時間以内**かつ **他のパッケージが依存していない**なら
+  unpublish できる。
+- 72時間を超えると「依存が無い・直近1週間の DL が300未満・メンテナが1人」の
+  3条件をすべて満たす場合のみ。
+- 🔴 **そして最も重要な点: 一度使った `package@version` は、unpublish しても
+  二度と使えない。**「消してから同じ版を出し直す」はできない。
+- **npm 自身の推奨は unpublish ではなく `npm deprecate <pkg>@<version> "<理由>"`**
+  である（消さずに警告を出す）。
+
+⚠ **これらはいずれも npm 側の操作であり、`docs/autonomy.md` §3 によりオーナー専権
+である。**この節は「何が起きるか」を書いているだけで、この文書の作業者がこれらを
+実行することはない。
+
 ### 3.1 6パッケージのうちどこまで上がったかを調べる
 
 ```bash
@@ -645,6 +742,36 @@ for p in core testkit openai postgres anthropic local-embedding; do
   npm view "@mnemora/$p" versions --json
 done
 ```
+
+⭐ **追記（2026-09-17）— 上の `for p in core testkit ...` は手書きの名前列挙であり、
+7つ目のパッケージが増えても黙って見落とす（§1.6 の追記と同じ理由）。**§1.6 が引いた
+権威コマンドから名前を得る形に直すと、次のようになる【実測。実際に打って、下の
+出力を得た】:
+
+```bash
+for p in $(node -e 'import("./scripts/publish-targets.mjs").then(m=>{for(const t of m.PUBLISH_TARGETS)console.log(t.name)})'); do
+  echo "=== $p ==="
+  npm view "$p" versions --json
+done
+```
+
+出力（2026-09-17、`origin/main` = `806f23f`。各パッケージの `versions` 配列の
+先頭と末尾だけ示す——全文は6本とも `0.1.x`〜`0.2.0` の連番で長いため）:
+
+```
+=== @mnemora/core === ["0.1.0", …, "0.1.9", "0.2.0"]
+=== @mnemora/testkit === ["0.1.0", …, "0.1.9", "0.2.0"]
+=== @mnemora/openai === ["0.1.0", …, "0.1.9", "0.2.0"]
+=== @mnemora/postgres === ["0.1.0", …, "0.1.9", "0.2.0"]
+=== @mnemora/anthropic === ["0.1.2", …, "0.1.9", "0.2.0"]
+=== @mnemora/local-embedding === ["0.1.4", …, "0.1.9", "0.2.0"]
+```
+
+（`anthropic` が `0.1.2` から、`local-embedding` が `0.1.4` からなのは §3.4 の
+追記が挙げる「初版が新設で後から加わった」経緯そのものであり、異常ではない。）
+
+⭐ **当日はこの形（権威コマンドから名前を得る）で走らせること。**上の手書きの
+`for` ループは既存の記録として残す。
 
 **⚠ 直後は遅れる。時間を置いて引き直すこと。**
 `docs/autonomy.md` §4 はこう戒めている（`docs/autonomy.md:232`。【読んで確かめた】、逐語）:
@@ -809,6 +936,59 @@ fi
   **それは「publish の失敗によって開いた穴」ではない**（新設が理由である）。
   **失敗によって同じ形の穴が開くこと自体は、コードを読んだ上での推論に留まる。**
 
+#### ⭐ 追記（2026-09-17）— これは実例が在る。そして実際に採られた回復は、re-run でも新しい tag でもなかった
+
+**すべて【実測】2026-09-17。**
+
+**`gh run view 34452890407 --log`**（tag `v0.1.4`、2026-09-10）の逐語:
+
+```
+✔ @mnemora/core@0.1.4 を publish した
+✔ @mnemora/testkit@0.1.4 を publish した
+✔ @mnemora/openai@0.1.4 を publish した
+✔ @mnemora/postgres@0.1.4 を publish した
+✔ @mnemora/anthropic@0.1.4 を publish した
+npm error code E404
+npm error 404 Not Found - PUT https://registry.npmjs.org/@mnemora%2flocal-embedding - Not found
+✗ @mnemora/local-embedding@0.1.4 の publish が失敗した（exit 1）
+```
+
+⟹ **6本中5本が上がり、6本目で止まった。**§3.2 が読んだループ構造のとおりに動いている。
+
+**その run は re-run されていない**（`gh api repos/takecchi/mnemora/actions/runs/34452890407/attempts/2` が404）。**新しい tag も切られていない**（次の tag は `v0.1.5` で、これは別の内容）。
+
+🔴 **実際に採られた回復は、人手で同じ版を publish することだった。**【実測】
+`npm view @mnemora/local-embedding@0.1.4 --json`:
+
+- `_npmUser` が **`takecchi <takecchi.kobayashi@gmail.com>`**（人間。OIDC 経路なら
+  `GitHub Actions` / `trustedPublisher.id: "github"` になる）
+- **`dist.attestations` が無い**（＝ provenance が付いていない）
+- 公開時刻 `2026-09-10T08:05:57.603Z` ＝ **run の step 14 が落ちた `08:03:42Z` の
+  2分15秒後**
+- 対照: 同じパッケージの `0.1.5` は `_npmUser` が `GitHub Actions` /
+  `trustedPublisher.id: "github"` で
+  `dist.attestations.provenance.predicateType == "https://slsa.dev/provenance/v1"`
+  が在る。
+
+⟹ **§3 が挙げていなかった第3の回復手段が在る: 落ちた1本だけを、同じ版で人手で
+publish する。**
+
+- ⭕ **利点**: 版の並びに穴が開かない（§3.4 が指摘する「`core@1.0.0` は在るのに
+  `postgres@1.0.0` は永久に生まれない」を避けられる）。
+- 🔴 **代償**: **その1本だけ provenance が付かない。**実例がそれである——
+  `@mnemora/local-embedding@0.1.4` は、そのパッケージで唯一 attestation を持たない
+  版として今も registry に残っている。
+- ⚠ **さらに 2FA の壁が在る**: ADR 0066「測ったこと8」が、`npm login` だけでは
+  `EOTP` で落ちたこと（2FA が書き込みにも掛かる）と、automation token を作って
+  回避し publish 後に失効させたことを記録している（【読んで確かめた】）。
+- ⚠ **これはオーナー専権の操作である**（`docs/autonomy.md` §3）。
+
+⚠ **ただし v0.1.4 の失敗の原因は「そのパッケージが registry にまだ存在せず、OIDC
+では初版を作れない」という bootstrap 固有のもの**（`scripts/publish-targets.mjs`
+のコメントが npm/cli#8544 を挙げている。【読んで確かめた】）。**v1.0.0 の時点では
+6本とも registry に既に在るので、この原因そのものは再発しない。**⟹ **再発しうる
+のは「原因」ではなく「形」**——ループが途中で止まり、後ろが上がらない、という
+形である。
 
 ### 3.5 publish 済みの版は上書きできない
 
@@ -927,6 +1107,37 @@ for p in core testkit openai postgres anthropic local-embedding; do
 done
 ```
 
+⭐ **追記（2026-09-17）— 上の `for p in core testkit ...` も§1.6・§3.1と同じ理由で
+権威から数え直せない。**権威コマンドから名前を得る形に直すと【実測。実際に打って、
+下の出力を得た】:
+
+```bash
+for p in $(node -e 'import("./scripts/publish-targets.mjs").then(m=>{for(const t of m.PUBLISH_TARGETS)console.log(t.name)})'); do
+  echo "=== $p ==="
+  npm view "$p" version
+done
+```
+
+出力（2026-09-17、`origin/main` = `806f23f`。**測ったのは `v1.0.0` がまだ無い時点なので、
+値は `0.2.0` である**——`1.0.0` になっているかどうかの判定は当日行うこと）:
+
+```
+=== @mnemora/core ===
+0.2.0
+=== @mnemora/testkit ===
+0.2.0
+=== @mnemora/openai ===
+0.2.0
+=== @mnemora/postgres ===
+0.2.0
+=== @mnemora/anthropic ===
+0.2.0
+=== @mnemora/local-embedding ===
+0.2.0
+```
+
+⭐ **当日はこの形で走らせること。**
+
 **全部 `1.0.0` になっていることを確認する。**1本でも古い版のままなら、§3の手順で
 「どこで止まったか」を Actions のログから確認すること。
 
@@ -948,6 +1159,63 @@ done
 
 **これは、この手順書を書いていて「現物を読んでも分からなかった」点の1つである
 （下記「オーナーしか知らないこと」にも再掲する）。**
+
+⭐ **追記（2026-09-17）— 実際に両方とも打って確かめた。**
+
+**1つ目のコマンドを打った**【実測。ただし測ったのは `0.2.0` に対してである——
+`1.0.0` はまだ存在しない。`npm view @mnemora/core@1.0.0 --json` は
+`E404 No match found for version 1.0.0` を返す（当然——まだ切られていない）】:
+
+```bash
+npm view @mnemora/core@0.2.0 --json
+```
+
+**両方が出ていれば provenance 付きで成功している**——実際に出た（抜粋）:
+
+```json
+"dist": {
+  "attestations": {
+    "url": "https://registry.npmjs.org/-/npm/v1/attestations/@mnemora%2fcore@0.2.0",
+    "provenance": { "predicateType": "https://slsa.dev/provenance/v1" }
+  }
+},
+"_npmUser": {
+  "name": "GitHub Actions",
+  "email": "npm-oidc-no-reply@github.com",
+  "trustedPublisher": { "id": "github", "oidcConfigId": "oidc:fec1bcbc-..." }
+}
+```
+
+- `dist.attestations.provenance.predicateType` が `"https://slsa.dev/provenance/v1"` ✔
+- `_npmUser.trustedPublisher.id` が `"github"`（かつ `_npmUser.name` が
+  `"GitHub Actions"`）✔
+- ⚠ **逆に `_npmUser` が人間の名前の文字列で、`dist.attestations` が無ければ、
+  それは OIDC 経路を通っていない**（＝ 人手 publish）。§3.4 の追記の実例
+  （`@mnemora/local-embedding@0.1.4`）がそれである。
+
+**2つ目のやり方も打った**【実測】:
+
+```bash
+mkdir /tmp/f6-audit-test && cd /tmp/f6-audit-test
+npm install @mnemora/core@0.2.0 --no-save
+npm audit signatures
+```
+
+出力:
+
+```
+1 package has a verified registry signature
+
+1 package has a verified attestation
+```
+
+⟹ **`verified attestation` が出れば成功。**⚠ **先に `npm install` していない
+空のディレクトリで `npm audit signatures` だけ打つと** 【実測】
+`npm error found no installed dependencies to audit` になる——**先に install が要る。**
+
+⚠ **§5.3 の遅延に注意**: publish 直後は `npm view` が404を返しうる。**数分待って
+から引くこと**（このコマンド自体は `0.2.0` という既に安定した版に対して打ったので、
+遅延の影響は受けていない）。
 
 ### 5.3 `npm view` の遅延について（再掲）
 
@@ -976,6 +1244,15 @@ done
    （起きたのは「信頼発行元の権限不足」という**全パッケージに一様に効く**種類の失敗だけで、
    1本だけが特異的に失敗した実例は見当たらなかった）。§3.4 の分析は、コードの構造から
    導いた推論であり、実例に基づくものではない。
+
+   **⭐ 追記（2026-09-17）— 訂正。ADR には無いが、Actions の run のログには在った。**
+   run `34452890407`（tag `v0.1.4`）で `@mnemora/local-embedding` だけが特異的に
+   失敗し、re-run も新しい tag も使わず人手 publish で回復した実例が実在する。
+   詳細は §3.4 の追記「⭐ 追記（2026-09-17）— これは実例が在る。そして実際に
+   採られた回復は、re-run でも新しい tag でもなかった」を見ること。⚠ ただし
+   その原因（そのパッケージの初版を OIDC で作れない bootstrap 固有の事情）は
+   `v1.0.0` の時点では再発しない——§3.4 の追記が指摘するとおり、**再発しうるのは
+   「原因」ではなく「ループが途中で止まる」という形そのものである。**
 5. **`@mnemora/anthropic` と `@mnemora/local-embedding` が、現時点で本当に6本とも
    通常の OIDC 経路（信頼発行元設定済み・直接publish許可済み）に乗っているか。**
    ADR 0072・0096 の時点では2つとも「手元からの bootstrap」を経ており、その後
