@@ -7,14 +7,16 @@
 この文書を書いた作業者ではない。**この文書は手順の下調べであり、実行の代行ではない
 （[docs/autonomy.md](./autonomy.md) §3 のとおり、これらはオーナー専権）。
 
-## 凡例（この文書のすべての記述は、次のどちらかである）
+## 凡例（この文書のすべての記述は、次のいずれかである）
 
 - **【読んで確かめた】** — `.github/workflows/publish.yml` / `scripts/*.mjs` / ADR の現物にそう
   書いてある。ファイル名と行番号を添える。
 - **【未検証・理屈上こうなるはず】** — 現物からの推論だが、この作業者は実行して確かめていない。
+- **【実測】** — この器で実際にコマンドを走らせ、出力を見た。**いつ・どの commit の作業ツリーで・
+  どんな環境で走らせたかを添える**（環境が違えば結果も違いうるため）。
 
-**この2つを混ぜて書かない。**とくに「途中で失敗したらこうなる」は、実際に publish を打って
-壊してみることが許されていないため、**ほぼ全部が後者である。**
+**この3つを混ぜて書かない。**とくに「途中で失敗したらこうなる」は、実際に publish を打って
+壊してみることが許されていないため、**ほぼ全部が【未検証・理屈上こうなるはず】である。**
 
 ---
 
@@ -89,6 +91,22 @@
 **`workflow_dispatch`（予行）のときは、この書き込みは走らない。**
 `packages/core/package.json` の版をそのまま読み、`npm_tag` は常に `latest` に固定される
 （`publish.yml:126-135`。【読んで確かめた】）。
+
+**この器でも実際に走らせた**【実測】2026-09-16、`origin/main` = `14a7c27`、clean な作業ツリー:
+
+- `RELEASE_TAG=v1.0.0 GITHUB_PRERELEASE=false` で **exit 0**。
+  **6パッケージとも `0.1.1` → `1.0.0`** に変わり、`git diff` は各ファイルとも
+  **`version` の1行だけ**だった（`dependencies` の `workspace:^` は1文字も動かない）。
+  `$GITHUB_OUTPUT` には `version=1.0.0` / `npm_tag=latest` が書かれた。
+- ルートの `package.json`（`0.0.0`・`private`）と `examples/chat` は
+  `PUBLISH_TARGETS` に無いので**完全に無変更**——`git diff` に現れない。
+- 異常系も実測した: `RELEASE_TAG=1.0.0`（`v` 無し）と `RELEASE_TAG=vfoo` はどちらも
+  **exit 1 でファイル無変更**。`RELEASE_TAG=v0.1.1`（現在と同値）は exit 0 で差分なし。
+  **同じ tag で2回続けて走らせても冪等**（2回目は全パッケージ「変化なし」）。
+- `RELEASE_TAG=v1.0.0-beta.1` に `GITHUB_PRERELEASE=false` を与えると（食い違い）、
+  `::warning::` を出して **`npm_tag=next` へ倒れる**——`latest` を汚さない側へ倒れることを確認した。
+- ⚠ **この確認は使い捨ての作業ツリーで行い、毎回 `git checkout -- .` で戻した。**
+  commit も push もしていない。
 
 ### 1.4 `workspace:^` がいつ実版へ置換されるか
 
@@ -208,6 +226,87 @@ Actions → `Publish` → `Run workflow` → `dry_run` を `true`（既定）の
 - **registry の状態。**信頼発行元の設定・パッケージの存在・直接 publish の許可の有無・
   version の衝突——これらは registry に問い合わせて初めて分かるが、`pack:check` は
   一切 registry に触れない（現物にネットワーク呼び出しが無いことを確認した）。
+
+#### 実際に走らせた結果【実測】
+
+**2026-09-16、`origin/main` = `14a7c27` の作業ツリーで実際に走らせた。**
+この節はそれまで全部【読んで確かめた】だった——**バナーを読んだだけで、走らせていなかった。**
+
+走らせた環境（**CI と同じではない。**下の「この実測が言っていないこと」を必ず読むこと）:
+
+| | 値 |
+|---|---|
+| OS | Linux 6.12.12+bpo-cloud-amd64 |
+| Node | v22.23.2（`engines` は `>=22`） |
+| pnpm | **12.4.2** ⚠ `package.json` の `packageManager` は `pnpm@11.25.0` である |
+| `DATABASE_URL` | 未設定（この器に DB は無い） |
+
+結果:
+
+- **`pnpm install` — exit 0**（`Packages: +207`）。
+  `packages/postgres/dist/bin/migrate.js` が未ビルドで bin リンクを張れない `WARN` が出るが、
+  `prepack` のビルドより前なので想定内であり、`pack:check` の後は解消する。
+- **`pnpm run pack:check` — exit 0、違反0件。**6パッケージとも通り、
+  `✔ publish 梱包の門を通りました。` で終わった。**独立に2回走らせ、2回とも exit 0。**
+
+**⚠ `DATABASE_URL` が無くてもこの門は通る。**`pack:check` は DB を一切必要としない
+（上の「`spawnSync` で呼んでいるのは `pnpm pack` と `tar xzf` のみ」と整合する）。
+⟹ **DB の無い手元でも、当日より前にこの門は走らせられる。**
+
+**6パッケージの tarball を1本ずつ展開して突き合わせた結果**（版は作業ツリーの `0.1.1`）:
+
+| package | 圧縮サイズ | ファイル数 | `dist/` | README+LICENSE | 不要物 | `workspace:` |
+|---|---|---|---|---|---|---|
+| `@mnemora/core` | 238,844 B | 79 | ✔ 76 | ✔ | 0 | 0 |
+| `@mnemora/testkit` | 129,272 B | 49 | ✔ 46 | ✔ | 0 | 0 |
+| `@mnemora/openai` | 10,351 B | 13 | ✔ 10 | ✔ | 0 | 0 |
+| `@mnemora/postgres` | 133,286 B | 56 | ✔ 38 | ✔ | 0 | 0 |
+| `@mnemora/anthropic` | 11,337 B | 11 | ✔ 8 | ✔ | 0 | 0 |
+| `@mnemora/local-embedding` | 24,765 B | 11 | ✔ 8 | ✔ | 0 | 0 |
+
+- 「不要物」は `package/src/`・`__tests__`・`*.test.*`・`.env`・`tsconfig.tsbuildinfo`・`*.map`
+  を tarball の**目録に対して**数えた件数である。**6本とも0件。**
+  各パッケージに `.npmignore` は無く、`files` だけで絞れている。
+- 各パッケージに `prepack: "pnpm run build"` が在り、**`pnpm pack` が自動でビルドする。**
+  ⟹ 事前に手で `pnpm run build` を走らせる必要は無い（自動で発火することを実測した）。
+- `@mnemora/postgres` は `dist/bin/migrate.js` が実行属性（`rwxr-xr-x`）付きで入り、
+  `migrations/*.sql` 15本も同梱される。
+- `publishConfig.access` は6本とも `"public"`、`license` は6本とも `"MIT"`、
+  `private` は6本とも立っていない。
+
+**`workspace:^` の置換も、この器で実測した。**tarball 内の `package.json` に
+`workspace:` は**6本とも0件**で、`@mnemora/core` への依存は5本とも `^0.1.1` へ解決されていた。
+⟹ §1.4 の記述を、ADR 0060 の記録とは**独立に**この器で再現したことになる。
+
+**publish 順と依存の向き**——実行時 `dependencies` は次の通りだった:
+
+| package | 実行時 `dependencies` |
+|---|---|
+| `@mnemora/core` | `zod` |
+| `@mnemora/testkit` | `@mnemora/core` |
+| `@mnemora/openai` | `@mnemora/core`, `openai`, `zod` |
+| `@mnemora/postgres` | `@mnemora/core`, `pg`, `drizzle-orm`, `@types/pg` |
+| `@mnemora/anthropic` | `@mnemora/core`, `@anthropic-ai/sdk`, `zod` |
+| `@mnemora/local-embedding` | `@mnemora/core`, `@huggingface/transformers` |
+
+**⟹ `@mnemora/core` が先頭に在りさえすれば、残り5本の順序は実行時依存の上ではどれでもよい。**
+これは「いまの並びを支えているのは依存の向きだけ（＝当時の未公開の経緯はもう効いていない）」という
+`scripts/publish-targets.mjs` のコメントと整合する。
+
+**⚠ この実測が言っていないこと**:
+
+- **CI と同じ条件で走らせたのではない**【未検証】。pnpm は **12.4.2** で、CI が corepack で使う
+  `packageManager` の **`11.25.0`** とは違う。また `pnpm install --frozen-lockfile` ではなく
+  ただの `pnpm install` で入れた。⟹ **lockfile と `package.json` の不整合
+  （§1.2 のステップ5で赤くなりうる箇所）は、この実測では何も見ていない。**
+  **⟹ 上の `pack:check` の ✔ は、この2点の外側までは届かない。**当日の CI は
+  `packageManager` で pnpm の版を固定し `--frozen-lockfile` で入れるので、
+  **そこだけは手元の実測と条件が違う——lockfile 由来の赤は、当日まで分からない。**
+- **版は作業ツリーの `0.1.1` のままである。**`v1.0.0` の tag で
+  `apply-release-version.mjs` が版を書き換えた後の状態では `pack:check` を走らせていない。
+- `pack:check` 以外の門（`typecheck` / `lint` / `format:check` / `test` / `build`）は走らせていない。
+- **上の「何をカバーしないか」は1つも解消していない。**型の互換性と registry の状態は
+  【未検証】のままである。**この門が緑でも、publish が通ることは何も保証されない。**
 
 ---
 
