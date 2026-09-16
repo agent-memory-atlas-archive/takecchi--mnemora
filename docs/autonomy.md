@@ -316,8 +316,29 @@ gh pr list --state open --limit 20
 | **擬似 provider の数字を「性能」と読む** | arm A（擬似埋め込み）の **MRR は 0.018**＝実質ランダム | 想起の質を測るなら `recorded`（ADR 0051）。`deterministic` は配線と契約の検査用 |
 | **`npm view` で publish の成否を判断する** | registry の読み取り側は書き込みに数分遅れ、**CDN を迂回する `?write=true` でも 404 を返す**（ADR 0066 測ったこと8） | `npm publish` の出力で判断する |
 | **「CI が緑」を素朴に判定する**（PR 番号だけで見る／run 全体の `conclusion` を見る／`mergeStateStatus` を見る／手元の門の緑で代用する） | **check の本数は時間とともに増えうる・run と job の `conclusion` は別・`mergeStateStatus` は終端後の結果であって根拠にならない・手元の緑は CI の緑を予測しない**（Issue #228。5点のうち run/job の差・手元と CI の乖離は本 ADR 0132 で自分の `gh` 呼び出しにより再検算した）。**⚠ さらに、緑は sha に紐づく事実であり、時間とともに腐る**——判定した後に1コミットでも push すると、その確認は無効になる（Issue #294。2026-09-16、PR #283 で実際に踏んだ） | §2.1 の手順どおり、**head sha を明示**して `check-runs` を job 単位で読む。`node scripts/ci-green-check.mjs --pr <番号>` が機械化している。**マージ直前に引き直し**（§2.1.1）、`gh pr merge --match-head-commit <sha>` で見た sha と実際にマージされる sha の一致を道具側で強制する |
-| **ADR PR をマージするとき、索引の再生成を忘れる** | `docs/decisions/README.md` の ADR 索引は**機械生成**であり（[ADR 0137](./decisions/0137-adr-index-generated-from-source.md)）、**ADR を足す PR の作成者は索引を触らない**——触らないことが並行 PR 間の行位置の衝突を消している仕組みである。⟹ **マージする側が再生成しないと `main` の索引が陳腐化する**（`main` 限定の鮮度の歯が赤くなる） | **squash merge する直前に、PR ブランチ上で**次を実行してコミットし、push してからマージする: `git fetch origin main && git merge origin/main` → **`node scripts/adr-renumber.mjs`**（このブランチが足した ADR の番号が `origin/main` で既に使われていないか確認し、衝突していれば空いている次の番号へ機械的に付け替える。ADR 0179） → `node scripts/generate-adr-index.mjs` → commit → push → CI の緑を引き直す（§2.1・**§2.1.1**——索引再生成のコミット自体が sha を変えるため、判定はこの push の**後**でなければならない）→ merge（`gh pr merge --match-head-commit <sha>` で、引き直した sha 以外がマージされないようにする）。⚠ **マージ「後」に `main` 上で再生成する形にしない**——`ci.yml` は `on: push: branches: [main]` であり、**マージで生まれた `main` のコミットが索引の古いまま CI に入って赤くなる**（その赤は履歴に残る）。索引再生成の手順は ADR 0137「決定」2番、採番の手順は ADR 0179
+| **ADR PR をマージするとき、索引の再生成を忘れる** | `docs/decisions/README.md` の ADR 索引は**機械生成**であり（[ADR 0137](./decisions/0137-adr-index-generated-from-source.md)）、**ADR を足す PR の作成者は索引を触らない**——触らないことが並行 PR 間の行位置の衝突を消している仕組みである。⟹ **マージする側が再生成しないと `main` の索引が陳腐化する。**⭐ **2026-09-17 以降、これは `main` へ入る前に CI が止める**（[ADR 0192](./decisions/0192-adr-index-freshness-enforced-in-pull-request-ci.md)）——鮮度の歯は **`main` の push だけでなく CI の `pull_request` でも有効**になり、`typecheck / lint / test / build` は required status check であるため、**索引が陳腐化したままの PR は GitHub 自身がマージを拒む**。⟹ 🔴 **ADR を足す PR は、マージ直前の再生成が済むまで、この歯で赤いのが正常である**（下の「⚠ ADR PR の赤は2種類ある」を読むこと） | **squash merge する直前に、PR ブランチ上で**次を実行してコミットし、push してからマージする: `git fetch origin main && git merge origin/main` → **`node scripts/adr-renumber.mjs`**（このブランチが足した ADR の番号が `origin/main` で既に使われていないか確認し、衝突していれば空いている次の番号へ機械的に付け替える。ADR 0179） → `node scripts/generate-adr-index.mjs` → commit → push → CI の緑を引き直す（§2.1・**§2.1.1**——索引再生成のコミット自体が sha を変えるため、判定はこの push の**後**でなければならない）→ merge（`gh pr merge --match-head-commit <sha>` で、引き直した sha 以外がマージされないようにする）。⚠ **マージ「後」に `main` 上で再生成する形にしない**——`ci.yml` は `on: push: branches: [main]` であり、**マージで生まれた `main` のコミットが索引の古いまま CI に入って赤くなる**（その赤は履歴に残る）。索引再生成の手順は ADR 0137「決定」2番、採番の手順は ADR 0179
 | **CI の履歴から失敗率を数える**（「この故障は稀だ」「この test は N 回に1回落ちる」） | **再実行（rerun）は run 全体の `conclusion` を上書きする。**⟹ `status=failure` で run を絞って数えると、**再実行で緑になった回を取りこぼす。**⟹ **履歴から数えた失敗率は、必ず下限になる。**【実測】[Issue #261](https://github.com/takecchi/mnemora/issues/261) の対象 incident 自身がその実例である——失敗ジョブを再実行して緑にしたため、`status=failure` では拾えなくなった | **run ではなく個々の job の attempt を見る。**それをしていないなら、**「稀である」と断定しない**——「数えた範囲では N 件。これは下限である」と書くこと（本書 §5「確かめていないこと」の適用）。実例と数字は [ADR 0141](./decisions/0141-local-embedding-load-retry.md) §2.1 |
+
+### 4.0 ⚠ ADR PR の赤は2種類ある —— **索引がまだ**と**壊れている**を見分ける（[ADR 0192](./decisions/0192-adr-index-freshness-enforced-in-pull-request-ci.md)）
+
+**ADR を足す PR では、`typecheck / lint / test / build` が次のメッセージで赤くなることがある:**
+
+```
+docs/decisions/README.md が陳腐化している: 索引に無い ADR: ["01NN"]
+```
+
+🔴 **これは「壊れている」ではなく「まだ再生成していない」である。**⟹ **PR の作成者は、この赤を自分で直さないこと。**
+
+**⛔ なぜ作成者が直してはいけないのか**（ここが分からないと、次の誰かがまた手順を反転させる）:
+
+- [ADR 0137](./decisions/0137-adr-index-generated-from-source.md) が **「作成者は索引を触らない」** と決めたのは、**並行する ADR PR が同じ索引の同じ行位置を奪い合うのを、構造的に消すため**である。**2本が同時に索引を再生成すれば、必ず衝突する。**
+- ⟹ **「作成者が触らない」ことが、その衝突を消している唯一の仕組みである。**ADR 0192 の決定3 が逐語で「**そして『作成者は自分で直さないこと』を明記する**」と書いているのは、この理由による。
+
+**⛔ だから、この赤を見て「索引を再生成してコミットする」を PR の作成中にやらないこと。**⭐ **正しいのは、上の §4 の表の「ADR PR をマージするとき、索引の再生成を忘れる」の行にある手順を、マージ直前に踏むことである**——**作成時は触らず、マージ直前に再生成する**、という順序そのものが ADR 0137 の設計である。
+
+**⚠ では、いつ「本当に壊れている」のか。**——**上のメッセージ以外で赤いとき**である。⟹ **赤を見たら、まず失敗メッセージを読むこと。**「ADR PR だから索引の赤だろう」と決めつけて、別の故障を見逃さないこと。
+
+**⭐ 手元の6つの門は、従来どおりこの歯で赤くならない**（ADR 0192 決定2）——判定は `GITHUB_REF` が無い環境では「git のブランチ名が `main` か」だけを見る。⟹ **手元が緑でも、CI のこの歯は赤くなりうる。**これは §2.1 の5番（手元の緑を CI の緑の代わりにしない）の、具体例の1つである。
 
 ### 4.1 ⚠ 静かに失敗する道具（「出力が出た」を成功と読まない）
 
@@ -331,6 +352,7 @@ gh pr list --state open --limit 20
 | **`gh issue close --body-file <file>`** | **`--body-file` は `gh issue close` に存在しないオプションである。**⚠ **エラーで落ちない**——`gh help accessibility` の案内が返り、**issue は close されないまま**終わる。⟹ **「出力が出た」を成功と読むと、閉じていないのに閉じたと思う** 【実測】2026-09-15、Issue #234 で実際に踏んだ（`gh issue view 234 --json state,comments` が `state=OPEN comments=0` を返して発覚した） | 正しい形は **`--comment "<本文>"`**。本文をファイルに置いているなら `BODY=$(cat file)` で読んでから渡す |
 | **複合したシェル呼び出し**（`a && b`／`a; b`／`$(...)`） | **前段の失敗が後段を止めるとは限らない。**`;` は止めず、`&&` は「成功」の定義がコマンドごとに違い（**`grep -c` は 0 件を「失敗」と呼ぶ**）、`$(...)` の失敗は代入の成否としてしか伝わらない。⟹ **外から見える結果は「一部だけ実行された」であり、それが「全部通った」に見える** 【実測】2026-09-15 に3回踏んだ——①検査を `;` で繋いで **fail-open**（本来止めるべき commit が通った）②`HITS=$(… grep -c …) && …` で **fail-closed**（マージが走らなかった）③ファイル生成と `cat` を同じ呼び出しに混ぜ、生成が失敗したのに `gh issue close` だけ通って **空のコメントで close された** | ⛔ **`set -eu` は対処にならない——この器では効かない（下の ⛔ を読むこと）**／**生成と使用を別の呼び出しに分ける**／⭐ **副作用のある手（`gh issue close`・`gh pr merge`・`git push`）を、判定と同じ行に繋がない。`if` で明示する** |
 | **PR 本文に書いた closing keyword**（`Closes #N`／`Fixes #N`／`Resolves #N`） | **GitHub は inline code の中でも、否定文の中でも、これを閉鎖参照として拾う。**⟹ **「閉じない」と宣言するために書いた文そのものが、マージ時に #N を閉じる。**⚠ **`gh pr merge` はエラーにならない**——成功して終わり、**閉じたことは出力に出ない** 【実測】2026-09-16、PR [#322](https://github.com/takecchi/mnemora/pull/322) の本文に「`Closes #311` も書いていない」と打ち消しで書いたところ、**マージの2秒後に PR [#311](https://github.com/takecchi/mnemora/pull/311) が close された**（`gh api repos/takecchi/mnemora/issues/311/timeline` の `closed` イベントが `commit_id` に #322 のマージコミットを持っていた） | **PR 本文で他の PR/ISSUE に触れるときは、番号だけ書く。**`Closes`/`Fixes`/`Resolves` の語は、**打ち消し文の中でも使わない**／⭐ **`gh pr merge` の直後に、本文で言及した番号の state を引く**（`gh pr view <N> --json state`。下の ⭐ の一手そのもの）／誤って閉じたら **`gh pr reopen <N>`**（head ブランチが残っていれば戻る） |
+| **古い `dist/` のまま `check-public-api-surface.mjs --write` を打つ** | この歯は **`packages/<name>/dist` の `.d.ts`** を読む。⟹ `main` を取り込んだ直後など **`dist` が古い状態で走らせると、他人が入れた公開 API の変更が「消えた」差分として現れる。**⚠ **そのまま `--write` すると、その変更を snapshot から消してしまう**——**歯そのものを無効化する**のに、道具は成功の顔で終わる 【実測】2026-09-17、`main` を取り込んだ直後に走らせたところ [ADR 0188](./decisions/0188-association-over-limit-omission.md) が足した `over_limit.stage` が削除差分として出た。`pnpm run build` し直すと消えた | **`--write` の前に必ず `pnpm run build` を打つ。**差分に「自分が触っていない欄」が現れたら、それは**ほぼ確実に `dist` が古い**——⛔ **自分の変更として受け入れないこと** |
 
 ⛔ **`set -eu` は、この器の Bash ツール経由で打つコマンドでは効かない** 【実測】2026-09-16。
 

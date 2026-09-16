@@ -146,7 +146,10 @@ for (const target of PUBLISH_TARGETS) {
         `    次にすること（Issue #342 / ADR 0178）:\n` +
         `    1. この差分が破壊的変更かどうかを判断する。\n` +
         `    2. 破壊的変更なら、根拠 ADR にその破壊性を明記する（ADR 0156 は ADR を書くことを免除していない）。\n` +
-        `    3. \`node scripts/check-public-api-surface.mjs --write\` で snapshot を更新し、コミットする。\n` +
+        `    3. ⚠ 先に \`pnpm run build\` で dist を作り直す——この歯は packages/<name>/dist の .d.ts を読むので、\n` +
+        `       dist が古いと「他人が入れた変更が消えた」差分に見え、そのまま --write すると\n` +
+        `       その変更を snapshot から消してしまう（歯を無効化する）。\n` +
+        `    4. \`node scripts/check-public-api-surface.mjs --write\` で snapshot を更新し、コミットする。\n` +
         `    ⚠ この歯は「変わったこと」だけを見ている。「壊れているか」はここでは判定しない——判断は上の手順のとおり人が行う。`,
     );
   } finally {
