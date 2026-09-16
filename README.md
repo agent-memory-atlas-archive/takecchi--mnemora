@@ -252,7 +252,8 @@ forget(ctx, target)      // 記憶を落とす / 失効させる
 - **是正・取り消し**（`markContested` / `resolveContested` / `restoreArchived` / `purge`）——
   呼び出し側（人・上位のアプリケーション層・将来の自動検出）が既に下した判断
   （矛盾の指摘・決着・復帰・完全削除）を、決められた形で書き込む口。
-  どちらが正しいかを mnemora 自身は判定しない。
+  どちらが正しいかを mnemora 自身は判定しない。**⚠ 矛盾を*見つける*処理も持たない**——
+  下の「⚠ mnemora が保証していないこと」の節を見ること。
 - **説明**（`getRecall`）——なぜそれが想起されたかを、後から読み戻す口
   （`docs/north-star.md`「目指す姿」の3番目）。
 
@@ -339,6 +340,23 @@ const recalled = await recall(ctx, { text: "..." })
 
 詳細は [docs/vision.md](./docs/vision.md) の「Tenant と Subject を混同しない」と
 [docs/architecture.md](./docs/architecture.md) §3.7。
+
+**⚠ もう1つある: 矛盾の検出も、mnemora は行わない。**
+`markContested` / `resolveContested` は **「この2件は対向する」と*既に決まっている*ものを
+書き込む口**であり（上の「是正・取り消し」）、**会話の中から矛盾を*見つける*処理は
+`@mnemora/core` に存在しない**（[ADR 0134](./docs/decisions/0134-mark-contested-explicit-operation.md)
+決定1・[Issue #197](https://github.com/takecchi/mnemora/issues/197)）。
+
+**⟹ npm から入れたままの既定の振る舞いは「訂正しても、古いほうが出続ける」。**
+古いほうを遠ざけるには、**採用側が「どの2件が矛盾しているか」を決めて
+`markContested` を呼び、決着を `resolveContested` で渡す**必要がある。
+⛔ **どちらが正しいかも、どちらが新しいかも、mnemora は判定しない。**
+
+⚠ **これは `docs/north-star.md`「目指す姿」の項目5「間違いを正すと、古いほうが先に
+出てこなくなる」が、出荷物の既定では*まだ*満たされていないということである**
+（[docs/roadmap.md](./docs/roadmap.md) §7.13）。**検出の設計は
+[PR #366](https://github.com/takecchi/mnemora/pull/366)（ADR 0185 の草案）で検討中。
+⚠ まだマージされていない。**
 
 ---
 
