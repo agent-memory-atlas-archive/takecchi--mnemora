@@ -354,12 +354,23 @@ describe("runtime.markContested — recall() の段3が実際に発火する（I
     expect(companion?.companionOf).toBe(strong.id);
 
     // 隣接性（docs/memory-model.md §5 機構3）。
+    // ⚠ Issue #293（実測で見つかった盲点）: `indexOf` は見つからないとき `-1` を返すため、
+    // 片方だけが結果から完全に消えた世界でも `Math.abs(0 - (-1)) === 1` が偶然成立して
+    // しまう。⟹ 両方が実際に結果に含まれていること（`index >= 0`）を先に assert してから、
+    // 隣接性を比較する（`stage3-mandatory-companion-mutation.test.ts` の変異体Cが、この式を
+    // 直さないと緑のままであることを実測している）。
     const indexStrong = ids.indexOf(strong.id);
     const indexWeak = ids.indexOf(weak.id);
+    expect(indexStrong).toBeGreaterThanOrEqual(0);
+    expect(indexWeak).toBeGreaterThanOrEqual(0);
     expect(Math.abs(indexStrong - indexWeak)).toBe(1);
 
     // 段3が実際に発火したことを trace 経由でも確認する——これが「今日は一度も通らない
     // 分岐」だった、まさにその段である（recall-runtime.ts の該当コメント参照）。
+    // ⚠ Issue #293: `executed` は本番コードが `companions.length` に関わらず常に `true` を
+    // 返すため、これ単独では「段3が壊れていない」ことの根拠にならない——「段3のコードが
+    // 実行された」ことしか言っていない。段3が実際に発火した（同伴取得が起きた）ことを
+    // 測っているのは、直後の `detail.companionsAdded` の方である。
     const stage = result.explain.stages.find((s) => s.stage === "contradiction_resolution");
     expect(stage?.executed).toBe(true);
     expect(stage?.detail).toEqual({ companionsAdded: 1 });

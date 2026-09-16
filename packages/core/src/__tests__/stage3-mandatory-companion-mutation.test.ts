@@ -124,6 +124,14 @@ function wrapMemoryStore(base: MemoryStore, overrides: Partial<MemoryStore>): Me
  * 判定ロジックを書き直したのではなく、同じ式をもう一度評価できる形（サンク）にしてある。
  * これを `expect(() => assertion()).toThrow()` に通すことで、「その世界ではこの assert が
  * 実際に落ちる」ことを検算する。
+ *
+ * ⚠ Issue #293（このファイル自身の「測ったこと」節が見つけた盲点）で `adjacency` の式を
+ * 更新した。`indexOf` は見つからないとき `-1` を返すため、旧式
+ * `Math.abs(indexStrong - indexWeak) === 1` は片方が完全に不在の世界（変異体C）で
+ * `Math.abs(0 - (-1)) === 1` が偶然成立し、緑のままだった——`mark-contested.test.ts` 側も
+ * 同じ式に更新済みなので、**両ファイルは今も同じ式を共有している**（「式を変えずに複製」
+ * という前提そのものは崩れていない。崩れたのは mark-contested.test.ts 側の元の式であり、
+ * それをここへ揃え直した）。
  */
 function originalAssertions(result: RecallResult, strongId: MemoryId, weakId: MemoryId) {
   const ids = result.memories.map((m) => m.memoryId);
@@ -136,7 +144,11 @@ function originalAssertions(result: RecallResult, strongId: MemoryId, weakId: Me
     weakPresent: () => expect(ids).toContain(weakId),
     companionRetrievedVia: () => expect(companion?.retrievedVia).toBe("mandatory_companion"),
     companionOf: () => expect(companion?.companionOf).toBe(strongId),
-    adjacency: () => expect(Math.abs(indexStrong - indexWeak)).toBe(1),
+    adjacency: () => {
+      expect(indexStrong).toBeGreaterThanOrEqual(0);
+      expect(indexWeak).toBeGreaterThanOrEqual(0);
+      expect(Math.abs(indexStrong - indexWeak)).toBe(1);
+    },
     stageExecuted: () => expect(stage?.executed).toBe(true),
     stageDetail: () => expect(stage?.detail).toEqual({ companionsAdded: 1 }),
   };
@@ -288,7 +300,12 @@ const mutants: MutantCase[] = [
       "外れる——ADR 0136 の『単独 contested を落とす』分岐にも入らない " +
       "（そちらは status==='contested' を要求するが、ここではそれも偽装しているため）。" +
       "⟹ strong は単独ユニットとして生き残り、weak だけが**何の omission も立てずに**消える。" +
-      "A/B（unit_assembly_dropped が立つ）より静かに壊れる、という違いがある。",
+      "A/B（unit_assembly_dropped が立つ）より静かに壊れる、という違いがある。" +
+      "⚠ Issue #293: `adjacency` は `indexWeak === -1`（weak 不在）のときも " +
+      "`Math.abs(indexStrong - (-1)) === 1` が偶然成立しうるため、**この変異体Cでだけ** " +
+      "旧assertは緑のままだった——`indexStrong`/`indexWeak` それぞれが `>= 0`（=実際に" +
+      "結果に含まれる）ことを先に assert する形へ直した（`originalAssertions.adjacency` " +
+      "参照）ことで、ここでも赤くなる。",
     mutate: (base, { strongId }) =>
       wrapMemoryStore(base, {
         get: async (c, id) => {
@@ -302,7 +319,7 @@ const mutants: MutantCase[] = [
       }),
     expectCompanionsAdded: 0,
     expectUnitAssemblyDropped: false,
-    expectRed: ["weakPresent", "companionRetrievedVia", "companionOf", "stageDetail"],
+    expectRed: ["weakPresent", "companionRetrievedVia", "companionOf", "stageDetail", "adjacency"],
   },
 ];
 
