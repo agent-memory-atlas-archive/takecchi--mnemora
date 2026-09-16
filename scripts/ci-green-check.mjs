@@ -39,13 +39,35 @@
  *
  * 終了コード: `0` = green（`--recheck-after` 付きなら green かつ stable）、
  * `1` = red、`2` = pending（まだ判定できない）、`3` = 実行時エラー（`gh` 呼び出し失敗等）。
+ *
+ * ## ADR 索引の鮮度への相乗り（ADR 0192）
+ *
+ * `--pr` 実行で赤判定が出たとき、**このディレクトリ（＝呼び出し側が現在チェック
+ * アウトしている作業木）の `docs/decisions/README.md` が `docs/decisions/*.md` と
+ * 一致しているか**を追加でその場で見る。ADR 0137「決定」2番の手順
+ * （PR ブランチをローカルへ取得 → `git merge origin/main` → 索引を再生成 →
+ * commit → push → **このツールで緑を確認**）を踏む人は、このツールを走らせる
+ * 時点で該当 PR ブランチを手元に持っている——赤の原因が索引の陳腐化なら、
+ * 同じ場所で気づけたほうが、CI のログを開き直す一往復を省ける。
+ * ⚠ **これは CI 自身の判定を置き換えない。**あくまで「赤かどうか」は
+ * 従来どおり `gh` 経由で CI に聞く。ローカルの索引が新鮮に見えても、
+ * それだけでは「CI も緑になる」とは言えない（コミットし忘れ・push し忘れの
+ * 余地が残る）——あくまで診断のヒントである。
  */
 import { spawnSync } from "node:child_process";
+import { readdirSync, readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   compareCheckRunNameSets,
   formatMatchHeadCommitHint,
   verdict,
 } from "./ci-green-check-lib.mjs";
+import {
+  buildAdrEntries,
+  buildIndexTable,
+  extractGeneratedIndex,
+} from "./generate-adr-index-lib.mjs";
 
 function parseArgs(argv) {
   const args = { recheckAfter: null, json: false };
@@ -112,6 +134,46 @@ function fetchCheckRuns(repo, sha) {
     .split("\n")
     .filter((line) => line.trim().length > 0)
     .map((line) => JSON.parse(line));
+}
+
+/**
+ * 呼び出し側の作業木（`import.meta.url` から見た repo ルート）の
+ * `docs/decisions/README.md` が `docs/decisions/*.md` と一致しているかを見る
+ * （ADR 0192）。読めない・生成に失敗する等は `null`（判定不能）にして
+ * 諦める——このツールの主目的（CI の緑判定）を道連れにしない。
+ *
+ * @returns {boolean | null} true=陳腐化している / false=最新 / null=判定できなかった
+ */
+function isAdrIndexStaleLocally() {
+  try {
+    const decisionsDir = join(dirname(fileURLToPath(import.meta.url)), "..", "docs", "decisions");
+    const filenames = readdirSync(decisionsDir).filter((f) => f !== "README.md");
+    const files = filenames.map((filename) => ({
+      filename,
+      content: readFileSync(join(decisionsDir, filename), "utf8"),
+    }));
+    const entries = buildAdrEntries(files);
+    const expectedTable = buildIndexTable(entries);
+    const readmeText = readFileSync(join(decisionsDir, "README.md"), "utf8");
+    const actualTable = extractGeneratedIndex(readmeText);
+    return expectedTable !== actualTable;
+  } catch {
+    return null;
+  }
+}
+
+function printAdrIndexFreshnessHintIfStale() {
+  const stale = isAdrIndexStaleLocally();
+  if (stale !== true) return;
+  console.log(
+    "⚠ この作業木の docs/decisions/README.md は docs/decisions/*.md と一致していない" +
+      "（ADR 0192）。赤の原因がこれなら、次を実行してからコミット・push し、判定を引き直すこと:\n" +
+      "  node scripts/generate-adr-index.mjs\n" +
+      "  git add docs/decisions/README.md\n" +
+      '  git commit -m "docs(adr-index): regenerate before merging"\n' +
+      "  git push\n" +
+      "  （手順は ADR 0137「決定」2番。CI の pull_request でも検査する理由は ADR 0192）",
+  );
 }
 
 function printVerdict(label, v) {
@@ -238,6 +300,12 @@ function main() {
 
   if (args.json) {
     console.log(JSON.stringify({ repo, sha, verdict: finalVerdict, stability }, null, 2));
+  }
+
+  if (finalVerdict.status === "red") {
+    // ADR 0192: 赤の原因が「索引の陳腐化」なら、CI のログを開き直す一往復を省く。
+    // ⚠ CI の判定を置き換えるものではない——あくまで診断のヒントである。
+    printAdrIndexFreshnessHintIfStale();
   }
 
   if (finalVerdict.status === "green" && args.pr) {
