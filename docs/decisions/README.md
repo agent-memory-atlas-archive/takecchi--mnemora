@@ -207,5 +207,6 @@ alteroid (github.com/takecchi/alteroid) を根拠として引く箇所は、確�
 | [0197](./0197-set-default-half-life-recalls.md) | `TenantSettingsStore` に `setDefaultHalfLifeRecalls` を本番の経路として足す | 採用 (2026-09) |
 | [0199](./0199-identifier-probes-readme-freshness-tooth.md) | `examples/chat/README.md` の `identifier-probes` 節と基準値 JSON の一致を、既存 vitest に相乗りする歯で見張る | 採用 (2026-09) |
 | [0200](./0200-adr-renumber-warns-when-titles-need-fixing.md) | `adr-renumber.mjs` は付け替えたときに PR タイトルの修正を促す警告を出す — 道具は `gh` を叩かない（Issue #405） | 採用 (2026-09) |
+| [0201](./0201-recall-footprint-char-margin-canary.md) | `recall-footprint` の許容誤差の余白を字数で見る歯を足す — hold-out 5行に限定し、閾値は較正係数から導く（Issue #410） | 採用 (2026-09) |
 
 <!-- ADR-INDEX:GENERATED:END -->
