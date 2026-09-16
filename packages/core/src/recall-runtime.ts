@@ -3,7 +3,7 @@ import type { Ctx } from "./ctx.js";
 import type { EmbeddingProvider } from "./interfaces/embedding-provider.js";
 import type { MemoryStore } from "./interfaces/memory-store.js";
 import type { TokenCounter } from "./interfaces/token-counter.js";
-import type { VectorStore, VectorHit } from "./interfaces/vector-store.js";
+import type { VectorFilter, VectorStore, VectorHit } from "./interfaces/vector-store.js";
 import type { LexicalStore, LexicalHit } from "./interfaces/lexical-store.js";
 import type { DecayClock, TenantSettingsStore } from "./interfaces/tenant-settings-store.js";
 import {
@@ -391,6 +391,65 @@ export async function runRecall(
   };
 
   /**
+   * ⭐ `validAt` ゲート（Issue #280 / ADR 0164）の述語。**段1の後置フィルタと段3.5（連想枠）の
+   * 後置フィルタが、同じこの関数を呼ぶ**（Issue #347 / ADR 0172）——`RecallQuery.validAt` の
+   * doc の述語そのものであり、`VectorFilter.validAt` / `LexicalFilter.validAt` が SQL 側で
+   * 表す述語と同じ境界（左端は包含の `<=`、右端は狭義の `>`）である。
+   *
+   * `scope.validAt` が `undefined`（`includeOutsideValidity: true` でゲートを外した場合）なら
+   * no-op——opt-out は全チャンネル・全段で同じように効く。
+   *
+   * **⚠ ここでは件数を数えない。** `expired`/`not_yet_valid` の exact な件数は
+   * `aggregateScope` から取る（`period` と同じ扱い。`FilteredOmission.condition` の doc 参照）。
+   */
+  const survivesValidityGate = (memory: Memory): boolean => {
+    if (scope.validAt === undefined) return true;
+    if (memory.validFrom != null && memory.validFrom > scope.validAt) return false;
+    if (memory.validUntil != null && memory.validUntil <= scope.validAt) return false;
+    return true;
+  };
+
+  /**
+   * ⭐ 段1（ANN）と段3.5（連想枠）の `VectorFilter` へ渡す、**ゲートの欄だけ**をまとめた断片
+   * （Issue #347 / ADR 0172）。**1箇所で作って、両方の `vectorStore.search()` が同じものを撒く。**
+   *
+   * 🔴 **なぜ1箇所にまとめたか**: 以前は段1の filter だけがこの欄を持ち、段3.5 の連想用
+   * `search()` は `tenant/subject/status/period/excludeProvenanceKinds` の5欄しか渡していなかった
+   * ——⟹ **完全に減衰しきった記憶と、期限切れ／未発効の記憶が、連想枠から黙って返っていた**
+   * （Issue #347）。**ゲートが増えたら、ここに足す。ここだけに足す。**
+   *
+   * - 忘却ゲート（ADR 0153 / Issue #196）: ADR 0011「Phase 1 では `decayFloorAtAfter` を
+   *   読み取りフィルタに使わない」を ADR 0153 が明示的に上書きした。既定（`decayGateActive`）では
+   *   「いま」を押し下げ、`decayFloorAt` を過ぎた（完全に減衰しきった）Memory を候補集合そのものから
+   *   外す——over-fetch の窓（k'）を、まだ生きている記憶で埋める方向に働く。
+   *   `includeFullyDecayed: true` を渡すと全欄が `undefined`/`false` になり、ADR 0153 より前の
+   *   挙動（押し下げない）に戻る。**この opt-out は連想枠でも同じように効く。**
+   * - ADR 0165 決めたこと1・12: `decay_clock` に応じて2軸を押し下げる。
+   *   - `'wall'`: `decayFloorAtAfter` のみ（従来どおり）。
+   *   - `'activity'`: `decayFloorSeqAfter` のみ。
+   *   - `'either'`: 両方 + `decayFloorAnyAxis`（OR で結ぶ、最も緩い）。
+   * - `validAt` ゲート（Issue #280 / ADR 0164）: `period` と同じ形で段1へ押し下げる
+   *   （`scope.validAt` の doc 参照）。ゲートを外したときは `scope.validAt` 自体が `undefined`。
+   *
+   * ⚠ **この断片は後置フィルタの代わりではない。** `survivesDecayGate` / `survivesValidityGate`
+   * が両段の後置に残っており、adapter が ADR 0034 の契約（filter を実際に適用する）を
+   * 守らなかった場合の多層防御になっている。
+   */
+  const gateVectorFilterFields: Pick<
+    VectorFilter,
+    "decayFloorAtAfter" | "decayFloorSeqAfter" | "decayFloorAnyAxis" | "validAt"
+  > = {
+    decayFloorAtAfter:
+      decayGateActive && (decayClock === "wall" || decayClock === "either") ? now : undefined,
+    decayFloorSeqAfter:
+      decayGateActive && (decayClock === "activity" || decayClock === "either")
+        ? nowSeq
+        : undefined,
+    decayFloorAnyAxis: decayGateActive && decayClock === "either",
+    validAt: scope.validAt,
+  };
+
+  /**
    * 段2の再スコア（`strategies/scoring.ts`）へ渡す、活動時計まわりの入力（ADR 0165
    * 決めたこと12）。`decayClock`/`nowSeq` はテナント単位、`decayBaseSeq`/`halfLifeRecalls` は
    * Memory 単位——`computeDecay`（scoring.ts）が「揃っていなければ壁時計へフォールバック」
@@ -476,26 +535,12 @@ export async function runRecall(
         excludeProvenanceKinds: validatedQuery.excludeProvenanceKinds,
         occurredAfter: scope.occurredAfter,
         occurredBefore: scope.occurredBefore,
-        // ADR 0153（Issue #196）が ADR 0011「Phase 1 では decayFloorAtAfter を
-        // 読み取りフィルタに使わない」を明示的に上書きした。既定（decayGateActive）では
-        // 「いま」を押し下げ、`decayFloorAt` を過ぎた（完全に減衰しきった）Memory を
-        // 段1の候補集合そのものから外す——over-fetch の窓（k'）を、まだ生きている記憶で
-        // 埋める方向に働く。`includeFullyDecayed: true` を渡すと `undefined` になり、
-        // ADR 0153 より前の挙動（decayFloorAtAfter を渡さない）に戻る。
-        //
-        // ADR 0165 決めたこと1・12: `decay_clock` に応じて2軸を押し下げる。
-        // - 'wall': decayFloorAtAfter のみ（従来どおり）。
-        // - 'activity': decayFloorSeqAfter のみ。
-        // - 'either': 両方 + decayFloorAnyAxis（OR で結ぶ、最も緩い）。
-        decayFloorAtAfter:
-          decayGateActive && (decayClock === "wall" || decayClock === "either") ? now : undefined,
-        decayFloorSeqAfter:
-          decayGateActive && (decayClock === "activity" || decayClock === "either")
-            ? nowSeq
-            : undefined,
-        decayFloorAnyAxis: decayGateActive && decayClock === "either",
-        // Issue #280: `period` と同じ形で段1へ押し下げる（`scope.validAt` の doc 参照）。
-        validAt: scope.validAt,
+        // 忘却ゲート（ADR 0153 / ADR 0165）と validAt ゲート（Issue #280 / ADR 0164）の欄。
+        // **段3.5（連想枠）の search() と1文字も違わないものを撒く**（Issue #347 / ADR 0172）
+        // ——由来・意味論・opt-out の効き方は `gateVectorFilterFields` の doc に置いてある。
+        // ⚠ ここへゲートの欄を直接書き足さないこと。足すなら `gateVectorFilterFields` へ足す
+        // ——そうしないと連想枠だけが取り残される（それが Issue #347 で実際に起きたことである）。
+        ...gateVectorFilterFields,
       },
       // subjectId は等値一致なので段1に降ろす（ADR 0023）。excludeProvenanceKinds も
       // 離散5値の独立列への等値比較なので同じ理由で段1に降ろす（ADR 0056）。period は
@@ -665,10 +710,7 @@ export async function runRecall(
     // doc の述語そのもの。**exact な件数は `aggregateScope` から取るので、ここでは
     // カウントしない**（`period` と同じ扱い。`decayed` とは違う——理由は
     // `FilteredOmission.condition` の doc「`count`/`countKind` は `period` と同じ扱い」参照）。
-    if (scope.validAt !== undefined) {
-      if (memory.validFrom != null && memory.validFrom > scope.validAt) continue;
-      if (memory.validUntil != null && memory.validUntil <= scope.validAt) continue;
-    }
+    if (!survivesValidityGate(memory)) continue;
     // 忘却ゲート（ADR 0153、ADR 0165 決めたこと12）: `LexicalFilter` に decayFloorAtAfter を
     // 足さず（マネージャー決定3）、ここで**全チャンネル共通**の述語を適用する——ANN の候補にも
     // 同じ述語が掛かる。既定で押し下げている ANN の候補は `survivesDecayGate` を段1で
@@ -1043,8 +1085,13 @@ export async function runRecall(
           const anchor = anchorVectorById.get(anchorId);
           if (!anchor) continue; // adapter が返さなかった（存在しない/削除された等）
           // **段0と同じ scope の filter で呼ぶ**（docs/recall.md §9.2 手順4）——アンカーの
-          // ベクトルを使うだけで、tenant/subject/status/period/excludeProvenanceKinds の
-          // 境界は段1のANN検索と同一にする。limit は over-fetch 済みの kPrime を流用する
+          // ベクトルを使うだけで、**tenant/subject/status/period/excludeProvenanceKinds に
+          // 加えて、忘却ゲート（`decayFloorAtAfter`/`decayFloorSeqAfter`/`decayFloorAnyAxis`）と
+          // `validAt` ゲートまで含めた境界すべてを、段1のANN検索と同一にする**
+          // （Issue #347 / ADR 0172）。ゲートの3種は `gateVectorFilterFields` に1箇所で
+          // まとめてあり、段1と同じ断片をそのまま撒く——**列挙を散文で数え直さない**
+          // （数え直した結果、2つのゲートが抜けたまま「同一にする」と書いてあったのが
+          // Issue #347 である）。limit は over-fetch 済みの kPrime を流用する
           // ——除外・閾値で落ちる分の余裕を持たせるためであり、新しい係数を定義しない。
           const hits = await deps.vectorStore.search(
             ctx,
@@ -1059,6 +1106,7 @@ export async function runRecall(
                 excludeProvenanceKinds: validatedQuery.excludeProvenanceKinds,
                 occurredAfter: scope.occurredAfter,
                 occurredBefore: scope.occurredBefore,
+                ...gateVectorFilterFields,
               },
             },
           );
@@ -1114,6 +1162,25 @@ export async function runRecall(
           if (scope.occurredAfter && effectiveTime < scope.occurredAfter) continue;
           if (scope.occurredBefore && effectiveTime > scope.occurredBefore) continue;
           if (excludeKinds.has(memory.provenance.kind)) continue;
+          // ⭐ validAt ゲート（Issue #280 / ADR 0164）と忘却ゲート（ADR 0153 / ADR 0165）の
+          // 後置を、段1の後置ループ（上）と**同じ述語**で掛ける（Issue #347 / ADR 0172）。
+          // `survivesValidityGate` / `survivesDecayGate` を呼ぶ——ここで述語を書き直さない
+          // ことが、段1と段3.5が同じ境界を持つことの根拠である。
+          // ⚠ `decayGateActive`（`includeFullyDecayed !== true`）の opt-out は連想枠でも
+          // 尊重する——`includeFullyDecayed: true` を渡した呼び手には、連想枠でも
+          // 減衰しきったものが返る。
+          // ⚠ `survivesDecayGate` は `decay_clock` が 'activity'/'either' のテナントでは
+          // 活動時計の軸も見る（ADR 0165 決めたこと12）——壁時計だけを見る述語をここに
+          // 書き下すと、連想枠だけが壁時計のまま取り残される。
+          //
+          // 🔴 **落ちた件数はここでは数えない**（Issue #347 / ADR 0172 決めたこと3）。
+          // 段1の押し下げで落ちた分が原理的に数えられない（ADR 0011）のと同じ扱いであり、
+          // 連想用 `search()` も同じ3欄を押し下げているので、通常この後置は1件も落とさない
+          // ——落ちるのは adapter が ADR 0034 の契約を破ったときだけである。
+          // ⟹ `omitted` の数え方は本 Issue では1バイトも変えていない（Issue #329 と
+          // 数え方が混ざらないようにするため）。
+          if (!survivesValidityGate(memory)) continue;
+          if (decayGateActive && !survivesDecayGate(memory)) continue;
           // ⛔ アンカーとの類似度を score.similarity（クエリとの類似度の枠）に入れない
           // ——嘘になる（北極星の問い3・問い4、ADR 0151「採らなかった案」）。
           // `mandatory_companion`（段3）の先例に倣い、similarity/lexicalMatch を渡さず

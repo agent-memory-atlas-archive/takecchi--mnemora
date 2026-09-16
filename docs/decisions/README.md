@@ -184,5 +184,6 @@ alteroid (github.com/takecchi/alteroid) を根拠として引く箇所は、確�
 | [0169](./0169-changelog-hand-curated.md) | CHANGELOG は手で書く。ADR 0070 は覆らない | 採用 (2026-09) |
 | [0170](./0170-association-search-tiebreak-nondeterminism.md) | 連想枠の非決定性・第2段 — `search()` の完全一致タイと、`memory_id` tie-break が fresh ingest ごとに揺れる根本原因を直す（Issue #339） | 採用 (2026-09) |
 | [0171](./0171-five-verbs-plus-three-layers.md) | 「5つの動詞」の記述を実態（14メソッド）に合わせる — 中核の5動詞 + 3つの層 | 採用 (2026-09) |
+| [0172](./0172-association-passes-decay-and-validity-gates.md) | 連想枠（段3.5）にも忘却ゲートと `validAt` ゲートを通す — ゲートの欄を1箇所に集め、述語は段1と共有する（Issue #347） | 採用 (2026-09) |
 
 <!-- ADR-INDEX:GENERATED:END -->

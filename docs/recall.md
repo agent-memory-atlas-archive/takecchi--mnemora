@@ -677,7 +677,16 @@ Issue #200 は**2つの読み方**を挙げていた。
 3. 段3までに残った集合の上位 `anchorCount` 件をアンカーにする。0件なら
    `stage_skipped { stage: 'association', reason: 'no_anchor' }`。
 4. アンカーのベクトルを `getVectors` で引き、**そのベクトルで** `VectorStore.search` を
-   **段0 と同じ scope の filter で**呼ぶ。
+   **段1の ANN 検索と同じ filter で**呼ぶ——scope（tenant/subject/status/period/
+   `excludeProvenanceKinds`）**だけでなく、忘却ゲート（[ADR 0153](./decisions/0153-recall-decay-floor-gate.md) /
+   [ADR 0165](./decisions/0165-decay-activity-clock.md)）と `validAt` ゲート
+   （[ADR 0164](./decisions/0164-valid-from-until-recall.md)）も含む。**
+   ⚠ **ここで境界を散文で数え直さないこと**——段3.5 だけが忘却ゲートと `validAt` ゲートを
+   渡しておらず、減衰しきった記憶と期限切れ／未発効の記憶が連想枠から返っていた
+   （[Issue #347](https://github.com/takecchi/mnemora/issues/347) /
+   [ADR 0172](./decisions/0172-association-passes-decay-and-validity-gates.md)）。
+   実装の単一の出所は `recall-runtime.ts` の `gateVectorFilterFields` である。
+   後置フィルタも段1と同じ述語（`survivesDecayGate` / `survivesValidityGate`）を呼ぶ。
 5. 既に返る集合・アンカー自身・`minSimilarity` 未満を除く。
 6. 残りを `maxCount` 件まで採り、`retrievedVia: 'association'` と
    `associationOf: <アンカーの memoryId>` を立てる。
