@@ -91,6 +91,101 @@
 
 ---
 
+## 手元で Postgres を立てる（`packages/postgres` の変異試験のため）
+
+**`docs/autonomy.md` §2 は PR を出す条件に「歯が実際に噛むことを、変異試験で示した」を挙げている。**
+`packages/postgres` の実装に対してこれを満たすには、**手元に本物の Postgres + pgvector が要る。**
+
+**⚠ `docker compose up` を実行できない担い手が居る**（[Issue #247](https://github.com/takecchi/mnemora/issues/247)
+が 2026-09-15 に実測。docker も podman も無い）。**そういう環境でも、`initdb` で自分専用の
+インスタンスを立てられることがある。**下はその手順である。
+
+**⚠ この手順は「どの担い手の環境でも通る」ことを主張しない。**
+【実測】2026-09-17、`initdb` と pgvector が在る器で通った、というだけである。
+**バイナリ自体が無い器では通らない**——その場合は Issue #247 の「考えられる方向」へ戻ること。
+
+### 在るかどうかを先に見る
+
+```bash
+ls /usr/lib/postgresql/*/bin/initdb          # サーバのバイナリ
+ls /usr/share/postgresql/*/extension/vector.control   # pgvector
+```
+
+**両方無ければ、この手順は使えない。**片方だけでも使えない（pgvector が無いと
+`0001_init.sql` が通らない）。
+
+### ⛔ 共有資源に触らない
+
+**他の担い手と同じ器を共有していることがある。**次を守ること:
+
+- **既定のポート 5432 を使わない。自分専用のポートにする。**
+- **`pg_ctlcluster` / システムのサービスを使わない。**既存のインスタンスを起動・停止しない。
+- **データディレクトリと socket ディレクトリを、自分の作業ディレクトリの下に作る。**
+
+### 手順
+
+```bash
+export PATH=/usr/lib/postgresql/17/bin:$PATH
+
+# ⚠ 3つとも自分専用の値にすること
+PGDATA=/path/to/your/work/pgdata
+PGPORT=<自分専用ポート>          # ⛔ 5432 は使わない
+PGSOCK=/path/to/your/work/pgsock
+
+mkdir -p "$PGSOCK"
+initdb -D "$PGDATA" -U worker --auth=trust --encoding=UTF8 --locale=C
+pg_ctl -D "$PGDATA" -l /path/to/your/work/pg.log \
+  -o "-p $PGPORT -k $PGSOCK -c listen_addresses=127.0.0.1" start
+
+createdb -h 127.0.0.1 -p "$PGPORT" -U worker mnemora_test
+psql -h 127.0.0.1 -p "$PGPORT" -U worker -d mnemora_test \
+  -c "CREATE EXTENSION IF NOT EXISTS vector;" \
+  -c "CREATE EXTENSION IF NOT EXISTS btree_gin;" \
+  -c "CREATE EXTENSION IF NOT EXISTS pgcrypto;"
+
+export DATABASE_URL="postgresql://worker@127.0.0.1:${PGPORT}/mnemora_test"
+pnpm install --frozen-lockfile
+pnpm --filter @mnemora/core run build
+pnpm --filter @mnemora/postgres run build
+pnpm --filter @mnemora/postgres run migrate
+pnpm --filter @mnemora/postgres run test:db
+
+# 使い終わったら
+pg_ctl -D "$PGDATA" stop
+```
+
+**拡張の3本（`vector` / `btree_gin` / `pgcrypto`）は `.github/workflows/ci.yml` の
+`postgres` ジョブと同じである。**片方だけ増やさないこと。
+
+### 1本に絞って走らせる（変異試験はこちら）
+
+**`test:db` 全体は約4分かかる**【実測】。変異試験では毎回これを待たないこと:
+
+```bash
+pnpm --filter @mnemora/postgres exec vitest run \
+  src/__tests__/conformance.postgres.test.ts -t "<it の名前の一部>"
+```
+
+### ⛔ 変異を戻すのに `git checkout` を使わない
+
+**`git checkout <file>` は未コミットの編集も一緒に消す**（`docs/autonomy.md` の「穴」の表。
+実際に3ファイル失われている）。**`cp` で退避し、`cp` で戻すこと。**
+
+```bash
+cp packages/postgres/src/memory-store.ts /tmp/memory-store.ts.orig   # 退避
+# ... 変異を入れる → 狙った it が赤くなることを確認 ...
+cp /tmp/memory-store.ts.orig packages/postgres/src/memory-store.ts   # 戻す
+git status --porcelain                                                # 空になることを確認
+```
+
+**戻した後、同じ it が緑に戻ることまで実測すること。**「赤くなった」だけでは、
+壊したのが狙った歯なのか別のものなのかが分かれていない。
+
+**この手順で実際に何が測れたかは
+[ADR 0183](./docs/decisions/0183-local-postgres-makes-postgres-mutation-testing-possible.md)。**
+
+---
+
 ## 文書の地図
 
 | 文書 | 何が書いてあるか |
