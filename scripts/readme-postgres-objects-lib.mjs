@@ -24,13 +24,22 @@
  * 2026-09 時点の17本の移行には `DROP TABLE` / `DROP INDEX` は1つも無いが、
  * この関数はそれが増えても崩れないように書いてある。
  *
- * ## 対象外にしているもの
+ * ## 関数も対象に含める（ADR 0204。ADR 0202 の「引き受けた負債1」を解消する）
  *
- * `CREATE FUNCTION`（`mnemora_lexical_normalize` 等、`0008`/`0009` が作る）は
- * この歯の対象に含めていない——Issue #168 のこの残存項目が名指ししたのは
- * テーブル・索引・埋め込み空間ごとの実行時系列・advisory lock キーの4種類であり、
- * 関数はそこに無い。関数名も理屈のうえでは共有 DB で衝突しうるが、**この節・
- * この歯はそれを検査しない**（README 側の「確かめていないこと」に明記する）。
+ * `CREATE FUNCTION` / `CREATE OR REPLACE FUNCTION`（`mnemora_lexical_normalize` 等、
+ * `0008`/`0009` が作る）も、テーブル・索引と同じ作法で最終形を導く。関数名も
+ * 理屈のうえでは共有 DB で衝突しうる——ADR 0202 は「この節・この歯は検査しない」を
+ * 負債として引き受けたが、その負債は「検査しない」と書き直すのではなく、
+ * 歯を広げて解消する（ADR 0204）。**引数シグネチャ（`(text)` 等）までは見ない**——
+ * `CREATE OR REPLACE FUNCTION` で同名を別シグネチャに置き換えても、この歯は
+ * 気づかない（ADR 0204「引き受けた負債」）。
+ *
+ * ## コメントの剥がし方
+ *
+ * `--` 行コメントに加えて、スラッシュ・アスタリスク形式のブロックコメントも
+ * 剥がしてから走査する（`stripSqlLineComments` → `stripSqlBlockComments`）。
+ * 2026-09 時点の migrations にブロックコメントは無いが、関数定義の直前に
+ * ブロックコメントで理由が書かれることは将来ありうるため、対称に両方剥がす。
  */
 
 /** SQL の `--` 行コメントを剥がす（`postgres-auth-parity-lib.mjs` 等と同じ、正規表現だけの簡易実装）。
@@ -45,8 +54,18 @@ export function stripSqlLineComments(sqlText) {
     .join("\n");
 }
 
+/** SQL のスラッシュ・アスタリスク形式のブロックコメントを剥がす。
+ * `stripSqlLineComments` と同じく正規表現だけの簡易実装——この repo の migrations は
+ * ブロックコメントの区切りが文字列リテラルの中に現れないことを確認済み。
+ * @param {string} sqlText
+ * @returns {string}
+ */
+export function stripSqlBlockComments(sqlText) {
+  return sqlText.replace(/\/\*[\s\S]*?\*\//g, "");
+}
+
 const STATEMENT_RE =
-  /CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?(?<createTable>[a-zA-Z_][a-zA-Z0-9_]*)|DROP\s+TABLE\s+(?:IF\s+EXISTS\s+)?(?<dropTable>[a-zA-Z_][a-zA-Z0-9_]*)|CREATE\s+(?:UNIQUE\s+)?INDEX\s+(?:CONCURRENTLY\s+)?(?:IF\s+NOT\s+EXISTS\s+)?(?<createIndex>[a-zA-Z_][a-zA-Z0-9_]*)|DROP\s+INDEX\s+(?:CONCURRENTLY\s+)?(?:IF\s+EXISTS\s+)?(?<dropIndex>[a-zA-Z_][a-zA-Z0-9_]*)/gi;
+  /CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?(?<createTable>[a-zA-Z_][a-zA-Z0-9_]*)|DROP\s+TABLE\s+(?:IF\s+EXISTS\s+)?(?<dropTable>[a-zA-Z_][a-zA-Z0-9_]*)|CREATE\s+(?:UNIQUE\s+)?INDEX\s+(?:CONCURRENTLY\s+)?(?:IF\s+NOT\s+EXISTS\s+)?(?<createIndex>[a-zA-Z_][a-zA-Z0-9_]*)|DROP\s+INDEX\s+(?:CONCURRENTLY\s+)?(?:IF\s+EXISTS\s+)?(?<dropIndex>[a-zA-Z_][a-zA-Z0-9_]*)|CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\s+(?<createFunction>[a-zA-Z_][a-zA-Z0-9_]*)\s*\(|DROP\s+FUNCTION\s+(?:IF\s+EXISTS\s+)?(?<dropFunction>[a-zA-Z_][a-zA-Z0-9_]*)/gi;
 
 /**
  * 複数の移行ファイルのテキスト（コメント剥がし前でよい。この関数が剥がす）を、
@@ -55,14 +74,19 @@ const STATEMENT_RE =
  * 呼び出し側はそのまま渡せる）。
  *
  * @param {string[]} migrationTextsInFileOrder
- * @returns {{ tables: string[], indexes: string[] }} 最終的に生き残っている名前の集合（各々ソート済み・重複無し）
+ * @returns {{ tables: string[], indexes: string[], functions: string[] }} 最終的に生き残っている名前の集合（各々ソート済み・重複無し）
  */
 export function deriveMigrationObjects(migrationTextsInFileOrder) {
-  const combined = migrationTextsInFileOrder.map(stripSqlLineComments).join("\n");
+  const combined = migrationTextsInFileOrder
+    .map(stripSqlLineComments)
+    .map(stripSqlBlockComments)
+    .join("\n");
   /** @type {Set<string>} */
   const tables = new Set();
   /** @type {Set<string>} */
   const indexes = new Set();
+  /** @type {Set<string>} */
+  const functions = new Set();
 
   for (const match of combined.matchAll(STATEMENT_RE)) {
     const groups = /** @type {Record<string, string | undefined>} */ (match.groups ?? {});
@@ -74,12 +98,17 @@ export function deriveMigrationObjects(migrationTextsInFileOrder) {
       indexes.add(groups.createIndex);
     } else if (groups.dropIndex) {
       indexes.delete(groups.dropIndex);
+    } else if (groups.createFunction) {
+      functions.add(groups.createFunction);
+    } else if (groups.dropFunction) {
+      functions.delete(groups.dropFunction);
     }
   }
 
   return {
     tables: [...tables].sort(),
     indexes: [...indexes].sort(),
+    functions: [...functions].sort(),
   };
 }
 
@@ -215,8 +244,10 @@ export function extractBulletedIdentifiers(sectionText) {
  * @returns {{
  *   tables: string[],
  *   indexes: string[],
+ *   functions: string[],
  *   tableHeadingCount: number | undefined,
  *   indexHeadingCount: number | undefined,
+ *   functionHeadingCount: number | undefined,
  *   embeddingTablePattern: string | undefined,
  *   embeddingIndexPattern: string | undefined,
  *   advisoryLockKeys: string[],
@@ -226,6 +257,7 @@ export function extractBulletedIdentifiers(sectionText) {
 export function parseReadmeObjectsSection(readmeText) {
   const tableSection = extractMarkdownSection(readmeText, "テーブル");
   const indexSection = extractMarkdownSection(readmeText, "索引");
+  const functionSection = extractMarkdownSection(readmeText, "関数");
   const embeddingSection = extractMarkdownSection(readmeText, "実行時に増える系列");
   const advisorySection = extractMarkdownSection(readmeText, "advisory lock のキー");
 
@@ -244,8 +276,10 @@ export function parseReadmeObjectsSection(readmeText) {
   return {
     tables: tableSection ? extractBulletedIdentifiers(tableSection) : [],
     indexes: indexSection ? extractBulletedIdentifiers(indexSection) : [],
+    functions: functionSection ? extractBulletedIdentifiers(functionSection) : [],
     tableHeadingCount: extractHeadingCount(readmeText, "テーブル"),
     indexHeadingCount: extractHeadingCount(readmeText, "索引"),
+    functionHeadingCount: extractHeadingCount(readmeText, "関数"),
     embeddingTablePattern: tableMatch ? tableMatch[1] : undefined,
     embeddingIndexPattern: indexMatch ? indexMatch[1] : undefined,
     advisoryLockKeys,

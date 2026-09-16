@@ -17,9 +17,12 @@ import {
  * ここで名前の衝突を事前に確認できる**、という README の主張を、この歯が
  * 機械的に裏書きする。
  *
- * - テーブル・索引: `migrations/*.sql` をファイル名順に適用した**最終形**
+ * - テーブル・索引・**関数**: `migrations/*.sql` をファイル名順に適用した**最終形**
  *   （`DROP` されたものは数えない。`readme-postgres-objects-lib.mjs` の
  *   `deriveMigrationObjects` を見ること）と、README の箇条書きを突き合わせる。
+ *   **関数**（`CREATE FUNCTION` / `CREATE OR REPLACE FUNCTION`）は
+ *   ADR 0202 が「引き受けた負債1」として対象外にしていたが、ADR 0204 で
+ *   歯を広げて対象に含めた——「対象外」と書き直すのではなく解消する、という判断。
  * - 埋め込み空間ごとの実行時系列: `embedding-space-table.ts` の
  *   `TABLE_PREFIX` / `HNSW_INDEX_PREFIX` と、README に書いた接頭辞が一致するかを見る。
  * - advisory lock のキー: `migrate.ts` / `vector-space.ts` の
@@ -28,8 +31,9 @@ import {
  *
  * ⚠ **DB は要らない**——ここで読むのは `.sql` / `.ts` のテキストと README だけ。
  *
- * ⚠ **CREATE FUNCTION は対象外**（`readme-postgres-objects-lib.mjs` の doc comment
- * に理由を書いた）。README 側にも同じ限定を明記してある。
+ * ⚠ **関数の引数シグネチャ（`(text)` 等）までは検査していない**（ADR 0204
+ * 「引き受けた負債」）。`CREATE OR REPLACE FUNCTION` で同名を別シグネチャに
+ * 置き換えても、この歯は気づかない。
  */
 
 const repoRoot = fileURLToPath(new URL("../..", import.meta.url));
@@ -93,6 +97,18 @@ describe("packages/postgres/README.md の「この package が作るオブジェ
     expect(readmeObjects.indexHeadingCount).toBe(migrationObjects.indexes.length);
   });
 
+  it("関数一覧が migrations/*.sql の最終形と一致する（過不足なし。DROP された関数は数えない）", () => {
+    const { missing, extra } = diffSets(migrationObjects.functions, readmeObjects.functions);
+    expect(
+      { missing, extra },
+      `README に無い関数: ${JSON.stringify(missing)} / README にしか無い（実在しない）関数: ${JSON.stringify(extra)}`,
+    ).toEqual({ missing: [], extra: [] });
+  });
+
+  it("関数見出しの件数表記が実際の本数と一致する", () => {
+    expect(readmeObjects.functionHeadingCount).toBe(migrationObjects.functions.length);
+  });
+
   it("埋め込み空間ごとのテーブル名の接頭辞が embedding-space-table.ts の TABLE_PREFIX と一致する", () => {
     expect(
       readmeObjects.embeddingTablePattern,
@@ -131,7 +147,8 @@ describe("packages/postgres/README.md の「この package が作るオブジェ
     );
   });
 
-  it("CREATE FUNCTION は対象外であることが README に明記されている（対象範囲の限定を明示する）", () => {
-    expect(readmeText).toMatch(/CREATE FUNCTION|関数.*対象外|対象外.*関数/);
+  it("関数の一覧が空でない（対象に含めたことの回帰止め。0件のまま過不足なしを主張しない）", () => {
+    expect(migrationObjects.functions.length).toBeGreaterThan(0);
+    expect(readmeObjects.functions.length).toBeGreaterThan(0);
   });
 });

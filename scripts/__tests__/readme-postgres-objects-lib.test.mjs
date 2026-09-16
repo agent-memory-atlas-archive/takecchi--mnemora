@@ -7,6 +7,7 @@ import {
   extractHeadingCount,
   extractMarkdownSection,
   parseReadmeObjectsSection,
+  stripSqlBlockComments,
   stripSqlLineComments,
 } from "../readme-postgres-objects-lib.mjs";
 
@@ -21,6 +22,29 @@ describe("stripSqlLineComments", () => {
   });
 });
 
+describe("stripSqlBlockComments", () => {
+  it("ブロックコメントを剥がすが、コード部分は残す", () => {
+    const input = "CREATE TABLE foo (\n  id uuid /* primary key candidate */\n);";
+    expect(stripSqlBlockComments(input)).toBe("CREATE TABLE foo (\n  id uuid \n);");
+  });
+
+  it("複数行にまたがるブロックコメントも剥がす", () => {
+    const input = [
+      "/*",
+      " * CREATE FUNCTION ghost() RETURNS void AS $$ $$ LANGUAGE sql;",
+      " */",
+      "CREATE TABLE foo (id uuid);",
+    ].join("\n");
+    expect(stripSqlBlockComments(input)).toBe("\nCREATE TABLE foo (id uuid);");
+  });
+
+  it("ブロックコメントが無ければ変化しない", () => {
+    expect(stripSqlBlockComments("CREATE TABLE foo (id uuid);")).toBe(
+      "CREATE TABLE foo (id uuid);",
+    );
+  });
+});
+
 describe("deriveMigrationObjects", () => {
   it("複数ファイルのテーブル・索引を集める", () => {
     const result = deriveMigrationObjects([
@@ -29,6 +53,7 @@ describe("deriveMigrationObjects", () => {
     ]);
     expect(result.tables).toEqual(["memories"]);
     expect(result.indexes).toEqual(["idx_a", "uq_b"]);
+    expect(result.functions).toEqual([]);
   });
 
   it("後続ファイルの DROP INDEX が先行ファイルの CREATE を打ち消す（最終集合のみを返す）", () => {
@@ -61,6 +86,61 @@ describe("deriveMigrationObjects", () => {
       "DROP INDEX idx_a;\nCREATE INDEX idx_a ON t (id, other);",
     ]);
     expect(result.indexes).toEqual(["idx_a"]);
+  });
+
+  it("CREATE FUNCTION を集める", () => {
+    const result = deriveMigrationObjects([
+      "CREATE FUNCTION mnemora_lexical_normalize(text) RETURNS text AS $$\n  SELECT $1;\n$$ LANGUAGE sql IMMUTABLE;",
+    ]);
+    expect(result.functions).toEqual(["mnemora_lexical_normalize"]);
+  });
+
+  it("CREATE OR REPLACE FUNCTION も拾う（素朴な CREATE FUNCTION 探しだと取りこぼす形）", () => {
+    const result = deriveMigrationObjects([
+      "CREATE OR REPLACE FUNCTION mnemora_lexical_query_or(text) RETURNS tsquery AS $$\n  SELECT NULL;\n$$ LANGUAGE sql IMMUTABLE;",
+    ]);
+    expect(result.functions).toEqual(["mnemora_lexical_query_or"]);
+  });
+
+  it("DROP FUNCTION が最終集合から関数を消す", () => {
+    const result = deriveMigrationObjects([
+      "CREATE FUNCTION ghost_fn(text) RETURNS text AS $$ SELECT $1; $$ LANGUAGE sql;",
+      "DROP FUNCTION ghost_fn(text);",
+    ]);
+    expect(result.functions).toEqual([]);
+  });
+
+  it("コメント中の CREATE FUNCTION 言及（行コメント・ブロックコメント両方）は無視する", () => {
+    const result = deriveMigrationObjects([
+      [
+        "-- 誤り: CREATE FUNCTION ghost_line(text) RETURNS text AS $$ $$ LANGUAGE sql;",
+        "/* CREATE FUNCTION ghost_block(text) RETURNS text AS $$ $$ LANGUAGE sql; */",
+        "CREATE FUNCTION mnemora_lexical_normalize(text) RETURNS text AS $$ SELECT $1; $$ LANGUAGE sql;",
+      ].join("\n"),
+    ]);
+    expect(result.functions).toEqual(["mnemora_lexical_normalize"]);
+  });
+
+  it("packages/postgres/migrations の現物から導くと、テーブル8・索引20・関数5になる（回帰止め）", async () => {
+    const { readdirSync, readFileSync } = await import("node:fs");
+    const { fileURLToPath } = await import("node:url");
+    const migrationsDir = fileURLToPath(
+      new URL("../../packages/postgres/migrations", import.meta.url),
+    );
+    const fileNames = readdirSync(migrationsDir)
+      .filter((name) => name.endsWith(".sql"))
+      .sort();
+    const texts = fileNames.map((name) => readFileSync(`${migrationsDir}/${name}`, "utf8"));
+    const result = deriveMigrationObjects(texts);
+    expect(result.tables).toHaveLength(8);
+    expect(result.indexes).toHaveLength(20);
+    expect(result.functions).toEqual([
+      "mnemora_lexical_coverage",
+      "mnemora_lexical_normalize",
+      "mnemora_lexical_query_or",
+      "mnemora_lexical_query_terms",
+      "mnemora_lexical_query_tsqueries",
+    ]);
   });
 });
 
@@ -146,7 +226,7 @@ describe("extractMarkdownSection / extractHeadingCount / extractBulletedIdentifi
 });
 
 describe("parseReadmeObjectsSection", () => {
-  it("テーブル・索引・実行時系列・advisory lock を1つの形にまとめる", () => {
+  it("テーブル・索引・関数・実行時系列・advisory lock を1つの形にまとめる", () => {
     const markdown = [
       "### テーブル（1）",
       "",
@@ -155,6 +235,10 @@ describe("parseReadmeObjectsSection", () => {
       "### 索引（1）",
       "",
       "- `idx_a`",
+      "",
+      "### 関数（1）",
+      "",
+      "- `mnemora_lexical_normalize`",
       "",
       "### 実行時に増える系列（埋め込み空間ごと）",
       "",
@@ -170,8 +254,10 @@ describe("parseReadmeObjectsSection", () => {
     expect(parseReadmeObjectsSection(markdown)).toEqual({
       tables: ["memories"],
       indexes: ["idx_a"],
+      functions: ["mnemora_lexical_normalize"],
       tableHeadingCount: 1,
       indexHeadingCount: 1,
+      functionHeadingCount: 1,
       embeddingTablePattern: "memory_embeddings_<space>",
       embeddingIndexPattern: "idx_memory_embeddings_hnsw_<space>",
       advisoryLockKeys: ["7190158676462701299", "-4359922960011245935"],
@@ -180,5 +266,12 @@ describe("parseReadmeObjectsSection", () => {
         "mnemora:registerEmbeddingSpace:advisory-lock:",
       ],
     });
+  });
+
+  it("関数の見出しが無ければ functions は空配列、functionHeadingCount は undefined", () => {
+    const markdown = ["### テーブル（1）", "", "- `memories`"].join("\n");
+    const result = parseReadmeObjectsSection(markdown);
+    expect(result.functions).toEqual([]);
+    expect(result.functionHeadingCount).toBeUndefined();
   });
 });

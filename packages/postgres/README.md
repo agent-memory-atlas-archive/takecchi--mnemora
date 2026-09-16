@@ -202,11 +202,10 @@ await runtime.observe(ctx, {
 （[`scripts/readme-postgres-objects-lib.mjs`](../../scripts/readme-postgres-objects-lib.mjs)）が
 migrations と `src/` の現物から機械的に導いた集合と突き合わせている。**この一覧が
 CI で赤くなったら、コードではなくこの一覧のほうを直すこと**（歯が正、この文章が従。
-導出のやり方・DROP された索引を数えない理由は [ADR 0202](../../docs/decisions/0202-postgres-shared-db-object-names.md) 参照）。
-
-⚠ **`CREATE FUNCTION`（`mnemora_lexical_normalize` 等）は対象外。**関数名も
-理屈のうえでは共有 DB で衝突しうるが、この節・この歯はそれを検査しない
-（ADR 0202「引き受けた負債」）。
+導出のやり方・DROP された索引を数えない理由は [ADR 0202](../../docs/decisions/0202-postgres-shared-db-object-names.md) 参照。**関数**（`CREATE FUNCTION` /
+`CREATE OR REPLACE FUNCTION`）も含めて突き合わせている——
+[ADR 0204](../../docs/decisions/0204-postgres-object-names-cover-functions.md) が
+ADR 0202 の「引き受けた負債1」を解消した）。
 
 ### テーブル（8）
 
@@ -241,6 +240,18 @@ CI で赤くなったら、コードではなくこの一覧のほうを直す�
 - `idx_recalls_by_subject`
 - `uq_memories_extraction`
 - `uq_observations_external_id`
+
+### 関数（5）
+
+- `mnemora_lexical_coverage`
+- `mnemora_lexical_normalize`
+- `mnemora_lexical_query_or`
+- `mnemora_lexical_query_terms`
+- `mnemora_lexical_query_tsqueries`
+
+⚠ **引数シグネチャ（`(text)` 等）までは検査していない。**`CREATE OR REPLACE FUNCTION`
+で同名を別シグネチャに置き換えても、この歯は気づかない
+（[ADR 0204](../../docs/decisions/0204-postgres-object-names-cover-functions.md)「引き受けた負債」）。
 
 ### 実行時に増える系列（埋め込み空間ごと）
 

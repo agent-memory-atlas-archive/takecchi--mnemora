@@ -210,5 +210,6 @@ alteroid (github.com/takecchi/alteroid) を根拠として引く箇所は、確�
 | [0201](./0201-recall-footprint-char-margin-canary.md) | `recall-footprint` の許容誤差の余白を字数で見る歯を足す — hold-out 5行に限定し、閾値は較正係数から導く（Issue #410） | 採用 (2026-09) |
 | [0202](./0202-postgres-shared-db-object-names.md) | `packages/postgres` が作るオブジェクト名の一覧を README に置き、migrations と機械的に突き合わせる（Issue #168） | 採用 (2026-09) |
 | [0203](./0203-memories-omitted-exclusivity.md) | `result.memories` と `result.omitted` の排他性を契約にする — 段3.5 が昇格させた記憶を `below_threshold` から取り下げる（Issue #421） | 採用 (2026-09) |
+| [0204](./0204-postgres-object-names-cover-functions.md) | `packages/postgres` の共有オブジェクト名の歯を関数まで広げ、ADR 0202「引き受けた負債1」を解消する（Issue #168） | 採用 (2026-09) |
 
 <!-- ADR-INDEX:GENERATED:END -->
