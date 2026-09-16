@@ -29,7 +29,7 @@ permissions:
 
 # 同じ版に対して2本が並走しないようにする（Release の編集で published が
 # 再発火する場合などに備える）。cancel-in-progress は false——publish の途中で
-# 殺すと「4本のうち2本だけ上がった」を作りうる。
+# 殺すと「6本のうち2本だけ上がった」を作りうる。
 concurrency:
   group: publish-${{ github.event.release.tag_name || github.ref }}
   cancel-in-progress: false
@@ -103,7 +103,7 @@ jobs:
 
       - name: Release の tag の版を package.json へ書き込む（ADR 0070）
         # ⭐ **版の権威は Release の tag である。**`v0.1.2` の Release を作れば、
-        # この段が4つの package.json を 0.1.2 に書き換えてから梱包する。
+        # この段が6つの package.json を 0.1.2 に書き換えてから梱包する。
         # ⟹ **版上げのコミットは要らない。**
         #
         # ⚠ だから git に入っている `version` は権威ある値ではない
@@ -191,10 +191,10 @@ jobs:
         # 黙って落ちるのではなく、このフラグが原因を名指しして落ちる。
         #
         # **⭐ 既に上がっている版は飛ばす（冪等にする）。**
-        # 4本を順に上げる途中で1本落ちたとき、そのまま再実行すると
+        # 6本を順に上げる途中で1本落ちたとき、そのまま再実行すると
         # 「1本目が既に在る」で E403 になって**再開できない**。飛ばす形にすれば
         # 落ちた続きから再開できる。版そのものの取り違えは上の --expect-version が見ている
-        # （4パッケージとも tag の版であることを確かめてから、ここへ来る）。
+        # （6パッケージとも tag の版であることを確かめてから、ここへ来る）。
         #
         # **⚠ publish の成否は npm publish の出力で判断し、npm view では判断しない。**
         # registry の読み取り側は書き込みに数分遅れ、CDN を迂回する ?write=true でも
