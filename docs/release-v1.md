@@ -7,6 +7,205 @@
 この文書を書いた作業者ではない。**この文書は手順の下調べであり、実行の代行ではない
 （[docs/autonomy.md](./autonomy.md) §3 のとおり、これらはオーナー専権）。
 
+## 0. ⭐ tag を切る直前の最終確認リスト（⛔ 1つでも欠けたら、そこで止まる）
+
+**この節だけは「当日の手順」ではなく、「そもそも切ってよい状態か」の確認である。**
+**上から順に見て、通過条件を満たさないものが1つでも在れば、tag を切らずにそこで止まる。**
+
+⛔ **この節は §1〜§5 の要約ではない。**各項目には**通過条件（何を見たら通過とみなすか）**だけを
+書き、理由と詳細は既存の節へ参照を張る。**同じ内容をこの文書の2箇所に持たない。**
+
+**次節の凡例の3分類は、この節の記述にもそのまま掛かる。**
+
+| # | 見るもの | 通過条件（これを見たら通過） |
+|---|---|---|
+| 0.1 | `origin/main` の CI | その sha の check run が**1本残らず** completed かつ success（**2026-09-16 時点で 13/13**） |
+| 0.2 | `pnpm run pack:check` | **exit 0**・違反0件（**DB 不要**。当日その場で走らせられる） |
+| 0.3 | ADR 索引 | `node scripts/generate-adr-index.mjs --check` が **exit 0** |
+| 0.4 | `package.json` の `version` | 6本とも**同じ値**で `0.0.0` でない（**いまは `0.1.1`。これでよい**） |
+| 0.5 | 🔴 未検証のまま残る3つ | **通過条件が無い。**⛔ 緑にできない項目である——当日の判断材料として読む |
+| 0.6 | 版 | Release の tag 名が**ちょうど `v1.0.0`**、pre-release チェックを**入れない** |
+
+### 0.1 `origin/main` の CI が緑であること
+
+**実際に走らせるコマンド**（`gh` が認証済みであること）:
+
+```bash
+# (a) いま main の先頭がどの commit か
+gh api repos/takecchi/mnemora/commits/main -q .sha
+
+# (b) その sha の check run を1本ずつ見て判定する
+node scripts/ci-green-check.mjs --sha <(a) の sha> --repo takecchi/mnemora
+```
+
+**通過条件**: (b) が **exit 0** で終わり、`status=green — N件すべてが completed かつ success`
+と出ること。終了コードは `0`=green / `1`=red / `2`=pending（まだ判定できない）/
+`3`=`gh` 呼び出し等の失敗（`scripts/ci-green-check.mjs:34-35`。【読んで確かめた】）。
+⛔ **`2`（pending）は通過ではない。**「まだ分からない」であって「緑」ではない。
+
+**「何本中何本が緑ならよいか」**: **通過条件は「N 件すべて」であって「13件」ではない。**
+N はジョブが増減すれば変わる値であり、`ci-green-check.mjs` はその時点の check run を数えて
+「すべて success か」だけを判定する。**この日の N は 13 だった**——
+
+**【実測】2026-09-16、`origin/main` = `6a19d85`**（`6a19d853c605a643bdf0f76c6f2ac9afbe60a993`）**、
+この器で上の2本を走らせた**:
+
+- (b) は `[1st poll] status=green — 13件すべてが completed かつ success` を出して **exit 0**。
+- `gh api repos/takecchi/mnemora/commits/6a19d85.../check-runs -q .total_count` も **13** を返し、
+  13本とも `completed` / `success` だった。
+- ⟹ **この時点の `origin/main` は 13/13 緑である。**
+
+**⚠ `gh run list --branch main --limit 1` だけで済ませないこと。**これは
+**最新の run を1本返すだけ**で、その run の head sha が いま tag を切ろうとしている commit と
+同じである保証はない。sha まで見るなら:
+
+```bash
+gh run list --branch main --limit 3 --json databaseId,headSha,name,conclusion,status,createdAt
+```
+
+【実測】同日、`gh run list --branch main --limit 1` は
+`completed	success	docs(release-v1): …	CI	main	push	35065937222	4m2s	2026-09-16T06:55:05Z`
+を返し、`--json headSha` で引き直すと確かに `6a19d85...` だった。
+**⟹ 同じだと言えるのは引き直して確かめたからであって、コマンドの形からではない。**
+
+**⚠ run 全体の `conclusion` を見て判定しないこと。**`ci-green-check.mjs` は
+run 全体の `conclusion` も `mergeStateStatus` も**判定に一度も使わない**——
+Issue #228 が観測した4つの外れ方を踏まないための設計である
+（`scripts/ci-green-check.mjs:3-24`。【読んで確かめた】）。
+
+### 0.2 `pnpm run pack:check` が通ること（**DB 不要**）
+
+```bash
+pnpm run pack:check
+```
+
+**通過条件**: **exit 0**・違反0件で、6パッケージとも通って
+`✔ publish 梱包の門を通りました。` で終わること。**この門の中身は §2.3 が詳しい。**
+
+**DB は要らない。**`pack:check` は registry にもネットワークにも触れず、`spawnSync` で呼ぶのは
+`pnpm pack` と `tar xzf` だけである（§2.3。【読んで確かめた】）。§2.3 の「実際に走らせた結果【実測】」は
+**`DATABASE_URL` 未設定の器で exit 0** を記録している。
+⟹ **DB の無い手元でも、当日その場で走らせられる。**
+
+**⚠ この門が緑であることの上限は、§2.3 の「⚠ 何をカバーしないか」と
+「⚠ この実測が言っていないこと」に書いてある。**型の互換性も registry の状態も見ていない。
+⛔ **緑を「publish が通る」と読まないこと。0.5 を飛ばさないこと。**
+
+**⚠ この節を書いた作業者は `pack:check` を走らせていない。**上の exit 0 は §2.3 が記録した
+**2026-09-16・`origin/main` = `14a7c27` 時点の実測**であり、**`6a19d85` では走らせていない。**
+
+**参考**（【読んで確かめた】、§2.3 には書かれていない配線）: `pack:check` は
+`.github/workflows/ci.yml:45-62` で毎 PR の CI の `typecheck / lint / test / build` ジョブの
+末尾でも走る（Issue #241）。⟹ **0.1 が緑なら、その sha については `pack:check` も一度通っている。**
+**それでも手元で1回走らせる理由は、0.1 で見た sha と手元の作業ツリーが同じとは限らないからである。**
+
+### 0.3 ADR 索引が最新であること
+
+**検査**（書き込まない。exit code だけで判定できる）:
+
+```bash
+node scripts/generate-adr-index.mjs --check
+```
+
+**再生成**（`docs/decisions/README.md` の `<!-- ADR-INDEX:GENERATED:START -->` 区画を書き換える）:
+
+```bash
+node scripts/generate-adr-index.mjs
+```
+
+**通過条件**: `--check` が **exit 0** で `docs/decisions/README.md は最新です（ADR N 本）。` と
+出ること。陳腐化していれば **exit 1** で「…と一致していません。」が出る
+（`scripts/generate-adr-index.mjs:14-21,45-62`。【読んで確かめた】）。
+
+**【実測】2026-09-16、この器の作業ツリー（ブランチ `docs/v1-release-decision`）で `--check` を走らせ、
+`docs/decisions/README.md は最新です（ADR 169 本）。`・exit 0 だった。**
+⚠ **走らせたのは `main` の作業ツリーではない。**
+
+⛔ **索引の表を手で編集しないこと**（`docs/decisions/README.md`「この表は手で編集しない。」、ADR 0137）。
+再生成は、ADR を足す PR を **squash merge する直前に PR ブランチ上で**マージする側が行う
+（`scripts/generate-adr-index.mjs:11-22`。【読んで確かめた】）。⚠ **「マージした直後に `main` 上で」ではない**
+——そうすると陳腐化したままの squash コミットが `main` に着地し、`ci.yml` を赤くする。
+
+**0.1 との重なり**（【読んで確かめた】）: 鮮度の歯 `scripts/__tests__/adr-index-freshness.test.mjs` は
+**`main` に限って**赤くなる設計であり（`scripts/adr-index-freshness-branch-lib.mjs:1-18`）、
+`main` では `ci.yml` の `typecheck / lint / test / build` ジョブの `pnpm run test` の中で走る。
+⟹ **0.1 が緑なら、その sha の索引は最新である。**この項目を別に立てるのは、
+**tag を切る直前に手元で1本のコマンドとして確かめられるようにするためである。**
+
+### 0.4 `git` 上の `version` が `0.1.1` のままでよいこと（⚠ 異常ではない）
+
+```bash
+grep -n '"version"' package.json packages/*/package.json
+```
+
+**【実測】2026-09-16、この器の作業ツリーでの出力**:
+
+| ファイル | `version` |
+|---|---|
+| `package.json`（ルート。`private: true`、`PUBLISH_TARGETS` 外） | `0.0.0` |
+| `packages/core` / `testkit` / `openai` / `postgres` / `anthropic` / `local-embedding` | **6本とも `0.1.1`** |
+
+**通過条件**: **publish 対象6本が同じ値で、`0.0.0` でないこと。**いまは `0.1.1` である。
+⛔ **`1.0.0` になっていないことは異常ではない。止まる理由にならない。**
+逆に、**6本の値がばらけていたら止まること**——`pack:check` の検査項目2（§2.3）と同じ条件である。
+
+**なぜこれでよいか**（ADR 0070。詳細は §1.3）: **版の権威は Release の tag に置いてある。**
+`package.json` の `version` は権威ではなく「最後に誰かが書いた値」であり、
+tag から `scripts/apply-release-version.mjs` が runner の作業ツリー上で書き込む——
+**その書き換えはコミットされず、tarball に載って消える。**⟹ **git 上の値と npm 上の最新版は
+一致しなくてよい。**版を知りたければ registry に訊く（`npm view @mnemora/core version`）。
+
+⛔ **オーナーが `package.json` の `version` を手で `1.0.0` へ書き換える必要は無い。書き換えないこと。**
+
+### 0.5 🔴 未検証のまま残るもの（⛔ この3つは、ここでは緑にできない）
+
+**⚠ 0.1〜0.4 がすべて通っても、次の3つは何も確かめられていない。**
+**当日の判断材料として読むための再掲であり、通過条件は無い。**
+
+1. **`npm publish --provenance` が通ること自体**（`publish.yml:227`）。
+   **本番 tag を打つまで分からない。**⟹ **予行（`workflow_dispatch` / `dry_run: true`）が
+   全ステップ success でも、これは何も保証しない**——`--dry-run` は書き込みの要求を投げないので、
+   認証・認可・存在検査・サーバ側の検証を**構造的に**見られない（ADR 0067 逐語。**§2.2**）。
+   実測の裏付けも §2.2 に在る（予行は全ステップ success、同じ commit の本番は
+   `npm error 403 … OIDC permission denied for this action` で failure）。
+2. **npm 側の信頼発行元（Trusted Publishing）の設定。**
+   **この器から npmjs.com の画面は見られない**——**§4.2** の表（org=`takecchi` / repo=`mnemora` /
+   workflow filename=`publish.yml` / 「直接 `npm publish` を許可」）を、**当日オーナーが
+   6パッケージすべてについて npm の画面で確認する。**⚠ npm は保存時にこれらの値を検証しない
+   （§4.2）。⚠ 特に `@mnemora/anthropic` と `@mnemora/local-embedding` は初版を手元 bootstrap で
+   出した経緯があり、**現在 OIDC 経路に乗っているかの後続記録が見つかっていない**
+   （末尾「現物を読んでも分からなかった点」5）。
+3. **lockfile 不整合。**§2.3 の手元の `pack:check` 実測は、**pnpm 12.4.2 ＋ 素の `pnpm install`**
+   で走らせており、CI が使う **corepack ＋ `packageManager` の `pnpm@11.25.0` ＋
+   `pnpm install --frozen-lockfile`** とは条件が違う。⟹ **その実測は lockfile について何も見ていない**
+   （§2.3「⚠ この実測が言っていないこと」）。赤くなるとすれば §1.2 のステップ5である。
+   ⚠ **0.1 の CI は `pnpm install --frozen-lockfile` で入れている**ため（`ci.yml:25` ほか。
+   【読んで確かめた】）、**0.1 が緑なら その sha については lockfile も一度通っている**——
+   **ただし §2.3 が「手元の実測では見ていない」と書いていることは、そのまま変わらない。**
+
+**⟹ この3つは「止まる条件」ではなく、「失敗したときに何を疑うか」を先に読んでおく項目である。**
+失敗したときの兆候と回復は **§3** と **§4**、確認方法そのものが分かっていない点は
+**末尾の「現物を読んでも分からなかった」点**に集めてある。
+
+### 0.6 版は `v1.0.0`（オーナー決定）であること
+
+**版はオーナーが決めている: `v1.0.0`**（`docs/roadmap.md` §7.12「オーナーの決定（2026-09-16）」。
+【読んで確かめた】）。⛔ **この場で版を決め直さないこと。**
+
+**通過条件**（Release の作成画面で、打つ前に目で確かめる）:
+
+- tag 名が **ちょうど `v1.0.0`**。**先頭の `v` は必須**（§1.1）。
+  `1.0.0` や `vfoo` は `versionFromTag()` が落とす（§1.3 に異常系の【実測】が在る）。
+- **「Set as a pre-release」にチェックを入れない。**入れると dist-tag が `next` へ倒れる（§1.5）。
+- ⟹ 上の2つを満たせば **dist-tag は `latest`**、6パッケージとも **`1.0.0`** で上がる（§1.3 / §1.5 / §1.6）。
+
+⚠ **`docs/roadmap.md` §7.12 は「§7.2 の v1.0 の定義を文字どおりには満たさないまま、
+オーナーの判断で切る」と明記している。**⛔ **このリストが全部緑になっても、
+それは §7.2 の定義を満たしたという意味ではない。**このリストが見ているのは
+**「出す仕掛けが壊れていないか」だけ**である。
+
+---
+
 ## 凡例（この文書のすべての記述は、次のいずれかである）
 
 - **【読んで確かめた】** — `.github/workflows/publish.yml` / `scripts/*.mjs` / ADR の現物にそう

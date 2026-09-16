@@ -76,6 +76,43 @@ const { observationId } = await runtime.observe(ctx, {
 配線をすぐ試したいだけなら、`@mnemora/postgres` と `@mnemora/openai` の README にある
 そのままの例をつなげば動く（`@mnemora/postgres` 側は本物の Postgres + pgvector が要る）。
 
+## ⚠ 連想枠（`recall()` の段3.5）は既定 off
+
+**`recall()` は、`RecallQuery.association` を渡さないかぎり連想を一切走らせない。**
+⟹ **このパッケージを入れたままの既定の振る舞いは「聞かれたことにしか答えない」。**
+（`packages/core/src/recall.ts:1132` の doc コメント逐語「**省略時は連想を一切走らせない**（既定 off）」。
+off の実体は `packages/core/src/recall-runtime.ts:1049` の `if (associationQuery !== undefined)`。
+既定を off にした理由は [ADR 0151](../../docs/decisions/0151-recall-association-unprompted.md)）
+
+使うには、呼び出し側が明示的に渡す:
+
+```ts
+const recalled = await runtime.recall(ctx, {
+  text: "京都の予定は?",
+  association: { maxCount: 10 },
+});
+```
+
+- `maxCount` — **必須。既定値は無い**（「量の上限を呼び出し側に必ず明示させる」ため）
+- `anchorCount?` — 段3までに残った上位何件を連想の起点（アンカー）にするか。
+  既定 `DEFAULT_ASSOCIATION_ANCHOR_COUNT` = 3
+- `minSimilarity?` — アンカーとの**生のコサイン類似度**の下限。
+  既定 `DEFAULT_ASSOCIATION_MIN_SIMILARITY` = 0.5（`scoreThreshold` とは尺度が違う別の値）
+
+連想で来た候補は `retrievedVia: "association"` と `associationOf`（どのアンカーが連れてきたか）を
+持つので、**クエリに当たった候補と区別できる。**
+
+**渡すと何が変わるか。** `association-probes` ベンチ（probe 12件、本物の Postgres + pgvector、
+埋め込みは `@mnemora/local-embedding` のプロセス内 ONNX 推論）の実測では、`maxCount: 10` で
+**連想でしか届かない gold の到達が 0/12 → 12/12、費用は `memoryChars` +4.32%** だった
+（`maxCount: 5` では 10/12・+2.22%。
+[ADR 0168](../../docs/decisions/0168-examples-chat-uses-association.md)）。
+**⚠ これはこのリポジトリの probe 12件で測った値であり、他のデータでの値ではない。**
+**⚠ `VectorStore.getVectors`（任意メソッド）を実装していない adapter では、`association` を
+渡しても連想は走らない**——走らなかったことは
+`stage_skipped { stage: 'association', reason: 'vector_store_lacks_get_vectors' }` として
+`omitted` に名乗る（[docs/recall.md](../../docs/recall.md) §9）。
+
 ## 単体で呼べる純関数（動く最小の例）
 
 一方で、以下は `@mnemora/core` だけで完結して**そのまま実行できる**——

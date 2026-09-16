@@ -80,7 +80,7 @@ Release の tag にあるという既存の決定（[ADR 0070](./docs/decisions/
   ([ADR 0166](./docs/decisions/0166-recall-footprint-association-term.md))
 - **`examples/chat` の想起経路が連想枠を既定で使うようになった**（`maxCount=10`）。
   ⚠ **`@mnemora/core` の `recall()` の既定は off のままである**——連想枠は
-  `query.association` を渡したときだけ走る（`packages/core/src/recall.ts:1100`
+  `query.association` を渡したときだけ走る（`packages/core/src/recall.ts:1132`
   「省略時は連想を一切走らせない」）。**変わったのは採用側が明示して使うようになったこと**であって、
   ライブラリの既定ではない。
   ([ADR 0168](./docs/decisions/0168-examples-chat-uses-association.md))

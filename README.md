@@ -75,8 +75,17 @@ await runtime.forget(ctx, { memoryIds: [] });
 `packages/testkit`（適合テスト）、`examples/chat`（サンプル CLI）がある。
 Phase 1 の範囲と、そこに入れなかったものは [docs/roadmap.md](./docs/roadmap.md) を参照。
 
-**まだ 0.x であり、公開 API は動く。**名前は `mnemora`（`@mnemora/*`）に確定しており、
-暫定ではない（経緯は [docs/vision.md](./docs/vision.md) の「名前について」と
+**版の付け方**: `v1.0.0` 以降は [semver](https://semver.org/lang/ja/) に従う
+——**公開 API の破壊的変更は major を上げる。**⛔ **「もう変わらない」という意味ではない。**
+破壊的変更は major を上げる形で起こりうる。ただしそのとき **ADR を書くことは必須である**
+（[docs/autonomy.md](./docs/autonomy.md) §3 逐語「公開 API の破壊的変更も、ADR を書けば
+実装してよい……ただし ADR に書くことは変わらず必須」、
+[ADR 0156](./docs/decisions/0156-delegate-5-grade-judgment-and-breaking-changes.md)）
+⟹ **何がどの版で変わったかは [CHANGELOG.md](./CHANGELOG.md)、なぜ変わったかは
+[docs/decisions/](./docs/decisions/) から辿れる。**
+
+名前は `mnemora`（`@mnemora/*`）に確定しており、暫定ではない
+（経緯は [docs/vision.md](./docs/vision.md) の「名前について」と
 [ADR 0014](./docs/decisions/0014-package-name-mnemora.md)）。
 
 | 文書 | 何が書いてあるか |
@@ -221,6 +230,14 @@ forget(ctx, target)      // 記憶を落とす / 失効させる
 ```
 
 **内部が複雑でも、記憶そのものを動かす中核操作はこの5つに保つ。ここは増やさない。**
+
+**⚠ 冒頭の構成図にある `Association`（連想枠）は、`@mnemora/core` の `recall()` では
+既定で走らない。**`recall()` に `association: { maxCount: 10 }` のように**明示的に渡した
+ときだけ**走る（省略時は連想を一切走らせない——`packages/core/src/recall.ts:1132`、
+[ADR 0151](./docs/decisions/0151-recall-association-unprompted.md)）。
+⟹ **npm から入れたままの既定の振る舞いは「聞かれたことにしか答えない」。**
+渡し方・各フィールドの既定値・渡したときの実測値は
+[packages/core/README.md](./packages/core/README.md) を見ること。
 
 ### `Runtime` の残り9個 — 中核を守る3つの層
 
