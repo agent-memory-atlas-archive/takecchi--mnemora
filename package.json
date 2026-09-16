@@ -16,6 +16,8 @@
     "test": "vitest run && pnpm -r --if-present run test && node scripts/run-db-tests.mjs",
     "build": "pnpm -r --if-present run build",
     "pack:check": "node scripts/check-publish-pack.mjs",
+    "api:check": "node scripts/check-public-api-surface.mjs",
+    "api:write": "node scripts/check-public-api-surface.mjs --write",
     "check:cjs-parse": "node scripts/check-cjs-transpile-parse.mjs",
     "ci:green-check": "node scripts/ci-green-check.mjs"
   },

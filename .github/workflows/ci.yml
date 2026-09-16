@@ -39,6 +39,15 @@ jobs:
       - name: Build
         run: pnpm run build
 
+      - name: "公開 API 表面の破壊的変更を検出する門（Issue #342 / ADR 0178）"
+        # 直前の Build ステップが作った packages/*/dist の .d.ts に依存する（自分では
+        # ビルドし直さない）。既存の6つ目の門（pack:check）と同じジョブへ足す理由は
+        # 直下の pack:check ステップのコメントと同じ——このジョブ名
+        # （`typecheck / lint / test / build`）は branch protection の
+        # required_status_checks に登録された文字列そのものであり、ジョブを分けると
+        # オーナー権限での branch protection 更新が要る（ADR 0138 と同じ論拠）。
+        run: pnpm run api:check
+
       - name: "配布物（packages/*/dist）が CommonJS として構文解析できること（Issue #110）"
         run: pnpm run check:cjs-parse
 

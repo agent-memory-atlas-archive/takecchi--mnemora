@@ -2,3 +2,8 @@ dist
 node_modules
 coverage
 pnpm-lock.yaml
+# `scripts/check-public-api-surface.mjs --write`（Issue #342 / ADR 0178）が生成する
+# 公開 API 表面のスナップショット。TypeScript の printer が出したそのままの形を
+# diff の対象にするため、prettier の書式に寄せない（寄せると printer 出力と
+# 突き合わせるたびに無関係な書式差分が出る）。
+scripts/__snapshots__/public-api
