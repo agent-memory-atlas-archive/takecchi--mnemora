@@ -241,6 +241,69 @@ describe("recall() — 連想枠（association、既定 off）", () => {
   });
 });
 
+describe("recall() — memories と omitted の排他性（Issue #421 / ADR 0203）", () => {
+  it("段2で below_threshold として落ちた記憶が連想で丸ごと昇格すると、below_threshold の omission 自体が消える", async () => {
+    const { runtime, stores } = buildRuntime();
+    // A はクエリに強く当たる → アンカーになる。B はクエリには当たらない
+    // （below_threshold）が、A との類似度は 0.7071（既定 minSimilarity 0.5 以上）
+    // なので連想で拾われる——below_threshold の対象はこの1件だけである。
+    await createEmbeddedMemory(stores, [0.70710678, 0.70710678], {
+      digest: "アンカー本文",
+    });
+    const associated = await createEmbeddedMemory(stores, [0, 1], { digest: "連想本文" });
+
+    const result = await runtime.recall(ctx, {
+      vector: [1, 0],
+      association: { maxCount: 5, anchorCount: 1 },
+    });
+
+    // ⭐ 陽性対照そのもの（Issue #421 が実測した形）: 修正前はここで
+    // `result.memories` に retrievedVia:'association' として現れる一方、
+    // `result.omitted` の below_threshold.nearMisses にも同じ id が残っていた。
+    const assocEntry = result.memories.find((m) => m.memoryId === associated.id);
+    expect(assocEntry?.retrievedVia).toBe("association");
+
+    // below_threshold の対象は昇格した1件だけだったので、omission 自体が
+    // 配列から消える（0件の omission を残さない、他の kind と同じ作法）。
+    expect(result.omitted.some((o) => o.kind === "below_threshold")).toBe(false);
+    // 昇格した memoryId が、omitted のどのエントリにも（nearMisses という形でも）残らない。
+    for (const o of result.omitted) {
+      if (o.kind === "below_threshold") {
+        expect(o.nearMisses?.some((n) => n.memoryId === associated.id)).toBe(false);
+      }
+    }
+  });
+
+  it("below_threshold の一部だけが連想で昇格したときは、残りだけが omitted に残る（count / nearMisses とも）", async () => {
+    const { runtime, stores } = buildRuntime();
+    await createEmbeddedMemory(stores, [0.70710678, 0.70710678], {
+      digest: "アンカー本文",
+    });
+    // promoted: クエリには当たらない（below_threshold）が、A との類似度は高く連想で拾われる。
+    const promoted = await createEmbeddedMemory(stores, [0, 1], { digest: "昇格する" });
+    // stillOmitted: クエリにも A にも当たらない——below_threshold のまま残る。
+    const stillOmitted = await createEmbeddedMemory(stores, [0, -1], { digest: "残る" });
+
+    const result = await runtime.recall(ctx, {
+      vector: [1, 0],
+      association: { maxCount: 5, anchorCount: 1 },
+    });
+
+    const promotedEntry = result.memories.find((m) => m.memoryId === promoted.id);
+    expect(promotedEntry?.retrievedVia).toBe("association");
+    expect(result.memories.some((m) => m.memoryId === stillOmitted.id)).toBe(false);
+
+    const belowThreshold = result.omitted.find((o) => o.kind === "below_threshold");
+    expect(belowThreshold).toBeDefined();
+    if (belowThreshold?.kind === "below_threshold") {
+      // count は「昇格した1件」の分だけ減っている（2件 below_threshold のうち1件が昇格）。
+      expect(belowThreshold.count).toBe(1);
+      expect(belowThreshold.nearMisses?.some((n) => n.memoryId === promoted.id)).toBe(false);
+      expect(belowThreshold.nearMisses?.some((n) => n.memoryId === stillOmitted.id)).toBe(true);
+    }
+  });
+});
+
 describe("recall() — 連想枠: 複数アンカーが同じ候補を連想したときの決定性（Issue #316 / ADR 0167）", () => {
   const deg = (d: number): number => (d * Math.PI) / 180;
 

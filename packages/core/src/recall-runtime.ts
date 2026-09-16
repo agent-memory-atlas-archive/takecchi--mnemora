@@ -31,6 +31,7 @@ import {
 } from "./recall.js";
 import { packDigestBand } from "./digest-band.js";
 import type {
+  BelowThresholdOmission,
   CountKind,
   IndexBand,
   Omission,
@@ -1343,6 +1344,54 @@ export async function runRecall(
       return recalled;
     }),
   );
+
+  // -------------------------------------------------------------------
+  // 排他性契約（Issue #421 / ADR 0203）: `omitted` は「返さなかった」記憶の集合である
+  // （`docs/recall.md` §1 の `RecallResult.omitted` の doc の逐語どおり）。
+  //
+  // 段2が `below_threshold` として確定させた記憶を、段3.5（連想）や段3（必須の同伴取得）が
+  // 後から `finalMemories` へ昇格させることがある——連想の除外集合
+  // （`withinLimit` + `companions` + アンカー自身）は below_threshold を含まないので、
+  // 連想は「一度落ちた」記憶を候補として拾い直せる（これは意図した挙動——ADR 0203
+  // 「採らなかった案」参照）。⟹ 段2の確定を**そのまま**残すと、同じ memoryId が
+  // `memories` と `omitted` の両方に載り、「返したのに落ちたと名乗る」ことになる。
+  //
+  // ここで below_threshold 側を取り下げる——「段2で確定し、以降は積み上げるだけ」
+  // （`docs/recall.md` §3）という規約を破らず、**確定を書き換えるのではなく、
+  // 実際に返した集合と改めて突き合わせて矛盾を解消する後処理**として置く。
+  //
+  // ⚠ 対象は `below_threshold` だけである。`Omission` の他の10種のうち、memoryId を
+  // 明示的に持つのは `BelowThresholdOmission.nearMisses` だけであり（`recall.ts` の
+  // 各 interface を見ること）、他の kind（`over_limit`/`budget_dropped`/
+  // `score_not_comparable` 等）はどの記憶を指しているかを個体で言わない——同じ昇格が
+  // 起きても「同じ memoryId が両方に載る」という**検証可能な**矛盾を作らないため、
+  // 本 PR の射程外とする（ADR 0203「引き受けた負債」参照）。
+  const returnedMemoryIds = new Set(finalMemories.map((m) => m.memoryId));
+  const promotedFromBelowThreshold = belowThreshold.filter((c) =>
+    returnedMemoryIds.has(c.memory.id),
+  );
+  if (promotedFromBelowThreshold.length > 0) {
+    const promotedIds = new Set(promotedFromBelowThreshold.map((c) => c.memory.id));
+    const belowThresholdIndex = omitted.findIndex(
+      (o): o is BelowThresholdOmission => o.kind === "below_threshold",
+    );
+    if (belowThresholdIndex !== -1) {
+      const existing = omitted[belowThresholdIndex] as BelowThresholdOmission;
+      const remainingCount = existing.count - promotedFromBelowThreshold.length;
+      const remainingNearMisses = existing.nearMisses?.filter((n) => !promotedIds.has(n.memoryId));
+      if (remainingCount > 0) {
+        omitted[belowThresholdIndex] = {
+          ...existing,
+          count: remainingCount,
+          ...(remainingNearMisses !== undefined ? { nearMisses: remainingNearMisses } : {}),
+        };
+      } else {
+        // 全件昇格した。0件の omission を残さない——他の kind が count === 0 では
+        // 積まない作法（`filtered`/`over_limit` 等の各 push 直前の `if` 参照）に揃える。
+        omitted.splice(belowThresholdIndex, 1);
+      }
+    }
+  }
 
   // 連想枠（Issue #200、ADR 0151）が返した digest の合計文字数の内訳。`association` を
   // 渡したときだけ usage.byTier に載せる（申告されていなければ欄自体が無い。`share`/

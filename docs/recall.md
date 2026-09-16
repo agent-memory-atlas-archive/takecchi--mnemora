@@ -31,6 +31,8 @@ type RecallResult = {
 
 `memories` と `omitted` は対になる二つのフィールドであって、片方が主でもう片方が付録ではない。型定義上も並び順上も対等に置く。呼び出し側のコードが `omitted` を無視して `memories` だけを使うことは自由だが、mnemora の側が「無視してよい」という前提で設計してはならない——`omitted` を計算しない・空配列で済ませる、という手を抜く経路を作らない。
 
+**⚠ 排他性契約（2026-09 追記。Issue #421 / [ADR 0203](./decisions/0203-memories-omitted-exclusivity.md)）**: `omitted` は文字どおり「返らなかったもの」の分類である——ある memoryId が `memories` に載っているなら、`omitted` のどの Omission もその memoryId を名指しで含まない。段3.5（連想、§9）が段2の `below_threshold` 判定を後から `memories` へ昇格させることがあり、そのときは昇格した分を `below_threshold` の `count`/`nearMisses` から取り下げる（§9.8）。**この契約が個体単位で検証できるのは `nearMisses` を持つ `below_threshold` だけである**——他の `Omission.kind` は件数だけを持ち、どの記憶を指すかを言わない。
+
 `index` と `usage` も同じ理由でトップレベルに置く。「何が在るか」（index、§5）と「どれだけの量を返したか」（usage、§6）は、`memories` の中身をどう解釈するかに直接影響する周辺情報であり、後から復元できない。`explain.stages` はパイプラインの実行そのものの記録であり、次節で扱う。
 
 以降の節はこの型の各フィールドを埋めていく作業である。
@@ -973,3 +975,15 @@ Issue #200 は**2つの読み方**を挙げていた。
   測るべき器は `retrieval` ベンチ（`hit@k` / MRR）だが、**それは⭐門ではない**（ADR 0133）。
 
 ⟹ **測る仕事は別に割ってある。**測って動かなければ落とす（ADR 0151「これが覆るとしたら」3番）。
+
+### 9.8 `memories` と `omitted` の排他性（2026-09 追記。Issue #421 / [ADR 0203](./decisions/0203-memories-omitted-exclusivity.md)）
+
+**上の §9.7 が測ったのは「順位」の破れ（[Issue #402](https://github.com/takecchi/mnemora/issues/402)）だった。これは別の軸——「分類」の破れである。**
+
+段2が `below_threshold` として確定させた記憶を、段3.5（連想）が後から `retrievedVia: 'association'` として `memories` へ拾い直すことがある（連想の除外集合は `withinLimit` + `companions` + アンカー自身だけで、`below_threshold` を含まない——§9.2）。**これ自体は意図した挙動である**——段2で落ちた記憶こそが連想枠の主な獲物であり、除外すると連想枠の意味がほぼ無くなる（実測: 連想枠 on の返却の47.5%がこの範囲。§9.7 の実測と同じ窓）。
+
+**だが、段2が確定させた `below_threshold` の `Omission` を誰も取り下げなければ、同じ memoryId が `memories` と `omitted` の両方に載る**——「返したものについて『落ちた』と名乗る」。`RecallResult.omitted` の doc が言う「返らなかったものの分類」という文言と、実際の挙動が食い違っていた。
+
+**直したこと**: 段3.5・段3・段4がすべて終わり `finalMemories`（実際に返す集合）が確定した時点で、`below_threshold` の `count`/`nearMisses` から `finalMemories` に含まれる memoryId を取り下げる（`recall-runtime.ts` の「排他性契約」ブロック）。§3 の規約「段2で確定し、以降は積み上げるだけ。最後に集計し直さない」は破っていない——ここで行っているのは件数の再集計ではなく、**確定した分類と、実際に返した集合との突き合わせ**である。
+
+**この排他性が個体単位で検証できるのは `below_threshold.nearMisses` だけである**——`Omission` の他10種は memoryId を持たない。段3（必須の同伴取得）が同種の昇格を起こす経路（争われている記憶の同伴が偶然 `below_threshold` に居た場合）も構造的には同じ後処理で救われるが、実測で確かめたのは段3.5（連想）の経路だけである（ADR 0203「確かめていないこと」）。
