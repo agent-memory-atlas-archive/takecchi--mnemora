@@ -526,6 +526,98 @@ PostgreSQL 17 + pgvector、`packages/postgres/src/bench/scale-bench.ts`、擬似
 **このベンチは CI に常時つないでいない**——一時的な計測ジョブで1回回した実測であり、
 手で回す口として repo に残っている。
 
+### ⚠ `subjectId` を省略すると何が起きるか — **既定は「テナント全体」である**（2026-09-17 実測）
+
+**上の表は「テナント全体」と「subject 指定」を並べているが、
+どちらが既定なのかを書いていない。**ここを埋める。
+
+#### 1. 省略すると「テナント全体」になる。そして省略が既定の姿である
+
+`subjectId` は `RecallQuery` の欄では**ない**。**`Ctx` の任意欄**である:
+
+- `packages/core/src/ctx.ts` — `interface Ctx { tenantId: string; subjectId?: string }`
+- `packages/core/src/recall-runtime.ts` — `subjectId: ctx.subjectId` が `RecallScope` にそのまま入る
+- `packages/core/src/recall.ts`（`RecallScope.subjectId` の doc、逐語）:
+  > `subjectId` を省略すると「テナント全体」を意味する（`ctx.subjectId` が無い呼び出し）。
+
+⟹ ⭐ **`recall()` の引数ではなく、すべてのメソッドの第一引数に載る任意欄なので、
+意識して足さないかぎり付かない。**⟹ **既定は「テナント全体」側である。**
+
+#### 2. その既定が、いくらかかるか【実測】2026-09-17
+
+**`PostgresMemoryStore.aggregateScope()` を TypeScript から実際に呼んで測った**
+（SQL の書き写しではない）。PostgreSQL 17.11 + pgvector 0.8.0、`shared_buffers=512MB`、
+`max_parallel_workers_per_gather=0`、`digestBand` あり（limit 50 / 除外10件）、交互実行 n=20。
+
+| 行数（1テナント） | `subjectId` 無し（テナント全体） | `subjectId` あり（絞り先 ≈1%） | `subjectId` あり（絞り先 10行） |
+|---:|---:|---:|---:|
+| 1,000 | 3.5ms | 1.5ms | 1.5ms |
+| 10,000 | 17.0ms | 1.5ms | 1.4ms |
+| **100,000** | 🔴 **165.1ms** | **4.0ms** | **1.3ms** |
+
+（いずれも中央値。100,000行・テナント全体は mean 165.5 / p10 155.1 / p90 175.2）
+
+⟹ **10万行で約41倍の差がある。**
+
+#### 3. 絞ったときのコストは、テナント総行数ではなく**絞り先の大きさ**に比例する
+
+**10行の subject に絞ると、テナント総行数が 1,000 でも 100,000 でも 1.3〜1.5ms で変わらない。**
+`idx_memories_by_subject (tenant_id, subject_id, status)` の Bitmap Index Scan に乗り、
+`Seq Scan` が出ない（`EXPLAIN` で確認）。
+
+⟹ **「テナントが大きいほど遅くなる」のは、絞らなかったときだけである。**
+
+#### 4. ⛔ 「だから絞れ」とは言わない
+
+**絞るかどうかは、使う側が決めることである。**
+`subjectId` は**隔離境界ではなく整理の単位**であり（`docs/vision.md`「Tenant と Subject を
+混同しない」）、**絞れば当然、他の subject の記憶は返らない。**
+「速いから絞る」は、**返ってほしいものを返さなくする**判断になりうる。
+
+⟹ **ここに書くのは、選べるように数字を出すところまでである。**
+これは北極星「目指す姿」の**「どれだけ載せるかを、使う側が決められる」**と同じ層にある。
+
+#### 5. 🔴 上の表（100,000行で 45.8ms）との差について
+
+**上の「`aggregateScope` の実測（2026-09 追記）」の表は 100,000行・テナント全体を
+45.8ms としている。本節の実測は 165.1ms で、約3.6倍である。**
+
+**⚠ どちらかが誤りだとは言わない。測った対象が同じではない。**【現物】で確かめた違い:
+
+| | 上の表 | 本節 |
+|---|---|---|
+| 測った日 | 2026-09-06（`docs/recall.md` へ入った commit） | 2026-09-17 |
+| **digest 帯** | **存在しない**（実装は 2026-09-09、[ADR 0073](./decisions/0073-digest-band-bounded-without-taxonomy.md)） | **あり**（limit 50 / 除外10件） |
+| **`decayed_filtered` の群カウント** | **存在しない**（2026-09-16、[ADR 0173](./decisions/0173-decayed-omission-counted-by-aggregate-scope.md)） | あり |
+| 並列 | **あり**（プランの要点に「Finalize HashAggregate、並列」とある） | **無し**（`max_parallel_workers_per_gather=0`） |
+| 器 | GitHub Actions run 34009301567 | ローカルの native PostgreSQL 17.11 |
+
+⟹ 🔴 **上の表は、いまの `aggregateScope` が数えている列を全部は数えていない時点の数字である。**
+⛔ **だからといって上の表を消さない**——当時の記録である。
+
+**⚠ 3.6倍の差を、上の4つの違いに分解していない。**どれがどれだけ効いたかは**確かめていない。**
+
+#### 6. 確かめていないこと
+
+- **1,000,000行を測っていない**（上の表の 408ms は本節では検証していない）。
+- **cold cache で測っていない**（すべて `shared_buffers` に載る温かい条件）。
+- **並列を有効にした場合を測っていない。**⟹ 上の表との差の内訳は分かっていない。
+- **群カウントの各列の個別の寄与を分解できていない**（1パスの集約なので、
+  `EXPLAIN` のプランがそれ以上分解しない）。
+- **CI が使う `pgvector/pgvector:pg17` と同一環境であることを確認していない**（native で測った）。
+- 🔴 **実運用で `recall()` が `subjectId` 無しで呼ばれる割合は分からない。**
+  運用ログが要る。**このリポジトリの中には根拠が無い。**
+  ⚠ **ただし、このリポジトリの中で `recall()` を実際に走らせている経路
+  （`examples/chat` の実演と CI のベンチ）は、スコープの実演（`scope.ts`）を除いて
+  全部テナント全体である**【現物】——**つまり我々自身が CI で毎回測っている数字は、
+  この節の左端の列のものである。**
+
+**出どころ**: [Issue #355](https://github.com/takecchi/mnemora/issues/355) のコメント。
+**⛔ 実装は変えていない**——この節は数字を置くだけである。
+支配項はテナント全件に対する群カウントであり、1本のクエリへの相乗りは
+[ADR 0011](./decisions/0011-no-window-count-in-ann-stage.md) が同一スナップショットのために
+選んだ設計である。**分ければ別スナップショットになる。**
+
 ### Phase 1 の範囲
 
 **Phase 1 では第3階(群カウント)のみを実装する。digest 帯(第2階)は Phase 2 に送る。** 理由は、digest 帯が taxonomy(分類語彙)を要するのに対し、群カウントは `subject` 単位だけでも成立するからである。Phase 1 の `IndexBand.groups` の既定 `axis` は `'subject'` とする。`taxonomy` 軸によるグルーピングは、taxonomy の `registered` / `proposed` 状態(`./memory-model.md` の taxonomy strict/open の節を参照)を扱う必要があり、digest 帯と合わせて Phase 2 に含める。**`time_window` 軸は当時型として持っていたが、生成するコードが一度も無く、[ADR 0144](./decisions/0144-drop-unreachable-classification-3-union-values.md)（2026-09-16）で型からも落とした。**
