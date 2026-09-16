@@ -610,6 +610,30 @@ run はログ上に1本も見当たらない。
 - `publishConfig.access` は6本とも `"public"`、`license` は6本とも `"MIT"`、
   `private` は6本とも立っていない。
 
+> 🔴 **⚠ 上の表は 2026-09-16 のスナップショットであり、既にずれている。**
+> **⛔ 表を書き換えていない**——当時の測定として正しく、**サイズと他5本のファイル数を
+> 測り直していない**ためである（[Issue #425](https://github.com/takecchi/mnemora/issues/425)）。
+>
+> **表が入った commit**: `6a19d85`（2026-09-16、PR #357）。
+> **その後 `0505aea`（2026-09-17、Issue #273 / [ADR 0182](./decisions/0182-provenance-kind-matches-provenance-check.md)）が
+> migration を2本足した。**
+>
+> **【実測】2026-09-17、`pnpm --filter @mnemora/postgres pack --dry-run --json` の目録を数え直した
+> （表と同じ版 `0.1.1`）:**
+>
+> | 項目 | 上の表 | 実測（2026-09-17） |
+> |---|---:|---:|
+> | `@mnemora/postgres` のファイル数 | 56 | **60** |
+> | うち `dist/` | 38 | **40** |
+> | `migrations/*.sql` | 15本 | **17本** |
+>
+> ⟹ ⚠ **ずれているのは migration の本数だけではない。`dist/` も動いている。**
+> ⟹ **この表を「当日の期待値」として使わないこと。**`pack:check` は当日に走らせる門であり、
+> **表は過去に1度走らせた記録である。**
+>
+> **⚠ 他5本（`core` / `testkit` / `openai` / `anthropic` / `local-embedding`）は
+> 測り直していない。**圧縮サイズも測り直していない。⟹ **どこまでずれているかは分かっていない。**
+
 **`workspace:^` の置換も、この器で実測した。**tarball 内の `package.json` に
 `workspace:` は**6本とも0件**で、`@mnemora/core` への依存は5本とも `^0.1.1` へ解決されていた。
 ⟹ §1.4 の記述を、ADR 0060 の記録とは**独立に**この器で再現したことになる。
