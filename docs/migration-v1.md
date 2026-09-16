@@ -40,7 +40,7 @@
 | していること | 影響 |
 |---|---|
 | `@mnemora/postgres` の `PostgresMemoryStore`/`PostgresVectorStore`/… をそのまま使っている | **影響なし** |
-| `@mnemora/testkit` の in-memory 実装をテストでそのまま使っている | **影響なし** |
+| `@mnemora/testkit` の in-memory 実装をテストでそのまま使っている | **影響なし**（ただし `InMemoryTenantSettingsStore.setDefaultHalfLifeRecalls` を直接呼んでいる場合だけ 🔴 8 を見ること） |
 | `createRuntime()` が返す `Runtime` をそのまま使っている（自分で `Runtime` interface を実装していない） | **影響なし** |
 | `MemoryStore`/`VectorStore`/`TenantSettingsStore` を自分で実装している（自作 adapter） | 🔴 1・2・3・6 を見ること |
 | `Runtime` interface を自分で実装している（`createRuntime()` を使わず、独自に組み立てている） | 🔴 5 を見ること |
@@ -290,6 +290,43 @@ describeTenantSettingsStoreConformance({
 **何をすればよいか**: 自分で構築している場合は `associationCount: number` を追加する。
 入力側（`estimateRecallFootprint` への引数）は省略可能フィールドとして追加されており、
 **省略すれば `0` として扱われる**（非破壊）。
+
+---
+
+### 8. ⭐ `InMemoryTenantSettingsStore.setDefaultHalfLifeRecalls`（`@mnemora/testkit`）のシグネチャが変わった
+
+**【現物】2026-09-17、ADR 0197（Issue #338 の第1弾）で変わった**:
+
+```diff
+-setDefaultHalfLifeRecalls(tenantId: string, recalls: number): void
++setDefaultHalfLifeRecalls(ctx: Ctx, recalls: number): Promise<void>
+```
+
+**なぜ変わったか**: `TenantSettingsStore` に本番の口 `setDefaultHalfLifeRecalls?(ctx, recalls)`
+が足された（ADR 0197）。`InMemoryTenantSettingsStore` は `TenantSettingsStore` を
+`implements` しているため、**同名で引数の形が違う旧テスト専用フックと共存できない。**
+⟹ 旧フックを削除し、本番の口だけを残した。**回避できる形は無い**——名前の衝突そのものが
+原因であり、旧フックを別名へ寄せる案も「旧名の削除」である点は変わらない。
+
+**誰が影響を受けるか**: **`InMemoryTenantSettingsStore` を `TenantSettingsStore` として
+構築して渡しているだけなら影響しない。** `setDefaultHalfLifeRecalls` を
+**旧シグネチャで直接呼んでいる場合だけ**、コンパイルが壊れる。
+
+**何をすればよいか**:
+
+```diff
+-store.setDefaultHalfLifeRecalls(tenantId, 3000);
++await store.setDefaultHalfLifeRecalls({ tenantId }, 3000);
+```
+
+第1引数が `Ctx` になり、**戻り値が `Promise` になったので `await` が要る。**
+値域は `(0, ∞)`（有限の正の実数。`isHalfLifeRecallsInRange`）で、外れた値は
+`HALF_LIFE_RECALLS_INVALID_MESSAGE` を含む `Error` で**拒まれる**——旧フックは
+検証していなかったので、**0・負・`NaN`・`Infinity` を渡していたテストは落ちるようになる。**
+
+⚠ **この変更は `@mnemora/core` と `@mnemora/postgres` には及ばない**（どちらも非破壊。
+interface 側は `?` 付きの追加、`PostgresTenantSettingsStore` はメソッドの追加のみ）。
+パッケージごとの内訳は ADR 0197「破壊的変更か否か」の表にある。
 
 ---
 

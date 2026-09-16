@@ -240,7 +240,7 @@ export declare class InMemoryTenantSettingsStore implements TenantSettingsStore 
     getDecayClock(ctx: Ctx): Promise<DecayClock>;
     setDecayClock(ctx: Ctx, clock: DecayClock): Promise<void>;
     getDefaultHalfLifeRecalls(ctx: Ctx): Promise<number>;
-    setDefaultHalfLifeRecalls(tenantId: string, recalls: number): void;
+    setDefaultHalfLifeRecalls(ctx: Ctx, recalls: number): Promise<void>;
     getActivitySeq(ctx: Ctx): Promise<number>;
 }
 

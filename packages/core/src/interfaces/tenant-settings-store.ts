@@ -150,6 +150,25 @@ export function isHalfLifeRecallsInRange(value: number): boolean {
 }
 
 /**
+ * `setDefaultHalfLifeRecalls` に不正な値（`isHalfLifeRecallsInRange` の値域外）を渡したときに
+ * 投げる `Error` のメッセージに必ず含める文字列（`DECAY_CLOCK_INVALID_MESSAGE` と同じ形）。
+ */
+export const HALF_LIFE_RECALLS_INVALID_MESSAGE =
+  "half life recalls must be a finite number greater than 0";
+
+/**
+ * `value` が `isHalfLifeRecallsInRange` の値域（`(0, ∞)`）の内側であることを検査する。
+ * 不正なら `HALF_LIFE_RECALLS_INVALID_MESSAGE` を含む `Error` を投げる。`assertValidDecayClock`
+ * と同じ形——`packages/postgres`・`packages/testkit` の両方の `setDefaultHalfLifeRecalls`
+ * 実装がこの関数を呼ぶことで、検査の種類を1箇所に固定する。
+ */
+export function assertValidHalfLifeRecalls(value: number): void {
+  if (!isHalfLifeRecallsInRange(value)) {
+    throw new Error(HALF_LIFE_RECALLS_INVALID_MESSAGE);
+  }
+}
+
+/**
  * `setDecayClock` に不正な値（`DecayClock` の3値のいずれでもない文字列）を渡したときに
  * 両実装が投げる `Error` のメッセージに必ず含める文字列（`EVENT_RETENTION_DAYS_INVALID_MESSAGE`
  * と同じ形）。
@@ -218,6 +237,17 @@ export function assertValidDecayClock(value: string): asserts value is DecayCloc
  * `DECAY_CLOCK_UNSUPPORTED_MESSAGE` を含む `Error` で**明示的に失敗する**
  * （黙って無視しない——`examples/chat --decay-clock` が黙って効かない形を作らない）。
  *
+ * [ADR 0197](../../../docs/decisions/0197-set-default-half-life-recalls.md) で
+ * `setDefaultHalfLifeRecalls`（`getDefaultHalfLifeRecalls` の書き込み版）を足した。
+ * ADR 0165「引き受けた負債」7 と [Issue #338](https://github.com/takecchi/mnemora/issues/338)
+ * がどちらも対処として名指ししていた「`'activity'` を選ぶ採用者は `half_life_recalls` を
+ * 自分の recall 頻度に合わせて上げる必要がある」を、本番コードから呼べる口にする。
+ * **`setDefaultHalfLifeHours`（壁時計側の対称なメソッド）は足していない**——理由は
+ * `setDefaultHalfLifeRecalls` の doc コメント、および ADR 0197 を参照。**5メソッド目の
+ * 追加も、他の4つと同じ理由で `?` 付き（省略可能）にする**——`@mnemora/core` は npm
+ * 公開済みであり、必須化すると外部の adapter が軒並みコンパイルできなくなる（ADR 0165
+ * 決めたこと13 と同じ理由）。
+ *
  * ⚠ **`bumpActivitySeq`（activity_seq を+1する書き込み）はここに無い。**
  * カウンタの前進は `MemoryStore.createRecall` が `recalls` への INSERT と**同一トランザクション**
  * で行う契約（`MemoryStore.createRecall` の doc・`NewRecallRecord.advanceActivityClock`
@@ -260,6 +290,32 @@ export interface TenantSettingsStore {
    * 再計算されない。
    */
   getDefaultHalfLifeRecalls?(ctx: Ctx): Promise<number>;
+
+  /**
+   * `tenant_settings.default_half_life_recalls` を設定する（UPSERT。行が無ければ作る）。
+   * `recalls` が `isHalfLifeRecallsInRange` の値域 `(0, ∞)` の外であれば
+   * `HALF_LIFE_RECALLS_INVALID_MESSAGE` を含む `Error` で失敗する
+   * （`assertValidHalfLifeRecalls` 参照）。
+   *
+   * [ADR 0197](../../../docs/decisions/0197-set-default-half-life-recalls.md): ADR 0165
+   * 「引き受けた負債」7 と Issue #338 が対処として名指ししていた「`'activity'` を選ぶ
+   * 採用者は `half_life_recalls` を自分の recall 頻度に合わせて上げる必要がある」を、
+   * 本番コードから呼べる口にする。
+   *
+   * ⭐ **`getDefaultHalfLifeRecalls` と同じ注記が、書き込み側にも当てはまる**——この値は
+   * **新規作成時の初期値としてのみ**使う（ADR 0165 決めたこと3、
+   * `packages/postgres/migrations/0015_decay_activity_clock.sql`）。この呼び出しは
+   * **既存 Memory の `halfLifeRecalls`/`decayFloorSeq` を1件も書き換えない**——効くのは
+   * 呼び出し後に新規作成される Memory だけである（`docs/memory-model.md` §7 が
+   * `half_life_hours` について書いている「テナント設定を後から変えても既存行を
+   * 書き換えない」設計を、活動時計側でもそのまま踏襲する）。
+   *
+   * ⚠ **`setDefaultHalfLifeHours`（壁時計側の対称なメソッド）は意図的に足していない。**
+   * ADR 0197「採らなかった案」1 を参照——文書が対処として名指ししているのは
+   * `half_life_recalls` の側だけであり、壁時計側の既定値の与え方（Issue #305）は
+   * オーナー判断としてまだ未決である。
+   */
+  setDefaultHalfLifeRecalls?(ctx: Ctx, recalls: number): Promise<void>;
 
   /**
    * `tenant_activity.activity_seq` の現在値。行が無ければ `0` を返す（ADR 0165 決めたこと2・5

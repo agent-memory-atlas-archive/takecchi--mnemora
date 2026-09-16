@@ -49,8 +49,16 @@ export interface TenantSettingsStoreConformanceOptions {
 
   /**
    * `supportsDecayClock: true` のときに使う。テナントの `default_half_life_recalls` を
-   * 明示的に設定するためのフック（`setDefaultHalfLifeHours` の活動時計版）。省略時は
-   * このケースをスキップする。
+   * 明示的に設定するためのフック。省略時はこのケースをスキップする。
+   *
+   * ⭐ [ADR 0197](../../../docs/decisions/0197-set-default-half-life-recalls.md) 以降、
+   * `setDefaultHalfLifeHours`（本番の書き込み口を持たないため、呼び出し側は生 SQL の
+   * UPSERT で行を作る）とは違い、**このフックは `TenantSettingsStore.setDefaultHalfLifeRecalls`
+   * （interface 上は `?` 付きだが production の口そのもの）をそのまま呼ぶことを想定する**
+   * ——この repo の2つの wiring（`packages/postgres`/`packages/testkit` それぞれの
+   * conformance テストファイル）はどちらもそうしている。⟹ 下のテスト群は
+   * 「読み書きが正しく往復するか」だけでなく、**production の UPSERT/検証ロジックそのもの**
+   * を検査する。
    */
   setDefaultHalfLifeRecalls?: (ctx: Ctx, recalls: number) => Promise<void> | void;
 
@@ -271,6 +279,35 @@ export function describeTenantSettingsStoreConformance(
           const ctx: Ctx = { tenantId: `tenant-half-life-recalls-in-range-${Math.random()}` };
           await setDefaultHalfLifeRecalls(ctx, 48);
           expect(await store.getDefaultHalfLifeRecalls!(ctx)).toBe(48);
+        });
+
+        // ⭐ 行が無いテナントに書き込むと行ができることの芯（`setDefaultHalfLifeHours` の
+        // 「half-life だけを設定した…テナントは unlimited」の歯と同じ発想）。行が
+        // 無ければ `getEventRetention` は `{ kind: "unset" }` を返す——`{ kind:
+        // "unlimited" }`（行は在るが `event_retention_days` が NULL）に変わったことが、
+        // UPSERT で行が作られたことの間接証拠になる。
+        it("⭐ 行が無いテナントに setDefaultHalfLifeRecalls すると行ができる（event retention が unset → unlimited になる）", async () => {
+          const store = await createStore();
+          const ctx: Ctx = { tenantId: `tenant-half-life-recalls-creates-row-${Math.random()}` };
+          expect(await store.getEventRetention(ctx)).toEqual({ kind: "unset" });
+          await setDefaultHalfLifeRecalls(ctx, 100);
+          expect(await store.getEventRetention(ctx)).toEqual({ kind: "unlimited" });
+        });
+
+        // ⭐ UPSERT が `default_half_life_recalls` 以外の列を巻き込まないことの芯
+        // （`setDecayClock`/`setEventRetention` と同じ「他の列は指定しない」規律が
+        // 実際に守られているかを検査する。変異試験1: `ON CONFLICT DO UPDATE` の `SET` を
+        // 落とすと、この歯より前に「設定済みのテナントにはその値を返す」が先に赤くなるが、
+        // 本歯は「上書きで他の列を壊していないか」を別の軸で見る）。
+        it("⭐ setDefaultHalfLifeRecalls は decay_clock を壊さない", async () => {
+          const store = await createStore();
+          const ctx: Ctx = {
+            tenantId: `tenant-half-life-recalls-keeps-decay-clock-${Math.random()}`,
+          };
+          await store.setDecayClock!(ctx, "activity");
+          await setDefaultHalfLifeRecalls(ctx, 200);
+          expect(await store.getDecayClock!(ctx)).toBe("activity");
+          expect(await store.getDefaultHalfLifeRecalls!(ctx)).toBe(200);
         });
       }
 

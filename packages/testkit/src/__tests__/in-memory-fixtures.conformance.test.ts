@@ -291,11 +291,15 @@ describeTenantSettingsStoreConformance({
   },
   // ADR 0165 決めたこと13: `InMemoryTenantSettingsStore` は4メソッドとも実装している。
   supportsDecayClock: true,
+  // ADR 0197: `InMemoryTenantSettingsStore.setDefaultHalfLifeRecalls` は
+  // `TenantSettingsStore` interface の本番の書き込み口そのもの（`ctx`/`Promise` の形）に
+  // なったため、`setDefaultHalfLifeHours`（本番の口が無いため生の tenantId フックを呼ぶ）
+  // とは違い、ここは store のメソッドをそのまま呼ぶだけでよい。
   setDefaultHalfLifeRecalls: (ctx: Ctx, recalls: number) => {
     if (!latestTenantSettingsStore) {
       throw new Error("setDefaultHalfLifeRecalls より先に createStore() を呼ぶ必要がある");
     }
-    latestTenantSettingsStore.setDefaultHalfLifeRecalls(ctx.tenantId, recalls);
+    return latestTenantSettingsStore.setDefaultHalfLifeRecalls(ctx, recalls);
   },
   advanceActivitySeq: async (ctx: Ctx) => {
     if (!latestMemoryStoreForTenantSettingsFixtures) {

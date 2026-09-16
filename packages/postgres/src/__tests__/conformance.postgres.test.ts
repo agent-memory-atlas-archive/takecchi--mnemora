@@ -229,13 +229,14 @@ describeTenantSettingsStoreConformance({
   },
   // ADR 0165 決めたこと13（Issue #305）: PostgresTenantSettingsStore は4メソッドとも実装している。
   supportsDecayClock: true,
+  // ADR 0197: `PostgresTenantSettingsStore.setDefaultHalfLifeRecalls` は本番の書き込み口
+  // そのものになったため、生 SQL の UPSERT で行を作る代わりにそれを直接呼ぶ——`setDecayClock`
+  // に対して分離した hook を持たない（`store.setDecayClock!` を直接呼ぶ）のと同じ理由。
+  // `PostgresTenantSettingsStore` はステートレス（`db` クライアントを包むだけ）なので、
+  // ここで新しいインスタンスを作っても `createStore()` が返したものと同じ DB 行を指す。
   setDefaultHalfLifeRecalls: async (ctx: Ctx, recalls: number) => {
     const { db } = await getTestClient();
-    await db.execute(sql`
-      INSERT INTO tenant_settings (tenant_id, default_half_life_recalls, taxonomy_mode, created_at, updated_at)
-      VALUES (${ctx.tenantId}, ${recalls}, 'open', now(), now())
-      ON CONFLICT (tenant_id) DO UPDATE SET default_half_life_recalls = EXCLUDED.default_half_life_recalls
-    `);
+    await new PostgresTenantSettingsStore(db).setDefaultHalfLifeRecalls(ctx, recalls);
   },
   // `getActivitySeq` は読み出し専用（ADR 0165 決めたこと2・5・13）——進める唯一の口は
   // `PostgresMemoryStore.createRecall({ advanceActivityClock: true })` であり、同じ DB

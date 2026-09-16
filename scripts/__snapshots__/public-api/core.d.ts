@@ -644,6 +644,8 @@ export type DecayClock = "wall" | "activity" | "either";
 export declare const DEFAULT_DECAY_CLOCK: DecayClock;
 export declare const DEFAULT_HALF_LIFE_RECALLS = 720;
 export declare function isHalfLifeRecallsInRange(value: number): boolean;
+export declare const HALF_LIFE_RECALLS_INVALID_MESSAGE = "half life recalls must be a finite number greater than 0";
+export declare function assertValidHalfLifeRecalls(value: number): void;
 export declare const DECAY_CLOCK_INVALID_MESSAGE = "decay clock must be 'wall', 'activity', or 'either'";
 export declare function assertValidDecayClock(value: string): asserts value is DecayClock;
 export interface TenantSettingsStore {
@@ -653,6 +655,7 @@ export interface TenantSettingsStore {
     getDecayClock?(ctx: Ctx): Promise<DecayClock>;
     setDecayClock?(ctx: Ctx, clock: DecayClock): Promise<void>;
     getDefaultHalfLifeRecalls?(ctx: Ctx): Promise<number>;
+    setDefaultHalfLifeRecalls?(ctx: Ctx, recalls: number): Promise<void>;
     getActivitySeq?(ctx: Ctx): Promise<number>;
 }
 export declare const DECAY_CLOCK_UNSUPPORTED_MESSAGE = "this TenantSettingsStore does not support setDecayClock";

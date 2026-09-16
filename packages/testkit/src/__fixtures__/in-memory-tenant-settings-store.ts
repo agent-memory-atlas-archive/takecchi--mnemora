@@ -1,11 +1,11 @@
 import {
   assertValidDecayClock,
   assertValidEventRetentionDays,
+  assertValidHalfLifeRecalls,
   DEFAULT_DECAY_CLOCK,
   DEFAULT_HALF_LIFE_HOURS,
   DEFAULT_HALF_LIFE_RECALLS,
   isHalfLifeHoursInRange,
-  isHalfLifeRecallsInRange,
 } from "@mnemora/core";
 import type {
   Ctx,
@@ -137,16 +137,29 @@ export class InMemoryTenantSettingsStore implements TenantSettingsStore {
   }
 
   /**
-   * テスト用フック（`setDefaultHalfLifeHours` と対になる、`default_half_life_recalls` 版）。
-   * 値域は `isHalfLifeRecallsInRange`（ADR 0165、`isHalfLifeHoursInRange` と同じ値域）。
+   * [ADR 0197](../../../../docs/decisions/0197-set-default-half-life-recalls.md):
+   * `TenantSettingsStore` interface の本番の書き込み口。`setDecayClock`
+   * （このファイル上）と同じ規律——不正な値は `assertValidHalfLifeRecalls`（core 共有、
+   * `PostgresTenantSettingsStore.setDefaultHalfLifeRecalls` と同じ検証関数）で拒む。
+   *
+   * ⚠ **これ以前はここに `setDefaultHalfLifeRecalls(tenantId: string, recalls: number): void`
+   * というテスト専用フックが在った**（`setDefaultHalfLifeHours` と対になる形。値域検査は
+   * 同じ `isHalfLifeRecallsInRange`）。ADR 0197 が `TenantSettingsStore` interface に
+   * 同名の本番メソッドを足したため名前が衝突し、**「本番の口だけを残す」を選んで削除した**
+   * （ADR 0197「決めたこと」参照。`setDefaultHalfLifeHours` を削除しなかったのは、
+   * `setDefaultHalfLifeHours` には対応する本番メソッドが無く、テスト用フックが唯一の
+   * 設定手段のままだから——非対称ではなく、対称にする理由が無くなっただけである）。
+   * 旧フックを直接呼んでいた外部コードがあれば、この呼び出しは
+   * `store.setDefaultHalfLifeRecalls({ tenantId }, recalls)`（`Promise` を返す）に
+   * 書き換える必要がある——**破壊的変更**（testkit の公開型）。
+   *
+   * ⚠ この列は新規作成時の初期値としてのみ使われる——既存 Memory の
+   * `halfLifeRecalls`/`decayFloorSeq` はこの呼び出しでは変わらない
+   * （`InMemoryMemoryStore` 側は本 ADR の対象外）。
    */
-  setDefaultHalfLifeRecalls(tenantId: string, recalls: number): void {
-    if (!isHalfLifeRecallsInRange(recalls)) {
-      throw new Error(
-        `InMemoryTenantSettingsStore: halfLifeRecalls out of range (0, ∞): ${recalls}`,
-      );
-    }
-    this.ensureRow(tenantId).defaultHalfLifeRecalls = recalls;
+  async setDefaultHalfLifeRecalls(ctx: Ctx, recalls: number): Promise<void> {
+    assertValidHalfLifeRecalls(recalls);
+    this.ensureRow(ctx.tenantId).defaultHalfLifeRecalls = recalls;
   }
 
   /**

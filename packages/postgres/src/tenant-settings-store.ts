@@ -2,6 +2,7 @@ import { sql } from "drizzle-orm";
 import {
   assertValidDecayClock,
   assertValidEventRetentionDays,
+  assertValidHalfLifeRecalls,
   DEFAULT_DECAY_CLOCK,
   DEFAULT_HALF_LIFE_HOURS,
   DEFAULT_HALF_LIFE_RECALLS,
@@ -115,6 +116,28 @@ export class PostgresTenantSettingsStore implements TenantSettingsStore {
     }
     const row = result.rows[0] as unknown as { default_half_life_recalls: number };
     return row.default_half_life_recalls;
+  }
+
+  /**
+   * [ADR 0197](../../../docs/decisions/0197-set-default-half-life-recalls.md):
+   * `tenant_settings.default_half_life_recalls` を設定する（UPSERT。行が無ければ作る）。
+   * `setDecayClock`（上）と**完全に同じ形**——不正な値は `assertValidHalfLifeRecalls`
+   * （core 共有）で拒む。`event_retention_days`/`default_half_life_hours`/`decay_clock` は
+   * 指定しない——行が無い場合は DB 側の DEFAULT に任せる（`setDecayClock`/`setEventRetention`
+   * と同じ形）。
+   *
+   * ⚠ **この列は新規作成時の初期値としてのみ使われる**（migrations/0015 の doc・
+   * `getDefaultHalfLifeRecalls` の doc 参照）。この呼び出しは既存 Memory の
+   * `half_life_recalls`/`decay_floor_seq` を1件も書き換えない。
+   */
+  async setDefaultHalfLifeRecalls(ctx: Ctx, recalls: number): Promise<void> {
+    assertValidHalfLifeRecalls(recalls);
+    await this.db.execute(sql`
+      INSERT INTO tenant_settings (tenant_id, default_half_life_recalls, updated_at)
+      VALUES (${ctx.tenantId}, ${recalls}, now())
+      ON CONFLICT (tenant_id) DO UPDATE
+        SET default_half_life_recalls = EXCLUDED.default_half_life_recalls, updated_at = now()
+    `);
   }
 
   /**
