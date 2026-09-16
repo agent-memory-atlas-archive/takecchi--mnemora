@@ -111,8 +111,14 @@ API キーは要らない——**実 API が返した埋め込みの記録を再
 | ジョブ（[.github/workflows/ci.yml](./.github/workflows/ci.yml)、`jobs.<キー>`） | 何を測るか | 埋め込み |
 |---|---|---|
 | 想起の質（[ADR 0088](./docs/decisions/0088-retrieval-quality-measured-in-ci.md)）`retrieval-quality` | 意味的関連性 probe **7件**の `hit@1` / `hit@10` / MRR | 記録の再生 |
-| 識別子・固有名詞 probe（[ADR 0094](./docs/decisions/0094-identifier-probes-local-embedding.md)）`identifier-probes` | 識別子・固有名詞 probe **12件** | `@mnemora/local-embedding`（プロセス内推論） |
+| 識別子・固有名詞 probe（[ADR 0094](./docs/decisions/0094-identifier-probes-local-embedding.md)）`identifier-probes` | 識別子・固有名詞 probe **30件**（`examples/chat/src/identifier-probe-set.ts` の `IDENTIFIER_PROBES`） | `@mnemora/local-embedding`（プロセス内推論） |
 | 統合の費用（[ADR 0101](./docs/decisions/0101-how-to-measure-whether-consolidate-moved-the-north-star.md)）`consolidation-cost` | `consolidate()` が「載る量」に効いたか | 同上 |
+
+**⚠ この表は、`ci.yml` の測定系ジョブの全部ではない。**上の3つのほかに
+`association-probes`（連想枠が想起の質を動かすか）・`archive-sweep-cost`（掃引が「載る量」/ hit@k に
+効くか）・`time-term`（時間項が順位を動かすか）・`validity`（`validAt` ゲートが候補の有無を動かすか）が
+**同じく毎 PR 走っている。**⟹ **ここに挙げていないジョブが無いとは読まないこと**——
+一覧は `.github/workflows/ci.yml` の `jobs` を直接見ること。
 
 **⚠ 行番号ではなくジョブ名（`jobs.<キー>`）で引く。**ジョブが増減すると行番号は動くが、
 ジョブ名は動かない——`.github/workflows/ci.yml` の該当ジョブを `grep -n "^  <ジョブ名>:"`
