@@ -93,10 +93,17 @@ const ImportedProvenanceSchema = z.object({
   batchId: z.string().min(1),
 }) satisfies z.ZodType<ImportedProvenance>;
 
+/**
+ * **2026-09-17 追記（Issue #272、[ADR 0181](../../../docs/decisions/0181-schema-type-equals-parity.md)）**:
+ * `satisfies z.ZodType<Provenance>` を足した。5本の枝それぞれには
+ * `satisfies z.ZodType<XxxProvenance>` が付いているのに、まとめのこの1行にだけ
+ * 付いていなかった（`OmissionSchema`（recall.ts）・`ObserveInputSchema`
+ * （observation.ts）と同じ形の欠落）。**足しても `tsc` は緑のまま。**
+ */
 export const ProvenanceSchema = z.discriminatedUnion("kind", [
   StatedProvenanceSchema,
   InferredProvenanceSchema,
   ConsolidatedProvenanceSchema,
   ReflectedProvenanceSchema,
   ImportedProvenanceSchema,
-]);
+]) satisfies z.ZodType<Provenance>;

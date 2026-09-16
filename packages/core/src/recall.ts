@@ -512,6 +512,17 @@ const UnitAssemblyDroppedOmissionSchema = z.object({
   countKind: CountKindSchema,
 }) satisfies z.ZodType<UnitAssemblyDroppedOmission>;
 
+/**
+ * **2026-09-17 追記（Issue #272、[ADR 0181](../../../docs/decisions/0181-schema-type-equals-parity.md)）**:
+ * `satisfies z.ZodType<Omission>` を足した。この discriminated union は、11本の枝
+ * それぞれには `satisfies z.ZodType<XxxOmission>` が付いているのに、まとめのこの1行にだけ
+ * 付いていなかった（55箇所の `satisfies z.ZodType<...>` のうち、唯一この形の宣言が
+ * 欠けていた箇所）。**足しても `tsc` は緑のまま**——各枝が既に個別に検査されているため、
+ * 実質的な検査の追加ではないが、「まとめの discriminated union 自体は誰も見ていない」
+ * という読み手の誤解を防ぐ。`packages/core/src/__tests__/schema-type-equals-parity.test.ts`
+ * が、この1行が無くても `Equals<z.infer<typeof OmissionSchema>, Omission>` として
+ * 同じ検査をテスト側からも固定している（この行が万一巻き戻っても、あちらの歯が拾う）。
+ */
 export const OmissionSchema = z.discriminatedUnion("kind", [
   StageSkippedOmissionSchema,
   FilteredOmissionSchema,
@@ -524,7 +535,7 @@ export const OmissionSchema = z.discriminatedUnion("kind", [
   LexicalTruncatedOmissionSchema,
   ScoreNotComparableOmissionSchema,
   UnitAssemblyDroppedOmissionSchema,
-]);
+]) satisfies z.ZodType<Omission>;
 
 // ---------------------------------------------------------------------------
 // 目次帯 / 被覆不変条件（docs/recall.md §5）

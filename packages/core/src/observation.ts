@@ -178,12 +178,19 @@ const ObserveMemoryUsageInputSchema = z.object({
   usedMemoryIds: z.array(z.string().min(1)).min(1),
 }) satisfies z.ZodType<ObserveMemoryUsageInput>;
 
+/**
+ * **2026-09-17 追記（Issue #272、[ADR 0181](../../../docs/decisions/0181-schema-type-equals-parity.md)）**:
+ * `satisfies z.ZodType<ObserveInput>` を足した。4本の枝それぞれには
+ * `satisfies z.ZodType<ObserveXxxInput>` が付いているのに、まとめのこの1行にだけ
+ * 付いていなかった（`OmissionSchema`（recall.ts）・`ProvenanceSchema`
+ * （provenance.ts）と同じ形の欠落）。**足しても `tsc` は緑のまま。**
+ */
 export const ObserveInputSchema = z.discriminatedUnion("kind", [
   ObserveUtteranceInputSchema,
   ObserveEventInputSchema,
   ObserveDocumentInputSchema,
   ObserveMemoryUsageInputSchema,
-]);
+]) satisfies z.ZodType<ObserveInput>;
 
 /**
  * `observe()` の入力ユニオンの判別子を、`observations.kind` 列の値へ変換する。
