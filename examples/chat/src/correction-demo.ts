@@ -198,6 +198,43 @@ export interface CorrectionDemoCheck {
   afterResolveCorrectionPresent: boolean;
 }
 
+/**
+ * `checkCorrectionDemo()` とは別に持つ、`omitted`（`docs/recall.md` §2「無い」の分類）
+ * 側からの検査（Issue #374）。
+ *
+ * `CorrectionDemoCheck.afterResolveOriginalAbsent` は「`recall().memories` に居ない」
+ * ことしか見ない——それだけでは、消えた理由が**machine の都合で棚上げされた
+ * （superseded）**のか、**そもそも最初から無かった**のかを区別できない。北極星
+ * 「目指す姿」項目6「知らないことを、知らないと言える」——「見つからなかった」と
+ * 「探していない」を同じ顔で返さない——の適用として、`omitted` 側に実際に
+ * `{ kind: "filtered", condition: "superseded" }` が記録されていることまで見て
+ * 初めて、この2つが区別できる。
+ */
+export interface CorrectionOmissionCheck {
+  /**
+   * resolveContested 後の recall で、負けた側（original）の不在が、
+   * `omitted` に `condition: "superseded"` として実際に記録されているか。
+   */
+  afterResolveOriginalOmittedAsSuperseded: boolean;
+}
+
+/**
+ * `result.afterResolve.omitted` を見て、`CorrectionOmissionCheck` を組み立てる
+ * （印字・歯の両方が使う。`checkCorrectionDemo` と同じ規律）。
+ *
+ * ⚠ **`count` は「original 1件」を名指ししない**——`aggregateScope` の
+ * `filteredSuperseded` はスコープ（このデモが使うテナント）内の superseded 件数を
+ * 集約するので、このデモの会話（original/correction の2件だけ）では実質的に
+ * 1件を指すが、型としては件数の下限（`count > 0`）だけを見る。
+ */
+export function checkCorrectionOmission(result: CorrectionDemoResult): CorrectionOmissionCheck {
+  return {
+    afterResolveOriginalOmittedAsSuperseded: result.afterResolve.omitted.some(
+      (o) => o.kind === "filtered" && o.condition === "superseded" && o.count > 0,
+    ),
+  };
+}
+
 /** `CorrectionDemoResult` から、見せたい性質を機械的に判定する（印字・歯の両方が使う）。 */
 export function checkCorrectionDemo(result: CorrectionDemoResult): CorrectionDemoCheck {
   const afterMarkOriginal = findByMemoryId(result.afterMark.memories, result.originalId);
@@ -248,6 +285,7 @@ function formatMemoryList(memories: RecallResult["memories"]): string {
 /** 画面向けの印字。訂正の前後で `recall()` の答えがどう変わるかを並べて見せる。 */
 export function formatCorrectionDemo(result: CorrectionDemoResult): string {
   const check = checkCorrectionDemo(result);
+  const omissionCheck = checkCorrectionOmission(result);
   const lines: string[] = [];
 
   lines.push(`元の発話: "${result.scenario.original.text}" (memoryId=${result.originalId})`);
@@ -278,11 +316,16 @@ export function formatCorrectionDemo(result: CorrectionDemoResult): string {
     `⟹ 古いほうが消えた: ${check.afterResolveOriginalAbsent ? "はい" : "いいえ"} / ` +
       `新しいほうは残った: ${check.afterResolveCorrectionPresent ? "はい" : "いいえ"}`,
   );
+  lines.push(
+    `⟹ omitted に "superseded" として記録された(=最初から無かったのではなく消えた): ` +
+      `${omissionCheck.afterResolveOriginalOmittedAsSuperseded ? "はい" : "いいえ"}`,
+  );
   lines.push("");
   lines.push(
-    "⟹ 北極星「間違いを正すと、古いほうが先に出てこなくなる」を、" +
+    "⟹ 北極星「間違いを正すと、古いほうが先に出てこなくなる」(項目5)を、" +
       "markContested → recall（両方隣接）→ resolveContested → recall（敗者は消える）の" +
-      "一巡で実演した。",
+      "一巡で実演した。「見つからなかった」と「探していない」を同じ顔で返さない(項目6)ことも、" +
+      'omitted の condition="superseded" が確かめている。',
   );
 
   return lines.join("\n");

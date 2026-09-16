@@ -333,6 +333,31 @@ jobs:
       - name: Run examples/chat の observe→recall 往復・量の比較テストを本物の DB に対して実行
         run: pnpm --filter @mnemora/example-chat run test:db
 
+      - name: "correction サブコマンド(cli.ts の dispatch 行)を実際に実行し、recall 段3(矛盾の解決と必須の同伴取得)が本番経路で発火することを CI が判定する(Issue #374 / ADR 0190)"
+        # 🔴 Issue #374: `grep -c "correction" .github/workflows/ci.yml` が 0 だった
+        # ——`examples/chat/src/cli.ts` の `command === "correction"` という
+        # dispatch 行は、これまで CI から一度も実行されていなかった
+        # (`correction-demo.postgres.test.ts` は `runCorrectionDemo()` を直接
+        # import しており、この dispatch 行を経由しない)。⟹ その行が消えても
+        # CI は緑のままだった。既存のこのジョブに1ステップ足すだけで済ませる
+        # (`DATABASE_URL`・拡張・migrate は上のステップ群がすでに整えている——
+        # 新しいコンテナも install も migrate も増えない)。
+        #
+        # provider は `deterministic`(明示 override 無し、OPENAI_API_KEY 無し)。
+        # `recorded` にしない理由: `examples/chat/cassettes/` に correction 用の
+        # 記録が無く、`recorded` は記録に無い入力を例外にする(ADR 0051)。
+        # このデモが確かめる性質(mandatory companion retrieval・
+        # resolveContested のフィルタ)はスコアの質に依存しない構造的な検査なので
+        # `deterministic` で足りる(`examples/chat/src/cli.ts` の `runCorrection()`
+        # doc コメント参照)。
+        #
+        # `pnpm --filter @mnemora/example-chat run correction` は、印字するだけで
+        # 終わらない——`checkCorrectionDemo()` の7欄 + `checkCorrectionOmission()`
+        # (omitted に condition="superseded" が実際に記録されているか、北極星
+        # 項目6「消えた」と「最初から無かった」の区別)の1欄、計8欄を assert し、
+        # 1つでも false なら非0で終わる。
+        run: pnpm --filter @mnemora/example-chat run correction
+
       - name: 北極星の物差し（会話ログを全部積むのをやめても答えが残るか）を compare で実測しログに残す
         # 🔴 このステップは `OPENAI_API_KEY` を設定していないが、**擬似(deterministic)
         # provider では走らない**——`examples/chat/cassettes/compare.json`

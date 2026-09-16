@@ -5,6 +5,7 @@ import { CORRECTION_SCENARIO } from "../correction-scenario.js";
 import type { CorrectionDemoResult } from "../correction-demo.js";
 import {
   checkCorrectionDemo,
+  checkCorrectionOmission,
   formatCorrectionDemo,
   runCorrectionDemo,
 } from "../correction-demo.js";
@@ -410,5 +411,77 @@ describe("checkCorrectionDemo: mandatory_companion がどちらに付くかを�
 
     expect(check.afterMarkCompanionRetrieval).toBe(false);
     expect(check.afterMarkCompanionOfOther).toBe(false);
+  });
+});
+
+/**
+ * `checkCorrectionOmission`（Issue #374）の歯。DB を要求しない——`RecallResult.omitted`
+ * を直接組み立てた固定値から読む、純粋な判定なので、`packages/postgres` を経由しない。
+ *
+ * **測っているもの**: 北極星 項目6「知らないことを、知らないと言える」——「消えた」
+ * （machine の都合で superseded として棚上げされた）と「最初から無かった」を、
+ * `omitted` の `condition: "superseded"` の有無で区別できるか。
+ */
+describe("checkCorrectionOmission: omitted 側から「消えた」と「最初から無かった」を区別する(Issue #374)", () => {
+  function buildAfterResolveOnly(
+    omitted: Array<{ kind: string; condition?: string; count?: number; countKind?: string }>,
+  ): CorrectionDemoResult {
+    const emptyRecall = {
+      recallId: "r",
+      memories: [],
+      omitted: [],
+      index: { groups: [], totalInScope: 0, countKind: "exact" },
+      usage: {
+        chars: 0,
+        estimatedTokens: 0,
+        counter: "heuristic",
+        byTier: { full: 0, digest: 0, index: 0 },
+        indexChars: 0,
+      },
+      explain: { stages: [] },
+    };
+    return {
+      scenario: CORRECTION_SCENARIO,
+      originalId: "fixed-original-id",
+      correctionId: "fixed-correction-id",
+      beforeMark: emptyRecall,
+      markOutcomeKind: "contested",
+      afterMark: emptyRecall,
+      resolveOutcomeKind: "resolved",
+      afterResolve: {
+        ...emptyRecall,
+        memories: [
+          { memoryId: "fixed-correction-id", digest: "赤", retrievedVia: "ann", companionOf: null },
+        ],
+        omitted,
+      },
+    } as unknown as CorrectionDemoResult;
+  }
+
+  it('omitted に condition="superseded"(count>0)が在れば true — 消えた理由が実際に記録されている', () => {
+    const result = buildAfterResolveOnly([
+      { kind: "filtered", condition: "superseded", count: 1, countKind: "exact" },
+    ]);
+    expect(checkCorrectionOmission(result).afterResolveOriginalOmittedAsSuperseded).toBe(true);
+  });
+
+  it("omitted が空なら false — 「最初から無かった」と区別できない状態(これが直したかった穴そのもの)", () => {
+    const result = buildAfterResolveOnly([]);
+    expect(checkCorrectionOmission(result).afterResolveOriginalOmittedAsSuperseded).toBe(false);
+  });
+
+  it("count=0 の superseded エントリは false 扱い(件数ゼロは「理由が記録されている」とは読まない)", () => {
+    const result = buildAfterResolveOnly([
+      { kind: "filtered", condition: "superseded", count: 0, countKind: "exact" },
+    ]);
+    expect(checkCorrectionOmission(result).afterResolveOriginalOmittedAsSuperseded).toBe(false);
+  });
+
+  it("condition が別の理由(archived 等)だけでは false — superseded を名指ししない限り通さない(ADR 0027 の区別を保つ)", () => {
+    const result = buildAfterResolveOnly([
+      { kind: "filtered", condition: "archived", count: 1, countKind: "exact" },
+      { kind: "filtered", condition: "forgotten", count: 1, countKind: "exact" },
+    ]);
+    expect(checkCorrectionOmission(result).afterResolveOriginalOmittedAsSuperseded).toBe(false);
   });
 });

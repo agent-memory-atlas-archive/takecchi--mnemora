@@ -1,5 +1,9 @@
 import { afterAll, describe, expect, it } from "vitest";
-import { checkCorrectionDemo, runCorrectionDemo } from "../correction-demo.js";
+import {
+  checkCorrectionDemo,
+  checkCorrectionOmission,
+  runCorrectionDemo,
+} from "../correction-demo.js";
 import { CORRECTION_SCENARIO } from "../correction-scenario.js";
 import { createExampleRuntime } from "../runtime-factory.js";
 import {
@@ -58,6 +62,16 @@ describe("examples/chat: correction（markContested → resolveContested、本�
       expect(check.afterResolveOriginalAbsent).toBe(true);
       expect(check.afterResolveCorrectionPresent).toBe(true);
       expect(result.afterResolve.memories.length).toBe(1);
+
+      // 🔴 Issue #374: 「消えた」(machine の都合で superseded として棚上げされた)と
+      // 「最初から無かった」を区別する(北極星 項目6)。`afterResolveOriginalAbsent` は
+      // `memories` 配列に居ないことしか見ないので、ここでは `omitted` 側に
+      // 実際に `condition: "superseded"` が記録されていることまで見る。
+      const omissionCheck = checkCorrectionOmission(result);
+      expect(omissionCheck.afterResolveOriginalOmittedAsSuperseded).toBe(true);
+      expect(result.afterResolve.omitted).toContainEqual(
+        expect.objectContaining({ kind: "filtered", condition: "superseded" }),
+      );
     } finally {
       await handle.close();
     }

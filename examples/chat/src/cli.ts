@@ -65,7 +65,12 @@ import {
 import { createExampleRuntime } from "./runtime-factory.js";
 import { buildConversation } from "./scenario.js";
 import { formatBackfillDemo, runBackfillDemo } from "./backfill.js";
-import { formatCorrectionDemo, runCorrectionDemo } from "./correction-demo.js";
+import {
+  checkCorrectionDemo,
+  checkCorrectionOmission,
+  formatCorrectionDemo,
+  runCorrectionDemo,
+} from "./correction-demo.js";
 import { formatScopeDemo, runScopeDemo } from "./scope.js";
 import { formatRecallExplainDemo, runRecallExplainDemo } from "./recall-explain.js";
 import { createMutableClock } from "./mutable-clock.js";
@@ -333,6 +338,28 @@ async function runBackfill(): Promise<void> {
  * **どの2件が対向し、どちらが勝つかは `correction-scenario.ts` が構造として宣言する。**
  * このコマンドは判定をせず、宣言をそのまま渡すだけ。北極星の主測定(`compare`/`retrieval`)
  * には触れない、独立したデモ実行。
+ *
+ * **⚠ Issue #374: 印字するだけでなく、実際に assert する。** このコマンドの
+ * dispatch（`main()` の `command === "correction"` 分岐）は、足すまで CI から
+ * 一度も呼ばれていなかった——`correction-demo.postgres.test.ts` は
+ * `runCorrectionDemo()` を直接 import しており、この dispatch 行を経由しない
+ * （dispatch 行を消しても、あのテストは落ちない）。CI の `example-chat` ジョブに
+ * `pnpm --filter @mnemora/example-chat run correction` を足すことで、初めて
+ * dispatch 行そのものが CI の歯になる。そのうえで、`checkCorrectionDemo()`
+ * の7欄 + `checkCorrectionOmission()` の1欄を全部 assert し、1つでも false なら
+ * `process.exitCode = 1` にする——`formatCorrectionDemo()` の出力を画面に印字する
+ * だけでは、段3（矛盾の解決と必須の同伴取得）が壊れても CI は緑のままだった。
+ *
+ * **provider 層は `deterministic` を使う（明示の override はしない）。**
+ * `requireDatabaseUrl()` 以外に env を渡さないため、`OPENAI_API_KEY` が無い CI では
+ * `selectProviderMode` が `deterministic` を選ぶ。`recorded` にしない理由:
+ * `examples/chat/cassettes/` には `compare`/`retrieval` の記録しか無く、この
+ * デモの発話は記録に無い入力になる（`RecordedLLMProvider`/`RecordedEmbeddingProvider`
+ * は記録に無い入力を例外にする）。このデモが確かめる性質（mandatory companion
+ * retrieval・resolveContested によるフィルタ）はスコアの質に依存しない構造的な
+ * ものなので、`deterministic`（配線・契約の検査用、ADR 0051/`AGENTS.md` の4層表）
+ * で足りる——北極星の主測定（`compare`/`retrieval`、`recorded` で走る）には
+ * 触れない、という上の doc コメントの独立性とも整合する。
  */
 async function runCorrection(): Promise<void> {
   const handle = await createExampleRuntime(requireDatabaseUrl());
@@ -345,6 +372,23 @@ async function runCorrection(): Promise<void> {
     );
     const result = await runCorrectionDemo(handle.runtime, ctx);
     console.log(formatCorrectionDemo(result));
+
+    const check = checkCorrectionDemo(result);
+    const omissionCheck = checkCorrectionOmission(result);
+    const allChecks: Record<string, boolean> = { ...check, ...omissionCheck };
+    const failed = Object.entries(allChecks).filter(([, ok]) => !ok);
+    if (failed.length > 0) {
+      console.error(
+        `\n🔴 correction デモの検査が ${failed.length}/${Object.keys(allChecks).length} 件` +
+          ` 失敗した: ${failed.map(([name]) => name).join(", ")}`,
+      );
+      process.exitCode = 1;
+      return;
+    }
+    console.log(
+      `\n✔ correction デモの検査が全て通った(${Object.keys(allChecks).length}件。` +
+        "checkCorrectionDemo() の7欄 + checkCorrectionOmission() の1欄、Issue #374)。",
+    );
   } finally {
     await handle.close();
   }
