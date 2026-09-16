@@ -1340,8 +1340,24 @@ export interface RecallAssociationQuery {
    */
   maxCount: number;
   /**
-   * 起点にするアンカー（段3までに残った候補の上位何件を連想の起点にするか）の数。
-   * 既定 {@link DEFAULT_ASSOCIATION_ANCHOR_COUNT}。
+   * 起点にするアンカーの数。既定 {@link DEFAULT_ASSOCIATION_ANCHOR_COUNT}。
+   *
+   * **⚠ `RecallQuery.limit`（既定 {@link DEFAULT_RECALL_LIMIT} = 10）が天井になる。**
+   * アンカーは「段3までに残った候補」全部からではなく、**そのうち `limit` の内側に入った分**
+   * （`recall-runtime.ts` の `withinLimit = passed.slice(0, limit)`）から取る
+   * （`const anchors = withinLimit.slice(0, anchorCount)`）。
+   * ⟹ **`anchorCount` だけを上げても、`limit` を超えた候補は起点にならない。**
+   * 連想の裾野を広げたいなら `limit` と `anchorCount` の**両方**を上げること。
+   * ⚠ ただし `limit` を上げると段1の取り込み幅 `kPrime`
+   * （= `limit` × {@link DEFAULT_OVER_FETCH_FACTOR}）も一緒に広がる——費用は連想枠だけの話では済まない。
+   *
+   * 【実測 2026-09-17、本物の Postgres + pgvector、`main` = `f8a8fa7`。単一話題90件を ingest し、
+   * 段2を通った候補が常に `limit` より多い状態で、段3.5 が `VectorStore.getVectors` へ渡した
+   * memoryId の件数を数えた（`packages/core` が `getVectors` を呼ぶのはこの1箇所だけである）】
+   * `limit:10 / anchorCount:3` → 3、**`limit:10 / anchorCount:40` → 10**、
+   * `limit:40 / anchorCount:40` → 40、**`limit:5 / anchorCount:40` → 5**、
+   * `limit:40 / anchorCount:3` → 3。
+   * すなわち実際のアンカー数は `min(anchorCount, limit, 段2を通った候補数)` である。
    */
   anchorCount?: number;
   /**

@@ -95,7 +95,12 @@ const recalled = await runtime.recall(ctx, {
 
 - `maxCount` — **必須。既定値は無い**（「量の上限を呼び出し側に必ず明示させる」ため）
 - `anchorCount?` — 段3までに残った上位何件を連想の起点（アンカー）にするか。
-  既定 `DEFAULT_ASSOCIATION_ANCHOR_COUNT` = 3
+  既定 `DEFAULT_ASSOCIATION_ANCHOR_COUNT` = 3。
+  **⚠ `limit`（既定 10）が天井になる**——アンカーは段2で `limit` の内側に入った候補から取るので、
+  **`anchorCount` だけを上げても効かない。**裾野を広げたいなら `limit` と両方上げること
+  （【実測 2026-09-17】`limit:10 / anchorCount:40` で実際に起点になったアンカーは **10件**、
+  `limit:40 / anchorCount:40` では 40件。
+  [docs/recall.md](../../docs/recall.md) §9.2「⚠ `anchorCount` の天井」）
 - `minSimilarity?` — アンカーとの**生のコサイン類似度**の下限。
   既定 `DEFAULT_ASSOCIATION_MIN_SIMILARITY` = 0.5（`scoreThreshold` とは尺度が違う別の値）
 

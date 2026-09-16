@@ -374,7 +374,7 @@ scope の候補を ANN が拾いきれている」という前提に立ってい
 
 **`filtered(condition: 'decayed')` の次の一手（2026-09 追記、[ADR 0153](./decisions/0153-recall-decay-floor-gate.md)、Issue #196）**: 忘却ゲートが効いたと分かる。`filtered(condition:'archived')` とは別の一手につながる——`archived` は強化すれば戻る可能性があるが（次の recall で `status` を見直す）、`decayed` は `RecallQuery.includeFullyDecayed: true` を明示的に渡さない限り、強化しても `decayFloorAt` が先へ延びるだけで、次の recall では再びこの条件に当たらなくなる。
 
-**`over_limit(stage: 'association')` の次の一手（2026-09-17 追記、[Issue #375](https://github.com/takecchi/mnemora/issues/375) / [ADR 0188](./decisions/0188-association-over-limit-omission.md)）**: 連想枠（§9）が `RecallAssociationQuery.maxCount` で切り捨てた分だと分かる。`over_limit(stage: 'rescore')` とは別の一手——`limit` を増やしても連想枠の切り捨ては直らない（連想枠は段2の `limit` を一切見ていない）。`maxCount` を増やすと、切り捨てられていた候補が `retrievedVia: 'association'` として本体へ入ってくる。⚠ この札が積まれても `RecallResult.memories` の合計件数は変わらない——連想枠は「元々居なかった候補を追加する」機能であり、切り捨てられた分は最初から `memories` に入っていない。
+**`over_limit(stage: 'association')` の次の一手（2026-09-17 追記、[Issue #375](https://github.com/takecchi/mnemora/issues/375) / [ADR 0188](./decisions/0188-association-over-limit-omission.md)）**: 連想枠（§9）が `RecallAssociationQuery.maxCount` で切り捨てた分だと分かる。`over_limit(stage: 'rescore')` とは別の一手——`limit` を増やしても連想枠の切り捨ては直らない（切り捨ての件数を決めているのは `maxCount` だけである）。⚠ **ただし「連想枠が段2の `limit` を一切見ていない」わけではない**（2026-09-17 訂正、[Issue #377](https://github.com/takecchi/mnemora/issues/377)）——アンカーの取り方には `limit` が効く（§9.2「⚠ `anchorCount` の天井は `RecallQuery.limit` である」）。`limit` を増やすと起点にできるアンカーが増えるので、**連想枠が拾ってくる候補の顔ぶれは変わりうる。**変わらないのは「`maxCount` で切られる事実そのもの」であり、アンカーが増えれば切り捨て件数はむしろ増えうる。`maxCount` を増やすと、切り捨てられていた候補が `retrievedVia: 'association'` として本体へ入ってくる。⚠ この札が積まれても `RecallResult.memories` の合計件数は変わらない——連想枠は「元々居なかった候補を追加する」機能であり、切り捨てられた分は最初から `memories` に入っていない。
 
 ### 件数にも「無いの種類」を適用する
 
@@ -863,8 +863,11 @@ Issue #200 は**2つの読み方**を挙げていた。
 1. `query.association` が無ければ**何もしない**（`omitted` にも積まない）。
 2. `VectorStore.getVectors`（**任意メソッド**）が無ければ
    `stage_skipped { stage: 'association', reason: 'vector_store_lacks_get_vectors' }` を積んで終わる。
-3. 段3までに残った集合の上位 `anchorCount` 件をアンカーにする。0件なら
+3. 段3までに残った集合のうち**段2で `limit` の内側に入った分**（`withinLimit`）の、
+   さらに上位 `anchorCount` 件をアンカーにする。0件なら
    `stage_skipped { stage: 'association', reason: 'no_anchor' }`。
+   ⚠ **`limit` が `anchorCount` の天井になる**——直後の「⚠ `anchorCount` の天井は
+   `RecallQuery.limit` である」を見ること。
 4. アンカーのベクトルを `getVectors` で引き、**そのベクトルで** `VectorStore.search` を
    **段1の ANN 検索と同じ filter で**呼ぶ——scope（tenant/subject/status/period/
    `excludeProvenanceKinds`）**だけでなく、忘却ゲート（[ADR 0153](./decisions/0153-recall-decay-floor-gate.md) /
@@ -885,6 +888,29 @@ Issue #200 は**2つの読み方**を挙げていた。
    通過した時点で候補は既にゲート・除外・類似度の条件を満たしており、単に `maxCount`
    で切っただけである。段2の `passed.slice(limit)`（§7）が `over_limit` を積むのと
    同じ形。
+
+**⚠ `anchorCount` の天井は `RecallQuery.limit` である**（2026-09-17 追記、[Issue #377](https://github.com/takecchi/mnemora/issues/377)）——
+手順3のアンカーは「段3までに残った候補」全部からではなく、**そのうち `limit` の内側に入った分**から取る
+（`recall-runtime.ts` の `const anchors = withinLimit.slice(0, anchorCount)`、`withinLimit` は段2の
+`passed.slice(0, limit)`）。⟹ **`anchorCount` だけを上げても、`limit` を超えた候補は起点にならない。**
+
+【実測 2026-09-17、本物の Postgres + pgvector、`main` = `f8a8fa7`。単一話題90件を ingest し、段2を通った
+候補が常に `limit` より多い状態（`over_limit(stage:'rescore')` が毎回積まれることで確認）で、段3.5 が
+`VectorStore.getVectors` へ渡した memoryId の件数を数えた——`packages/core` が `getVectors` を呼ぶのは
+この1箇所だけである。テストスイートの外の使い捨て測定であり、CI には載せていない】
+
+| `limit` | `anchorCount` | 実際に起点になったアンカー |
+| --- | --- | --- |
+| 10 | 3（既定） | 3 |
+| 10 | 40 | **10** |
+| 40 | 40 | 40 |
+| 5 | 40 | **5** |
+| 40 | 3（既定） | 3 |
+
+すなわち実際のアンカー数は `min(anchorCount, limit, 段2を通った候補数)` である。
+連想の裾野を広げたいなら **`limit` と `anchorCount` の両方**を上げること。
+⚠ ただし `limit` を上げると段1の取り込み幅 `kPrime`（= `limit × overFetchFactor`、§3）も一緒に広がる
+——費用は連想枠だけの話では済まない。
 
 **⚠ 「走らせて0件だった」と「走らせなかった」を同じ顔にしない。**
 走らせて0件のときは `stage_skipped` を積まない——本文書全体を貫く原則3
