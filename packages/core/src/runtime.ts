@@ -1242,10 +1242,18 @@ export interface Runtime {
    * `docs/memory-model.md` §11 行8「`decay_floor_at < now()` を検出する低頻度の掃引…
    * → `status='archived'` + `archived` イベント」を実行する。
    *
-   * `MemoryStore.archiveDecayed`（任意メソッド）へそのまま素通しする——`reembed`
-   * （ADR 0079）と同じ形。この口自身は判定ロジックを持たない。引数の型
-   * {@link ArchiveDecayedOptions} を store 側とそのまま共有しているのも同じ理由
-   * （同じ形の型を2つ置くと片方だけ直したときに黙ってずれる）。
+   * `MemoryStore.archiveDecayed`（任意メソッド）へ素通しする——`reembed`（ADR 0079）と
+   * 同じ形。引数の型 {@link ArchiveDecayedOptions} を store 側とそのまま共有している
+   * のも同じ理由（同じ形の型を2つ置くと片方だけ直したときに黙ってずれる）。
+   *
+   * ⭐ **`opts.clock` を省略した場合に限り、この口が `tenant_settings.decay_clock` を
+   * 読んで補う**（Issue #364 /
+   * [ADR 0186](../../../docs/decisions/0186-sweep-archive-follows-decay-clock.md)）。
+   * `'wall'`（既定）なら `decayFloorAt <= now` のまま、`'activity'`/`'either'` なら
+   * `nowSeq`（`tenant_activity.activity_seq`）も併せて読んで store へ渡す。**`opts.clock`
+   * を明示で渡したときはそちらが勝ち、この口は `tenant_settings`/`tenant_activity` を
+   * 一切読まない。** `decay_clock` を設定していないテナントの挙動は本 ADR の前後で
+   * 1バイトも変わらない。
    *
    * store がこの口を実装していなければ `{ supported: false, archived: [], reachedLimit:
    * false }` を返す——黙って0件を返すのではなく「対応していない」と名指しする
@@ -1309,8 +1317,11 @@ export interface Runtime {
    * 別途呼ぶこと」だった。**この決定は ADR 0153 が覆した。** 理由は、ADR 0153 が
    * `recall()` に既定 ON の忘却ゲート（`decayFloorAt <= now` の Memory を候補から
    * 除外する）を導入したことで、上記の「引き受けた負債」が実害に変わったため——
-   * `sweepArchive` が `archived` にする選定条件はまさに `decayFloorAt <= now` であり、
-   * `restoreArchived` の対象は定義上すべてこの条件を満たす。⟹ `reinforce` を
+   * `sweepArchive` が `archived` にする選定条件は、テナントの `decay_clock`（既定
+   * `'wall'`）に従う——`'wall'` なら `decayFloorAt <= now`、`'activity'`/`'either'`
+   * なら `decayFloorSeq <= nowSeq` を軸に含む（Issue #364 /
+   * [ADR 0186](../../../docs/decisions/0186-sweep-archive-follows-decay-clock.md)）。
+   * `restoreArchived` の対象は定義上、いずれの軸であってもこの条件を満たす。⟹ `reinforce` を
    * 別途呼ばない限り、`status` は `"active"` に戻っても**既定では recall に二度と
    * 現れない**——呼び出し側から見ると「restored と言われたのに何も返ってこない」。
    * これは `docs/north-star.md`「目指す姿」の逐語「必要な場合だけ過去の記憶を
@@ -2469,20 +2480,33 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
   }
 
   /**
-   * `Runtime.sweepArchive` の実装（ADR 0114）。doc コメントは interface 側にある
-   * ——ここは「口が在るかどうかで分岐する」というアルゴリズムそのものだけ。
+   * `Runtime.sweepArchive` の実装（ADR 0114、Issue #364 /
+   * [ADR 0186](../../../docs/decisions/0186-sweep-archive-follows-decay-clock.md)）。
+   * doc コメントは interface 側にある——ここは「口が在るかどうかで分岐する」という
+   * アルゴリズムと、`opts.clock` 省略時の解決の2つだけ。
    *
    * `deps.memoryStore.archiveDecayed` を一度ローカル変数へ受けてから `undefined` を
    * 判定するのは、ADR 0100 の `supersedeWithNewMemories` 呼び出しと同じ作法——
    * `.call(deps.memoryStore, ...)` で `this` を明示的に束ね直す必要があるため
    * （分割代入したメソッドは `this` を失うので、呼び出し時に元のオブジェクトを渡す）。
+   *
+   * ADR 0186: `opts.clock` を省略したら `tenant_settings.decay_clock` に従う
+   * （`resolveActivityClockInputs`/`resolveReinforceNowSeq` と同じ `readDecayClock`/
+   * `readActivitySeq` を使う、同じ規律）。**`opts.clock` を明示で渡した呼び出し元の
+   * 挙動は変えない**（`??` で省略時だけ補う）。解決した `clock` が `'wall'` のときは
+   * `tenant_activity` を一度も読まない——`resolveActivityClockInputs` 等と同じ理由で、
+   * `decay_clock` を設定していないテナント（既定 `'wall'`）の挙動を1バイトも変えない。
    */
   async function sweepArchive(ctx: Ctx, opts: ArchiveDecayedOptions): Promise<SweepArchiveResult> {
     const archiveDecayed = deps.memoryStore.archiveDecayed;
     if (archiveDecayed === undefined) {
       return { supported: false, archived: [], reachedLimit: false };
     }
-    const result = await archiveDecayed.call(deps.memoryStore, ctx, opts);
+    const clock = opts.clock ?? (await readDecayClock(deps.tenantSettingsStore, ctx));
+    const nowSeq =
+      opts.nowSeq ??
+      (clock === "wall" ? undefined : await readActivitySeq(deps.tenantSettingsStore, ctx));
+    const result = await archiveDecayed.call(deps.memoryStore, ctx, { ...opts, clock, nowSeq });
     return { supported: true, archived: result.archived, reachedLimit: result.reachedLimit };
   }
 

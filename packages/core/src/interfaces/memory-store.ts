@@ -1069,6 +1069,14 @@ export interface ArchiveDecayedOptions {
    * ADR 0165 決めたこと1・12・15: どの軸で掃くかを選ぶ。省略時は `'wall'`
    * （本 ADR 以前と1バイトも変わらない挙動）。
    *
+   * ⚠ **この既定は `MemoryStore.archiveDecayed` そのものの既定であり、
+   * `Runtime.sweepArchive` はこれをそのまま踏襲しない**（Issue #364 /
+   * [ADR 0186](../../../../docs/decisions/0186-sweep-archive-follows-decay-clock.md)）。
+   * `Runtime.sweepArchive` は `opts.clock` を省略されたとき、ここでの `'wall'` 固定では
+   * なく `tenant_settings.decay_clock` を読んでから、この口へ明示的な `clock`/`nowSeq`
+   * を渡す。**この口（store 実装）を直接呼ぶ経路にはその解決が乗らない**——`'wall'`
+   * 省略時の既定は、あくまで `MemoryStore` 実装を直接叩く場合のものである。
+   *
    * - `'wall'`（省略時と同じ）: `decay_floor_at <= now`（現行、境界を含む）。
    * - `'activity'`: `decay_floor_seq IS NOT NULL AND decay_floor_seq <= nowSeq`
    *   （`nowSeq` は必須。境界を含む——`now`/`decay_floor_at` と同じ非対称を seq 側にも
