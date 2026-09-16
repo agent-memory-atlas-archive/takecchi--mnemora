@@ -42,7 +42,16 @@ const DEFAULT_LEASE_MS = 60_000;
  *   ジョブだけを返す
  * - `claimBatch` は `kinds` で絞り込める
  * - `claimBatch` は `limit` を超えない
- * - `claimBatch` で claim したジョブは、同じ claim 条件で二重に返らない（同時実行の安全）
+ * - `claimBatch` で claim したジョブは、同じ claim 条件で二重に返らない
+ *   ⚠ **これは検査していない。** この suite の呼び出しはすべて単一プロセス内の逐次
+ *   `await store.claimBatch(...)` であり（`Promise.all` 等による並行呼び出しは1件も無い）、
+ *   検査しているのは「1回の claim の後に同じジョブが再び現れないこと」（下の complete/fail・
+ *   リースの項目）までである。**複数プロセス/複数ワーカーが実際に同時にネットワーク越しで
+ *   `claimBatch` を撃ったときに二重 claim が起きないこと**（adapter 実装が
+ *   `SELECT ... FOR UPDATE SKIP LOCKED` 相当で担うべき保証、
+ *   `packages/core/src/interfaces/outbox-store.ts` の `claimBatch` 契約コメント参照）は、
+ *   この suite を全項目通過しても測っていない。詳細は
+ *   docs/architecture.md「確かめていないこと」節、ADR 0032「確かめていないこと」節を見ること。
  * - `complete` / `fail` の後、そのジョブは再び `claimBatch` に現れない
  * - テナント分離: 他テナントの未処理ジョブが `claimBatch` に現れない
  * - **claim のリース（ADR 0032）**: リース内で claim 済みの行は再 claim されず、
