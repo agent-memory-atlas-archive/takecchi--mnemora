@@ -199,10 +199,22 @@ gh pr list --state open --limit 20
     gh pr merge 365 --squash --delete-branch --match-head-commit 309303ab4ee5d0a07f7a094782cd80b6a7840dbe
   ```
 
-  ⚠ **確かめていないこと**: `--match-head-commit` を実際に渡して、head が変わった状態で
-  `gh pr merge` を実行し、意図通り失敗することそのものは、この Issue #294 の作業では
-  実地に再現していない（`gh pr merge --help` の説明文と、フラグが存在すること自体は
-  確認済み）。
+  ⭐ **【実測】2026-09-17、この repo の実 PR に対して、食い違う sha を渡す側を再現した。**
+  PR [#397](https://github.com/takecchi/mnemora/pull/397)（head = `a68af64`）に対し、
+  head ではない sha（当時の `origin/main` = `67fd5b7`）を `--match-head-commit` に渡して
+  `gh pr merge` を実行したところ:
+
+  ```
+  GraphQL: Head branch was modified. Review and try the merge again. (mergePullRequest)
+  ```
+
+  **`gh` の終了コードは `1`、PR は `OPEN` のまま残った**（`gh pr view 397 --json state` で確認）。
+  その直後に正しい sha（`a68af64580358422c49e751692b22e44abb4c376`）を渡すと exit `0` で
+  マージされた。⟹ **この歯は実際に噛む。**
+  ⭐ **そして §4.1 の「静かに失敗する道具」の族ではない**——失敗は exit 非0 と
+  エラーメッセージの両方で表に出る。
+  ⚠ ただし、**「head が force-push で書き換わった場合」と「新しい commit が積まれた場合」を
+  `gh` が区別するか**は確認していない。再現したのは後者だけである。
 - **報告・PR 本文に緑を書くときは、どの sha で見たかを必ず添える**
   （`AGENTS.md` が commit 数の実測について同じ規律を要求しているのと同じ理由——
   「緑だった」だけでは、どの時点の話か読む側が復元できない）。
