@@ -53,6 +53,27 @@ Error: DATABASE_URL が設定されていません。mnemora は Postgres + pgve
 実 API のキーは要らない（記録済みカセットが `examples/chat/cassettes/` に在る。ADR 0051）が、
 **DB は擬似物で代替できない**（ADR 0015 / `AGENTS.md`）。
 
+⭐ **「用意できない」と決める前に、在るかどうかを見ること。**
+`DATABASE_URL` が未設定であることは、**DB を用意できないことを意味しない。**
+**Postgres のバイナリと pgvector が在れば、自分専用のインスタンスを立てられる**
+（手順は `AGENTS.md`「手元で Postgres を立てる」節。[ADR 0183](./decisions/0183-local-postgres-makes-postgres-mutation-testing-possible.md)）:
+
+```bash
+ls /usr/lib/postgresql/*/bin/initdb                    # サーバのバイナリ
+ls /usr/share/postgresql/*/extension/vector.control    # pgvector
+```
+
+🔴 **この一手を飛ばすと、1分で用意できる DB を用意せずに「判定不能」へ倒れる。**
+**【実測】2026-09-17、`DATABASE_URL` が未設定でありながら上の2つが両方在る器で、
+`AGENTS.md` の手順が `initdb` から `migrate`（0001〜0017 の17本）まで記述どおり通った**
+（[Issue #247](https://github.com/takecchi/mnemora/issues/247) のコメント）。
+⟹ **同じ日に、バイナリが在る器と無い器の両方が観測されている。器ごとに違う。**
+
+**両方（または片方）が無ければ、下のとおり「測れなかった」と報告する**——
+⛔ **この逃げ道は塞がっていない。**バイナリ自体が無い器は実在し
+（[Issue #247](https://github.com/takecchi/mnemora/issues/247) が 2026-09-15 に実測）、
+そこは上流の領分である。
+
 **⟹ DB を用意できない環境で走っているなら、段2・段4 は「空」ではなく「判定不能」である。**
 **空として扱って段3 や「やることが無い」へ倒さないこと**——
 **「測れなかった」と報告する。**それが次に必要なもの（DB を用意する）を教える唯一の信号である。
