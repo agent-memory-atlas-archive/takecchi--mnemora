@@ -175,5 +175,6 @@ alteroid (github.com/takecchi/alteroid) を根拠として引く箇所は、確�
 | [0160](./0160-budget-demo-teeth-and-channel-registry.md) | `examples/chat` の「予算あり/なし」対比デモに歯を足し、`usage.byTier` の新チャンネル漏れを検査する「登録表」の歯を置く（Issue #306） | 採用 (2026-09) |
 | [0161](./0161-runtime-get-recall.md) | `Runtime.getRecall` を足す — `recall()` の戻り値からは分からない「後から」を、`Runtime` だけを持つ採用側にも届かせる | 採用 (2026-09) |
 | [0162](./0162-correction-scenario-example-chat.md) | `examples/chat` に訂正シナリオを足す — `contestedPair` は構造としての宣言、判定はしない | 採用 (2026-09) |
+| [0167](./0167-association-getvectors-order-nondeterminism.md) | 連想枠（段3.5）の非決定性の原因は HNSW ではなく `getVectors()` の返却順依存だった — アンカー処理順をランク順に固定して直す（Issue #316） | 採用 (2026-09) |
 
 <!-- ADR-INDEX:GENERATED:END -->

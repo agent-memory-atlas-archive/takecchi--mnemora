@@ -1214,6 +1214,29 @@ export function withoutGetVectors(store: FakeVectorStore): VectorStore {
 }
 
 /**
+ * Issue #316 / ADR 0167: `VectorStore.getVectors` の doc（「返す順序は memoryIds の
+ * 順序と一致している必要はない」）を、字面だけでなく実際に踏む adapter を模す。
+ *
+ * `FakeVectorStore.getVectors` は `memoryIds` をそのまま for-of するため、常に
+ * **入力順を保って**返す——`PostgresVectorStore.getVectors`（`ORDER BY` を持たず、
+ * 実測では主キー Index Scan がランダムな UUID 昇順で返す）とは違う。この違いが、
+ * `recall-runtime.ts` 側が「契約上どの順で来てもよい」ことを実装で守れているかを
+ * 検査から隠していた——この wrapper は、`getVectors` の結果を**逆順**にして返すことで、
+ * 呼び出し側が返り値の順序に依存していないかを暴く。
+ */
+export function withReversedGetVectorsOrder(store: FakeVectorStore): VectorStore {
+  return {
+    upsert: (ctx, space, memoryId, vector) => store.upsert(ctx, space, memoryId, vector),
+    search: (ctx, space, query, opts) => store.search(ctx, space, query, opts),
+    delete: (ctx, space, memoryId) => store.delete(ctx, space, memoryId),
+    getVectors: async (ctx, space, memoryIds) => {
+      const entries = await store.getVectors(ctx, space, memoryIds);
+      return [...entries].reverse();
+    },
+  };
+}
+
+/**
  * `FakeLexicalStore` は `packages/core` 自身のテスト用であり `@mnemora/testkit` に依存しない
  * （このファイル冒頭のコメント参照）。`packages/testkit` の `InMemoryLexicalStore` とは
  * **意図的に独立している**——本 PR の時点で `InMemoryLexicalStore` はまだ書かれている最中

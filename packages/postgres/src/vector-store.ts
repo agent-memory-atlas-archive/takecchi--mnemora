@@ -30,7 +30,8 @@ function parseVectorLiteral(literal: string): number[] {
  *
  * `search` の `ORDER BY` には距離演算子の結果をそのまま昇順で書く（式にしない）。
  * これは docs/memory-model.md §10「規約」であり、`testkit`/`packages/postgres` の
- * `EXPLAIN` 検査対象そのものである。
+ * `EXPLAIN` 検査対象そのものである。第2キーに `memory_id` を足してある
+ * （距離が完全一致する行の tie-break、ADR 0167）。
  *
  * テーブルは事前に `registerEmbeddingSpace`（`./vector-space.ts`）で作られている前提。
  * 未登録の空間に対して呼ぶと Postgres の `relation does not exist` エラーになる
@@ -99,12 +100,18 @@ export class PostgresVectorStore implements VectorStore {
     const whereClause = sql.join(conditions, sql` AND `);
 
     // ORDER BY には距離演算子の結果をそのまま昇順で置く（式にしない。docs/recall.md §3）。
+    // `e.memory_id` を第2キーに足す（ADR 0167）——距離が完全一致する行が2件以上あるとき
+    // （例: 同一内容が別 memory として複数回記録された場合）、tie-break が無いと
+    // Postgres の内部順（物理配置・実行計画）に左右されて非決定的になる。
+    // ⚠ これ単独では Issue #316 の主因は直らない（主因は `getVectors()` 側の呼び出し順、
+    // ADR 0167 参照）——ここでの重複は「まだ実測していない、将来のデータ次第の潜在バグ」
+    // への予防であり、「決定性を名乗る以上、無いのは欠陥」という理由で足す。
     const result = await this.db.execute(sql`
       SELECT e.memory_id AS memory_id, e.embedding <=> ${queryLiteral}::vector AS distance
       FROM ${sql.identifier(table)} e
       JOIN memories m ON m.id = e.memory_id AND m.tenant_id = e.tenant_id
       WHERE ${whereClause}
-      ORDER BY e.embedding <=> ${queryLiteral}::vector
+      ORDER BY e.embedding <=> ${queryLiteral}::vector, e.memory_id
       LIMIT ${opts.limit}
     `);
     return result.rows.map((row) => {

@@ -4,7 +4,11 @@ import type { VectorStore } from "../interfaces/vector-store.js";
 import { defaultDecayStrategy } from "../strategies/decay.js";
 import type { Memory, NewMemory } from "../memory.js";
 import { createRuntime } from "../runtime.js";
-import { createFakeRuntimeStores, withoutGetVectors } from "./runtime-fakes.js";
+import {
+  createFakeRuntimeStores,
+  withoutGetVectors,
+  withReversedGetVectorsOrder,
+} from "./runtime-fakes.js";
 
 /**
  * 連想枠（Issue #200、ADR 0151、docs/recall.md §9）の歯。
@@ -234,5 +238,55 @@ describe("recall() — 連想枠（association、既定 off）", () => {
     expect(memoryIds).toContain(anchor.id);
     expect(memoryIds).toContain(associated.id);
     expect(result.omitted.some((o) => o.kind === "budget_dropped")).toBe(false);
+  });
+});
+
+describe("recall() — 連想枠: 複数アンカーが同じ候補を連想したときの決定性（Issue #316 / ADR 0167）", () => {
+  const deg = (d: number): number => (d * Math.PI) / 180;
+
+  it("VectorStore.getVectors が返す順序に依存せず、associationOf は常に anchors のランク順で先に処理されたアンカーになる", async () => {
+    // Q=0°。A(40°)はB(55°)よりQに近い ⟹ 段1の再スコアでA=rank1、B=rank2（anchors=[A,B]）。
+    // C(90°)はQとの類似度がほぼ0（below_threshold）なのでwithinLimitには入らず、連想でしか拾えない。
+    //
+    // ⭐ Cは B（sim≈0.819）のほうが A（sim≈0.643）より近い——だが ADR 0151 の決定
+    // 「複数アンカーから同じ記憶が浮上しても、associationOf は最初に当たったアンカーだけを
+    // 記録する」の「最初」は常に anchors のランク順（A→B）で決まらなければならず、
+    // candidate 側（C）から見てどちらのアンカーに近いかで決めてはいけない。
+    //
+    // Issue #316 の実際の原因（ADR 0167）: `PostgresVectorStore.getVectors` は `ORDER BY`
+    // を持たず、返す順序が ingest ごとにランダムな memory_id（UUID）の索引順になっていた
+    // ——`recall-runtime.ts` がその返り値の順序をそのままアンカー処理順として使っていたため、
+    // 「最初に当たったアンカー」が ingest ごとに入れ替わっていた。
+    const q = [Math.cos(deg(0)), Math.sin(deg(0))];
+    const aVec = [Math.cos(deg(40)), Math.sin(deg(40))];
+    const bVec = [Math.cos(deg(55)), Math.sin(deg(55))];
+    const cVec = [Math.cos(deg(90)), Math.sin(deg(90))];
+
+    async function run(
+      overrideVectorStore?: (stores: ReturnType<typeof createFakeRuntimeStores>) => VectorStore,
+    ) {
+      const { runtime, stores } = buildRuntime(overrideVectorStore);
+      const a = await createEmbeddedMemory(stores, aVec, { digest: "A" });
+      const b = await createEmbeddedMemory(stores, bVec, { digest: "B" });
+      const c = await createEmbeddedMemory(stores, cVec, { digest: "C" });
+      const result = await runtime.recall(ctx, {
+        vector: q,
+        association: { maxCount: 5, anchorCount: 2 },
+      });
+      const cEntry = result.memories.find((m) => m.memoryId === c.id);
+      return { a, b, c, cEntry };
+    }
+
+    // forward: FakeVectorStore.getVectors は入力順（= anchors のランク順、A→B）を保って返す。
+    const forward = await run();
+    expect(forward.cEntry?.retrievedVia).toBe("association");
+    expect(forward.cEntry?.associationOf).toBe(forward.a.id);
+
+    // reversed: getVectors が B→A の順（anchors のランク順とは逆）で返す adapter を模す。
+    // ⭐ ここが歯——バグがあると、先に処理される B が C を「最初に当たった」として横取りし、
+    // associationOf が B になる（かつ similarity も 0.819 側に変わる）。
+    const reversed = await run((s) => withReversedGetVectorsOrder(s.vectorStore));
+    expect(reversed.cEntry?.retrievedVia).toBe("association");
+    expect(reversed.cEntry?.associationOf).toBe(reversed.a.id);
   });
 });

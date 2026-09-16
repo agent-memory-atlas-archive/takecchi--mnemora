@@ -840,7 +840,22 @@ export async function runRecall(
         omitted.push({ kind: "stage_skipped", stage: "association", reason: "no_anchor" });
       } else {
         const anchorIds = anchors.map((a) => a.memory.id);
-        const anchorVectors = await getVectors(ctx, deps.embeddingProvider.space, anchorIds);
+        const anchorVectorList = await getVectors(ctx, deps.embeddingProvider.space, anchorIds);
+        // `VectorStore.getVectors` は「返す順序は memoryIds の順序と一致している必要はない」
+        // という契約を持つ（packages/core/src/interfaces/vector-store.ts の doc）——
+        // ここで memoryId をキーに引き直し、`anchorIds`（スコア降順、既に確定した順序）の
+        // 順で処理する。
+        //
+        // 🔴 Issue #316 の非決定性の実際の原因（ADR 0167）: 以前はここで
+        // `anchorVectorList` を直接 for-of していたため、複数アンカーの近傍に同じ候補が
+        // 重なったとき「最初に当たったアンカー」が adapter の返す順序に左右されていた。
+        // `PostgresVectorStore.getVectors` は `ORDER BY` を持たず、実測では主キー
+        // `(tenant_id, memory_id)` の Index Scan（memory_id という**ランダムな UUID**の
+        // 昇順）で返る——ingest のたびに `gen_random_uuid()` が変わるので、この「最初に
+        // 当たった」の勝者が ingest ごとに変わっていた。HNSW / pgvector の近似探索は
+        // 無関係だった（実測: この規模では Seq Scan / PK Index Scan のみが選ばれ、
+        // HNSW 索引は一度も使われていない）。
+        const anchorVectorById = new Map(anchorVectorList.map((v) => [v.memoryId, v]));
         // 除外集合: 既に返る集合（withinLimit + companions）とアンカー自身。
         const excludeIds = new Set<MemoryId>([
           ...withinLimit.map((c) => c.memory.id),
@@ -849,10 +864,14 @@ export async function runRecall(
         ]);
         // 複数アンカーから同じ記憶が浮上しても、associationOf は最初に当たった
         // アンカーだけを記録する（ADR 0151 の負債4「アンカーを1つしか指さない」）。
+        // 「最初」は常に `anchorIds`（スコア降順）の順で決める——adapter の返す順序には
+        // 依存しない（上のコメント参照）。
         const seen = new Set<MemoryId>();
         const associationHits: { memoryId: MemoryId; anchorId: MemoryId; similarity: number }[] =
           [];
-        for (const anchor of anchorVectors) {
+        for (const anchorId of anchorIds) {
+          const anchor = anchorVectorById.get(anchorId);
+          if (!anchor) continue; // adapter が返さなかった（存在しない/削除された等）
           // **段0と同じ scope の filter で呼ぶ**（docs/recall.md §9.2 手順4）——アンカーの
           // ベクトルを使うだけで、tenant/subject/status/period/excludeProvenanceKinds の
           // 境界は段1のANN検索と同一にする。limit は over-fetch 済みの kPrime を流用する
@@ -880,7 +899,7 @@ export async function runRecall(
             seen.add(hit.memoryId);
             associationHits.push({
               memoryId: hit.memoryId,
-              anchorId: anchor.memoryId,
+              anchorId,
               similarity,
             });
           }
