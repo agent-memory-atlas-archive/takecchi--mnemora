@@ -324,6 +324,21 @@ taxonomy + status）に**入っていない**——減衰しきった Memory は
 [ADR 0144](./decisions/0144-drop-unreachable-classification-3-union-values.md) で落とした
 ——`RecallBudget` を使い切ったときの実際の落とし方は `budget_dropped` である。
 
+**⚠ 2026-09-17 追記（[Issue #375](https://github.com/takecchi/mnemora/issues/375) /
+[ADR 0188](./decisions/0188-association-over-limit-omission.md)）**: `over_limit` は
+上のコード例には無い `stage: 'rescore' | 'association'` も持つ（本節の型例は書き換えない
+——`decayed` と同じ扱いで、ここに追記する）。**`'rescore'`** は段2（§7）の
+`RecallQuery.limit` を超えた分、**`'association'`** は段3.5（§9）の
+`RecallAssociationQuery.maxCount` を超えた分——**どちらも「ゲートと閾値を通過した
+集合を、この段自身の上限で切った」という同じ形の事象だが、動かす欄が違う**
+（`limit` を増やしても `maxCount` を超えた分は戻らない、逆も同様）。`filtered` の
+`condition` が「どのゲートで落ちたか」を言うのと同じ理由で、`over_limit` にも
+「どの上限で切ったか」を持たせた。**`count`/`countKind` は段2の `over_limit` と同じ
+性質**——連想枠の候補（`associationHits`）は、この slice の時点で既に忘却/`validAt`
+ゲートと `minSimilarity`/除外集合を通過し類似度降順に並び終えた、JS 側で確定済みの
+集合である。DB への未取得候補ではない（`decayed` が ANN の押し下げで原理的に数え
+られない `lower_bound` なのとは対照的）。⟹ `countKind` は常に `'exact'`。
+
 **`ann_truncated` と `ann_unreached` の違い（2026-09 追記、[ADR 0025](./decisions/0025-ann-underfill-is-not-reported-in-omitted.md)・[ADR 0026](./decisions/0026-ann-unreached-omission.md)）**:
 `ann_truncated` は「k' に達した＝もっと在るはずだが LIMIT で打ち切った」という**打ち切り**であり、
 `ann_unreached` は「k' に届く前に、近似索引がこの scope の候補へ**そもそも辿り着かなかった**」
@@ -338,7 +353,7 @@ taxonomy + status）に**入っていない**——減衰しきった Memory は
 | `stage_skipped` | その段の経路自体を疑う（埋め込み provider の復旧、クエリの中身の見直し、予算そのものの見直し）。スコアやフィルタの調整では直らない。 |
 | `filtered` | 条件を緩める判断ができる（例: `taxonomy` フィルタを外す、`period` を広げる）。どの条件かが分かって初めて緩め方が決まる。`condition: 'superseded'` なら `superseded_by_id` を辿って置き換え先を探す一手があるが、`condition: 'forgotten'` にはその一手が無い（利用者が意図して忘れさせたものであり、指す先を持たない）。この2つを束ねると一手が選べなくなる（ADR 0027）。 |
 | `below_threshold` | 閾値を緩めて聞き直す判断ができる。`nearMisses` があれば「惜しかったものがどれくらい惜しかったか」まで見える。 |
-| `over_limit` | 閾値は超えている集合が k より大きいと分かる。k を増やす、あるいはページングする一手につながる。 |
+| `over_limit` | 閾値は超えている集合が k より大きいと分かる。**`stage` で一手が分かれる**（2026-09-17 追記、Issue #375 / ADR 0188）——`'rescore'` なら `limit` を増やす・ページングする、`'association'` なら `RecallAssociationQuery.maxCount` を増やす。 |
 | `budget_dropped` | スコアの問題ではなく量の問題だと分かる。予算を緩めるか、`memories` を要約させる判断につながる。 |
 | `not_indexed` | 記憶は存在するが埋め込みがまだ無いと分かる（`embeddingStatus`、`./memory-model.md` 参照）。記憶が失われたと誤認しない。**`reason` によって次の一手が分かれる**——`pending` は待つ・再試行する、`failed` は埋め込みパイプラインそのものを疑う、`skipped` は意図した除外なので何もしなくてよい。この3つを1つに潰すと、恒久的な失敗と一時的な遅延が同じ顔になる（2026-09 追記。当初案は `reason` を持たなかった）。 |
 | `lexical_truncated` | 語彙チャンネルが窓（k'）を埋めたと分かる（[ADR 0084](./decisions/0084-lexical-recall-channel.md) §7.1）。`ann_truncated` とは別の札——語彙チャンネルは損失可能性を判定する機構を持たないため、`countKind` は常に `'unknown'` である。次の一手は「窓を広げる（`overFetchFactor`/`limit`）」であり、閾値やフィルタの調整では直らない。 |
@@ -348,6 +363,8 @@ taxonomy + status）に**入っていない**——減衰しきった Memory は
 | `unit_assembly_dropped` | **段3で単位を組むときに候補が漏れた**と分かる（[ADR 0043](./decisions/0043-unit-assembly-dropped-omission.md)）。原因は `contested_with_id` の一対一が破れていることであり、次の一手は「その対向関係を直す」——閾値にも予算にも索引にも関係がない。**⚠ 口は在るが、今日は `Runtime` 経由では発火しない**（2026-09-16 訂正）——[Issue #197](https://github.com/takecchi/mnemora/issues/197) / [ADR 0134](./decisions/0134-mark-contested-explicit-operation.md) で `Runtime.markContested` が入り、**`contested` を書く主体そのものは存在するようになった。**ただし `markContested` は両側 `status='active'` の CAS を課したうえで相互参照を1トランザクションで書くため、**`Runtime` 経由で作られた `contested` ペアが一対一を破ることは無い**——⟹ **今日この分岐が通るとすれば、`MemoryStore` を `Runtime` を経由せず直接叩いた場合に限る**（`packages/core/src/recall-runtime.ts` の同じ分岐のコメントが、同じことを書いている）。**さらに、`markContested` を呼ぶ本番コードは今日ひとつも無い**（【実測】2026-09-16、`main` が `5f11291` の時点で `rg "markContested" --glob '!**/__tests__/**' packages examples` が返すのは定義と適合テストだけである）——追跡は [Issue #284](https://github.com/takecchi/mnemora/issues/284)。`countKind` は `'lower_bound'`——二重計上が同時に起きていると消失が隠れるため、下限しか言えない。 |
 
 **`filtered(condition: 'decayed')` の次の一手（2026-09 追記、[ADR 0153](./decisions/0153-recall-decay-floor-gate.md)、Issue #196）**: 忘却ゲートが効いたと分かる。`filtered(condition:'archived')` とは別の一手につながる——`archived` は強化すれば戻る可能性があるが（次の recall で `status` を見直す）、`decayed` は `RecallQuery.includeFullyDecayed: true` を明示的に渡さない限り、強化しても `decayFloorAt` が先へ延びるだけで、次の recall では再びこの条件に当たらなくなる。
+
+**`over_limit(stage: 'association')` の次の一手（2026-09-17 追記、[Issue #375](https://github.com/takecchi/mnemora/issues/375) / [ADR 0188](./decisions/0188-association-over-limit-omission.md)）**: 連想枠（§9）が `RecallAssociationQuery.maxCount` で切り捨てた分だと分かる。`over_limit(stage: 'rescore')` とは別の一手——`limit` を増やしても連想枠の切り捨ては直らない（連想枠は段2の `limit` を一切見ていない）。`maxCount` を増やすと、切り捨てられていた候補が `retrievedVia: 'association'` として本体へ入ってくる。⚠ この札が積まれても `RecallResult.memories` の合計件数は変わらない——連想枠は「元々居なかった候補を追加する」機能であり、切り捨てられた分は最初から `memories` に入っていない。
 
 ### 件数にも「無いの種類」を適用する
 
@@ -759,7 +776,13 @@ Issue #200 は**2つの読み方**を挙げていた。
    後置フィルタも段1と同じ述語（`survivesDecayGate` / `survivesValidityGate`）を呼ぶ。
 5. 既に返る集合・アンカー自身・`minSimilarity` 未満を除く。
 6. 残りを `maxCount` 件まで採り、`retrievedVia: 'association'` と
-   `associationOf: <アンカーの memoryId>` を立てる。
+   `associationOf: <アンカーの memoryId>` を立てる。**`maxCount` を超えた分は
+   `omitted { kind: 'over_limit', stage: 'association', count, countKind: 'exact' }`
+   として報告する**（2026-09-17 追記、[Issue #375](https://github.com/takecchi/mnemora/issues/375) /
+   [ADR 0188](./decisions/0188-association-over-limit-omission.md)）——この手順4〜5を
+   通過した時点で候補は既にゲート・除外・類似度の条件を満たしており、単に `maxCount`
+   で切っただけである。段2の `passed.slice(limit)`（§7）が `over_limit` を積むのと
+   同じ形。
 
 **⚠ 「走らせて0件だった」と「走らせなかった」を同じ顔にしない。**
 走らせて0件のときは `stage_skipped` を積まない——本文書全体を貫く原則3

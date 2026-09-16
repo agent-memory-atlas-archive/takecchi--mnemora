@@ -583,3 +583,57 @@ describe("recall() — 連想用 adapter がゲートを無視しても、後置
     expect(result.memories.map((m) => m.memoryId)).not.toContain(associated.id);
   });
 });
+
+// ---------------------------------------------------------------------------
+// over_limit（Issue #375 / ADR 0188）: `maxCount` で切り捨てた分が omitted に名乗る。
+//
+// これは忘却/validAt ゲートとは別の欠落である——`associationHits.slice(0, maxCount)`
+// （`recall-runtime.ts`）自体が、両ゲートを既に通過し類似度降順に並び終えた集合から
+// 単に上位 maxCount 件だけを残す処理であり、この slice に omitted.push が無かった。
+// ⟹ 呼び手は「候補が無かった」のか「候補はあったが maxCount で切られた」のかを
+// 区別できなかった（北極星「目指す姿」項目6）。
+// ---------------------------------------------------------------------------
+
+describe("recall() — 連想枠の maxCount 切り捨てが omitted.over_limit として名乗る（Issue #375 / ADR 0188）", () => {
+  it("連想候補が maxCount を超えると、超過分だけ over_limit(stage: 'association') として報告される", async () => {
+    const { runtime, stores } = buildRuntime();
+    await createEmbeddedMemory(stores, ANCHOR_VECTOR, { digest: "アンカー本文" });
+    const associatedCount = ASSOCIATION.maxCount + 3; // maxCount(5) より3件多く用意する
+    for (let i = 0; i < associatedCount; i++) {
+      await createEmbeddedMemory(stores, ASSOCIATED_VECTOR, { digest: `連想本文${i}` });
+    }
+
+    const result = await runtime.recall(ctx, {
+      vector: [1, 0],
+      limit: 10,
+      association: ASSOCIATION,
+    });
+
+    const associationMembers = result.memories.filter((m) => m.retrievedVia === "association");
+    expect(associationMembers).toHaveLength(ASSOCIATION.maxCount);
+    expect(result.omitted).toContainEqual({
+      kind: "over_limit",
+      stage: "association",
+      count: associatedCount - ASSOCIATION.maxCount,
+      countKind: "exact",
+    });
+  });
+
+  it("連想候補が maxCount 以下なら over_limit(stage: 'association') は積まれない（鳴ってはいけない側）", async () => {
+    const { runtime, stores } = buildRuntime();
+    await seedAnchorAndAssociated(stores, {}); // 連想候補は1件だけ、maxCount(5)未満
+
+    const result = await runtime.recall(ctx, {
+      vector: [1, 0],
+      limit: 10,
+      association: ASSOCIATION,
+    });
+
+    expect(result.omitted.some((o) => o.kind === "over_limit" && o.stage === "association")).toBe(
+      false,
+    );
+    // 段2側の over_limit（stage: 'rescore'）も、この配置では鳴らない——
+    // この歯が「over_limit が一切無い」ことの検算になっていることを明示する。
+    expect(result.omitted.some((o) => o.kind === "over_limit")).toBe(false);
+  });
+});

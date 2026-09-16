@@ -829,7 +829,12 @@ export async function runRecall(
   const withinLimit = passed.slice(0, limit);
   const overLimit = passed.slice(limit);
   if (overLimit.length > 0) {
-    omitted.push({ kind: "over_limit", count: overLimit.length, countKind: rescoreCountKind });
+    omitted.push({
+      kind: "over_limit",
+      stage: "rescore",
+      count: overLimit.length,
+      countKind: rescoreCountKind,
+    });
   }
 
   // -------------------------------------------------------------------
@@ -1163,6 +1168,27 @@ export async function runRecall(
         // を持たず、同じ多層防御を足すには追加の DB 往復が要る。ADR 0170「採らなかった案」）。
         associationHits.sort((a, b) => b.similarity - a.similarity);
         const selectedHits = associationHits.slice(0, associationQuery.maxCount);
+        // maxCount で切り捨てた分を over_limit として名乗る（Issue #375 / ADR 0188）。
+        // 段2の `passed.slice(limit)`（上、`stage: "rescore"`）と同じ形——ここまでの
+        // `associationHits` は既に忘却/validAt ゲート・除外集合・minSimilarity を
+        // 通過し、類似度降順に並び終えた「連想枠の候補集合」そのものであり、この
+        // slice は DB へ戻って何かを問い合わせ直すものではない。⟹ 捨てた件数は
+        // JS 側で既に確定しており、`countKind: "exact"`（段2の `rescoreCountKind` が
+        // `scored`（全数）から出るのと同じ理由）。
+        // ⚠ 直前の `slice` を境に選ばれなかった側だけを数える——`selectedHits` 側は
+        // この後さらに多層防御（subjectId/period/excludeKinds/両ゲート）を通るが、
+        // それは「一度選んだのに落ちる」既存の負債であり本 PR の射程外（下の
+        // `survivesValidityGate`/`survivesDecayGate` 呼び出し直前のコメントが、
+        // その分を数えない理由を説明している。二重計上を避けるため、ここでは触れない）。
+        const overLimitAssociationHits = associationHits.slice(associationQuery.maxCount);
+        if (overLimitAssociationHits.length > 0) {
+          omitted.push({
+            kind: "over_limit",
+            stage: "association",
+            count: overLimitAssociationHits.length,
+            countKind: "exact",
+          });
+        }
         const associationMemories =
           selectedHits.length > 0
             ? await deps.memoryStore.getMany(

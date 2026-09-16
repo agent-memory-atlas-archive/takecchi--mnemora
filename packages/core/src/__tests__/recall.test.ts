@@ -134,6 +134,17 @@ describe("OmissionSchema — 10 の kind すべて", () => {
   it("accepts 'over_limit'", () => {
     const result = OmissionSchema.safeParse({
       kind: "over_limit",
+      stage: "rescore",
+      count: 5,
+      countKind: "exact",
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("accepts 'over_limit' の stage が 'association'（Issue #375 / ADR 0188）", () => {
+    const result = OmissionSchema.safeParse({
+      kind: "over_limit",
+      stage: "association",
       count: 5,
       countKind: "exact",
     });
@@ -141,7 +152,22 @@ describe("OmissionSchema — 10 の kind すべて", () => {
   });
 
   it("rejects 'over_limit' が countKind を欠く", () => {
-    const result = OmissionSchema.safeParse({ kind: "over_limit", count: 5 });
+    const result = OmissionSchema.safeParse({ kind: "over_limit", stage: "rescore", count: 5 });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects 'over_limit' が stage を欠く（Issue #375 / ADR 0188）", () => {
+    const result = OmissionSchema.safeParse({ kind: "over_limit", count: 5, countKind: "exact" });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects 'over_limit' の stage が未知の値", () => {
+    const result = OmissionSchema.safeParse({
+      kind: "over_limit",
+      stage: "something_else",
+      count: 5,
+      countKind: "exact",
+    });
     expect(result.success).toBe(false);
   });
 

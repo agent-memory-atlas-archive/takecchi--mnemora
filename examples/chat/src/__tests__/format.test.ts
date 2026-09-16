@@ -100,7 +100,7 @@ describe("formatRecallQualityTable", () => {
             safetyRatio: 0.8,
             assumptions: ["decay <= 1: ...", "strength <= 1: ..."],
           },
-          { kind: "over_limit", count: 30, countKind: "exact" },
+          { kind: "over_limit", stage: "rescore", count: 30, countKind: "exact" },
           { kind: "not_indexed", reason: "pending", count: 271, countKind: "exact" },
         ],
       });

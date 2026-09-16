@@ -232,8 +232,20 @@ export interface BelowThresholdOmission {
   nearMisses?: { memoryId: MemoryId; score: number }[];
 }
 
+/**
+ * **`stage`（Issue #375 / [ADR 0188](../../../docs/decisions/0188-association-over-limit-omission.md)）**:
+ * この上限切り捨てがどの段で起きたかを言う。次の一手を変える欄なので必須にした
+ * （`filtered.condition` と同じ理由——「どの上限を動かせばよいか」が段ごとに違う）。
+ *
+ * - `"rescore"` — 段2。`RecallQuery.limit` を超えた分（`docs/recall.md` §2 段2）。
+ *   次の一手: `limit` を増やす、あるいはページングする。
+ * - `"association"` — 段3.5。`RecallAssociationQuery.maxCount` を超えた分
+ *   （`docs/recall.md` §9）。次の一手: `maxCount` を増やす。**`limit` を増やしても
+ *   直らない**——連想枠の候補は段2の `limit` とは別の上限（`maxCount`）で切られる。
+ */
 export interface OverLimitOmission {
   kind: "over_limit";
+  stage: "rescore" | "association";
   count: number;
   countKind: CountKind;
 }
@@ -446,6 +458,7 @@ const BelowThresholdOmissionSchema = z.object({
 
 const OverLimitOmissionSchema = z.object({
   kind: z.literal("over_limit"),
+  stage: z.enum(["rescore", "association"]),
   count: z.number().int().nonnegative(),
   countKind: CountKindSchema,
 }) satisfies z.ZodType<OverLimitOmission>;
