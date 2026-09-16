@@ -1,0 +1,52 @@
+-- 0016_provenance_kind_matches_provenance.sql
+--
+-- Issue #273 / ADR 0182: `memories.provenance_kind`（列）と `memories.provenance->>'kind'`
+-- （jsonb）の一致を、DB 側で強制する。
+--
+-- ## 何が穴だったか
+--
+-- `provenance_kind` は `provenance.kind` の**非正規化された複製**（`schema.ts` の doc・
+-- `docs/memory-model.md` §2 が明記するとおり、フィルタと索引だけのために列へ上げてある）。
+-- しかし今日までこの2つの一致を検査する制約は無かった——`packages/postgres/src/memory-store.ts`
+-- の3つの書き込み経路（`createMemory`/`createMemoryWithOutbox`/`supersedeWithNewMemories`）が
+-- たまたま同じ変数（`input.provenance.kind`）から両方を書いているために今日はずれていない
+-- だけであり、4本目の書き込み経路が片方だけを書けば静かにずれる（ADR 0182「文脈」参照）。
+--
+-- ## なぜ `NOT VALID` で足すか（このファイル）
+--
+-- **既存行の走査を、このファイルでは行わない。**`ADD CONSTRAINT ... NOT VALID` は
+-- カタログにエントリを足すだけで、既存行を1行も読まない（実測: 300k 行のテーブルで
+-- 1.9ms、ADR 0182「測ったこと」）。**それでいて、このファイルが commit した瞬間から
+-- 以降のすべての INSERT/UPDATE には即座に効く**——`NOT VALID` は「新しい書き込みを
+-- 免除する」という意味ではない。免除されるのは「今日まで入っている既存行の検査」だけ
+-- である（実測: 既存に不一致行がある表に `NOT VALID` を足した直後、別の不一致行の
+-- INSERT は reject された。ADR 0182「測ったこと」）。
+--
+-- **既存行の検査（走査してすべて一致することを確認する）は、次のファイル
+-- `0017_provenance_kind_matches_provenance_validate.sql` に分けてある。** 同じ1ファイル
+-- （= 同じトランザクション。`migrate.ts` は1ファイルを1トランザクションで包む）に
+-- `VALIDATE CONSTRAINT` まで入れてしまうと、2つの意味で今回の目的を損なう
+-- （ADR 0182「測ったこと」に実測を記録）:
+--
+-- 1. **ロック**: `ADD CONSTRAINT` が取る `ACCESS EXCLUSIVE` は、同一トランザクション内では
+--    `COMMIT` まで保持され続ける。`VALIDATE CONSTRAINT` 単体は本来 `SHARE UPDATE EXCLUSIVE`
+--    （読み書きをブロックしない）だが、同じトランザクションに同居させると、先に取った
+--    `ACCESS EXCLUSIVE` がそのまま効き続け、走査の間ずっと読み書きが止まる
+--    （実測: 300k 行に対する `SELECT` が、同一トランザクション内の `VALIDATE` 実行中
+--    2秒以上ブロックされた）。
+-- 2. **失敗時の巻き戻り**: 既存データに不一致行があって `VALIDATE` が失敗すると、
+--    同じトランザクションなら `ADD CONSTRAINT` ごとロールバックされる——**「新しい
+--    書き込みだけは即座に守る」という、このファイルの目的そのものが消える。**
+--    分けておけば、`0017` が既存データの不一致で失敗しても、`0016` で入れた保護
+--    （新規の書き込みの拒否）は commit 済みのまま残る。
+--
+-- 制約名は `memories_strength_range`（0006）・`memories_half_life_range`（0012）と
+-- 同じ命名（`<table>_<説明>`）。
+--
+-- `->>`（jsonb から text を取り出す演算子）は IMMUTABLE なので CHECK に使える
+-- （実測: 一時表に対して `CHECK (provenance_kind = provenance->>'kind')` の作成が
+-- エラーなく通った。ADR 0182「測ったこと」）。
+
+ALTER TABLE memories
+  ADD CONSTRAINT memories_provenance_kind_matches_provenance
+  CHECK (provenance_kind = provenance->>'kind') NOT VALID;

@@ -87,6 +87,31 @@ v0.1.9 の時点で `0012_half_life_hours_range.sql` まで適用済みであれ
 （`DATABASE_URL` が無い作業環境のため）——SQL の内容はファイルを読んで確認したが、
 実行結果の検算は CI／実運用の DB に委ねている。
 
+### v0.2.0 以降に追加されたマイグレーション（`0016`/`0017`）
+
+v0.2.0 の時点で `0015_decay_activity_clock.sql` まで適用済みであれば、上のコマンドは
+次の2本を追加で適用する（**現物のファイル名で確認済み**）:
+
+| ファイル | 内容 | 対応する変更 |
+|---|---|---|
+| `0016_provenance_kind_matches_provenance.sql` | `memories` に CHECK 制約 `memories_provenance_kind_matches_provenance`（`provenance_kind = provenance->>'kind'`）を `NOT VALID` で足す。既存行は走査しないが、この時点から先の INSERT/UPDATE には即座に効く | [Issue #273](https://github.com/takecchi/mnemora/issues/273) / [ADR 0182](./decisions/0182-provenance-kind-matches-provenance-check.md) |
+| `0017_provenance_kind_matches_provenance_validate.sql` | `0016` の制約を既存行に対して `VALIDATE CONSTRAINT` する | 同上 |
+
+**`0013`〜`0015` と違い、`0016`/`0017` は非破壊的である**（列の削除も型変更も無い。足すのは
+CHECK 制約だけ）。**ただし `0017` は、既存の `memories` 行に
+`provenance_kind`（列）と `provenance->>'kind'`（jsonb）が実際にずれている行があれば、
+そこで失敗する。** 失敗した場合は `0016` の保護（新規の不一致行の拒否）は適用済みのまま残る
+——**その場で失敗したデータを直そうとせず、原因（何がその行を作ったか）を先に特定すること**
+（[`0017_provenance_kind_matches_provenance_validate.sql`](../packages/postgres/migrations/0017_provenance_kind_matches_provenance_validate.sql)
+「🔴 このファイルが失敗したら」参照）。通常の書き込み経路（`@mnemora/postgres` が
+提供する `PostgresMemoryStore` をそのまま使っている場合）ではこの2列は常に同じ値から書かれる
+ため、通常は `0017` も無事に適用される。
+
+**この節の作業者は、上記2本を実際に Postgres へ適用して確認した**（`/tmp` に自前で立てた
+PostgreSQL 17、`0001`〜`0015` を先に適用した DB に対して実際のコード経路
+（`createMemory`/`createMemoryWithOutbox`/`supersedeWithNewMemories`）で行を投入した後、
+`0016`/`0017` を追加適用して成功することを確認した。詳細は ADR 0182「測ったこと」参照）。
+
 ---
 
 ## 🔴 破壊的変更

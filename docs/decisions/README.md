@@ -192,6 +192,7 @@ alteroid (github.com/takecchi/alteroid) を根拠として引く箇所は、確�
 | [0178](./0178-public-api-surface-gate.md) | 公開 API 表面の破壊的変更を検出する歯を CI に足す | 採用 (2026-09) |
 | [0179](./0179-adr-number-assigned-at-merge.md) | ADR の番号は「マージ直前」に確定させる — 採番を、衝突しようがないタイミングまで遅らせる（Issue #295） | 採用 (2026-09) |
 | [0181](./0181-schema-type-equals-parity.md) | `satisfies` の片方向性を `Equals`/`MutualAssignable` の型検査で塞ぐ — `schema-type-equals-parity.test.ts`（Issue #272） | 採用 (2026-09) |
+| [0182](./0182-provenance-kind-matches-provenance-check.md) | `memories.provenance_kind` と `provenance->>'kind'` の一致を CHECK 制約で強制する — 生成列のほうが筋が良いが、いまは採らない | 採用 (2026-09) |
 | [0183](./0183-local-postgres-makes-postgres-mutation-testing-possible.md) | `packages/postgres` の変異試験を、CI のトリガを変えずに手元で成立させる — `initdb` で自分専用のインスタンスを立てる手順を `AGENTS.md` に置く | 採用 (2026-09) |
 | [0184](./0184-conformance-scope-documented-not-closed.md) | 適合テストが「何を保証していないか」を、塞ぐ前に名乗る — v1.0.0 は弱さを明示した状態で出す | 採用 (2026-09) |
 | [0186](./0186-sweep-archive-follows-decay-clock.md) | `sweepArchive` は `opts.clock` 省略時に `tenant_settings.decay_clock` へ従う — ADR 0165 決めたこと12 の数え漏れ（掃引）を埋める | 採用 (2026-09) |

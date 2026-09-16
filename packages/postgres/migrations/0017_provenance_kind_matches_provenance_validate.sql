@@ -1,0 +1,31 @@
+-- 0017_provenance_kind_matches_provenance_validate.sql
+--
+-- Issue #273 / ADR 0182: `0016_provenance_kind_matches_provenance.sql` が `NOT VALID` で
+-- 足した制約 `memories_provenance_kind_matches_provenance` を、既存行に対して検証する。
+--
+-- ## なぜ別ファイル（別トランザクション）に分けたか
+--
+-- `0016` の doc コメントに実測とあわせて書いた理由をそのまま繰り返す:
+-- `ADD CONSTRAINT ... NOT VALID` と `VALIDATE CONSTRAINT` を同じトランザクションに
+-- 同居させると、(1) 先に取った `ACCESS EXCLUSIVE` が走査の間ずっと保持され読み書きを
+-- 止める、(2) 既存データに不一致があって検証が失敗した場合に `ADD CONSTRAINT` ごと
+-- ロールバックされ、「新しい書き込みだけは即座に守る」という 0016 の効果まで消える。
+-- 分けてあるので、この `0017` は `VALIDATE CONSTRAINT` 単独が本来持つ
+-- `SHARE UPDATE EXCLUSIVE`（読み書きをブロックしない）のまま走る。
+--
+-- ## 🔴 このファイルが失敗したら
+--
+-- **既存の行に、`provenance_kind` と `provenance->>'kind'` が実際にずれている行がある**
+-- ということである。`0016` は commit 済みなので新しい書き込みは既に守られているが、
+-- 既存の不一致行はこの migration が通るまで残る。**その場でデータを直さない**
+-- ——原因（何がその行を作ったか）を先に特定すること。ADR 0182 参照。
+--
+-- ## 測った費用
+--
+-- 300k 行のテーブルで `VALIDATE CONSTRAINT` 単体は 43ms（`ADD ... NOT VALID` の
+-- 1.9ms と合わせて計 45ms 程度）。同じ行数に対する「生成列へ作り替える」案
+-- （`DROP COLUMN` + `ADD COLUMN ... GENERATED ... STORED` + 索引の再作成）は
+-- 約525ms、かつ `ACCESS EXCLUSIVE` が全区間に及ぶ。ADR 0182「測ったこと」に詳細。
+
+ALTER TABLE memories
+  VALIDATE CONSTRAINT memories_provenance_kind_matches_provenance;
