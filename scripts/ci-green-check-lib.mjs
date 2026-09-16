@@ -84,3 +84,26 @@ export function compareCheckRunNameSets(prevCheckRuns, currCheckRuns) {
   const removed = [...prevNames].filter((n) => !currNames.has(n));
   return { stable: added.length === 0 && removed.length === 0, added, removed };
 }
+
+/**
+ * 「CI が緑」は sha に紐づく事実であって、PR に紐づく事実ではない（Issue #294）。
+ * 緑と判定した直後に1コミットでも push すると、その確認は無効になる。
+ *
+ * この関数は、green と判定された sha を**そのまま貼れるマージコマンド**にする。
+ * `gh pr merge --match-head-commit <sha>` は、実行時の PR head が渡した sha と
+ * 一致しないと失敗する（`gh pr merge --help` で存在を確認済み。挙動そのものは
+ * この関数の呼び出し側であるCLIの docstring・ADR の「確かめたこと」を参照）。
+ * ⟹ **「緑を見た sha」と「実際にマージされる sha」が一致することを、
+ * 道具（`gh`）自身に強制させる**——「引き直せ」という文書の指示だけに頼らない。
+ *
+ * @param {string|number} prNumber
+ * @param {string} sha フルの40桁 sha（省略しない。`--match-head-commit` にはフルを渡す）
+ * @returns {string} 判定した sha を明示した上で、そのまま実行できる `gh pr merge` コマンドを含む文字列
+ */
+export function formatMatchHeadCommitHint(prNumber, sha) {
+  const shortSha = sha.slice(0, 7);
+  return (
+    `この判定は sha ${shortSha} に対するものである。この sha 以外をマージしないこと:\n` +
+    `  gh pr merge ${prNumber} --squash --delete-branch --match-head-commit ${sha}`
+  );
+}

@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { compareCheckRunNameSets, summarizeCheckRuns, verdict } from "../ci-green-check-lib.mjs";
+import {
+  compareCheckRunNameSets,
+  formatMatchHeadCommitHint,
+  summarizeCheckRuns,
+  verdict,
+} from "../ci-green-check-lib.mjs";
 
 /**
  * `scripts/ci-green-check-lib.mjs`（判定そのものの集合演算）の歯。
@@ -95,5 +100,22 @@ describe("compareCheckRunNameSets", () => {
     expect(result.stable).toBe(false);
     expect(result.added).toEqual(["c"]);
     expect(result.removed).toEqual(["b"]);
+  });
+});
+
+describe("formatMatchHeadCommitHint（Issue #294: 緑は sha に紐づく、を貼れるコマンドにする）", () => {
+  it("PR 番号とフル sha を、そのまま実行できる gh pr merge コマンドへ埋め込む", () => {
+    const result = formatMatchHeadCommitHint(365, "309303ab4ee5d0a07f7a094782cd80b6a7840dbe");
+    expect(result).toContain("sha 309303a");
+    expect(result).toContain(
+      "gh pr merge 365 --squash --delete-branch --match-head-commit 309303ab4ee5d0a07f7a094782cd80b6a7840dbe",
+    );
+  });
+
+  it("フル sha をそのまま渡す（短縮しない）——match-head-commit に短縮 sha を渡すと不一致になりうる", () => {
+    const fullSha = "abcdef0123456789abcdef0123456789abcdef01";
+    const result = formatMatchHeadCommitHint("42", fullSha);
+    expect(result).toContain(`--match-head-commit ${fullSha}`);
+    expect(result).not.toContain(`--match-head-commit ${fullSha.slice(0, 7)} `);
   });
 });

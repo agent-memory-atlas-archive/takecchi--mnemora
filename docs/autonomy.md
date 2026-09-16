@@ -91,7 +91,8 @@ gh pr list --state open --limit 20
 - [ ] 6つの門が緑（`typecheck` / `lint` / `format:check` / `test` / `build` / `pack:check`）
 - [ ] **歯が実際に噛むことを、変異試験で示した**（壊した入力で赤く、直したら緑に戻る）
 - [ ] **CI が緑**（手元の `pnpm run test` は DB 段を実行しない。§4 を見ること。
-      「緑」の判定手順そのものは §2.1 を見ること——素朴な判定は外れる）
+      「緑」の判定手順そのものは §2.1 を見ること——素朴な判定は外れる。
+      **その緑は sha に紐づく——マージ直前に引き直したものであること**。§2.1.1 を見ること）
 - [ ] PR 本文に、測った数字と**確かめていないこと**が書いてある
 
 **CI が緑で差分に問題が無ければ、そのままマージする**（§3。ADR 0118）。
@@ -165,6 +166,47 @@ gh pr list --state open --limit 20
 このツールの設計そのもの**——常に `gh` 経由で CI 自身に聞き、手元の門の結果を一切参照しない。
 **6番（他 repo の作法の持ち込み）は道具では防げない。**読む側が注意すること。
 
+### 2.1.1 いつ引き直すか（Issue #294）
+
+**上の1〜6は「どう引くか」だけを定めている。**「CI が緑である」は**その sha に紐づく事実**
+であって、**PR に紐づく事実ではない**——緑を確認したあとに1コミットでも push すると、
+その確認は無効になる。2026-09-16、PR #283 で実際に踏んだ（詳細は
+[Issue #294](https://github.com/takecchi/mnemora/issues/294)）:
+`--recheck-after 30` まで含めて green・stable を確認した直後に ADR 修正を1コミット push したところ、
+その新しい sha は実際に赤くなった（一過性の `ECONNRESET` で、再実行すれば緑に戻る類のものでは
+あったが、**「緑を確認済み」という記憶のままマージし得た**——道具の欠陥ではなく、
+手順に「いつ引き直すか」が欠けていたことが原因である）。
+
+- ⭐ **マージの直前に、そのときの HEAD に対して取り直す。「前に緑だった」は根拠にならない。**
+  判定と `gh pr merge` の間に何を挟んでも（レビュー待ち・他の確認・単なる時間経過）、
+  その間に push が1本でも起きていれば、判定は古い sha のものである。
+- ⚠ **ADR を含む PR では、`adr-renumber.mjs`（ADR 0179）と索引の再生成（ADR 0137）の
+  コミット自体が sha を変える。** ⟹ §4「ADR PR をマージするとき、索引の再生成を忘れる」の
+  手順どおり、**それらを push した _あと_ に取り直す**、という順序になる
+  （`git merge origin/main` → `adr-renumber.mjs` → `generate-adr-index.mjs` → commit → push →
+  **ここで初めて緑を引き直す** → merge）。判定を先に済ませてからこれらを走らせると、
+  判定した sha と実際にマージされる sha が別物になる。
+- ⭐ **判定した sha を `gh pr merge --match-head-commit <sha>` に渡すこと。**
+  `gh pr merge` には `--match-head-commit SHA` フラグが在る（`gh pr merge --help` で確認済み。
+  `gh 2.101.0`）——**渡した sha と実行時の PR head が一致しないとマージ自体が失敗する。**
+  これにより、「緑を見た sha」と「実際にマージされる sha」が一致することが**道具によって
+  機械的に強制される**——「引き直すのを忘れない」という注意力だけに頼らない。
+  `node scripts/ci-green-check.mjs --pr <番号>` は、`--pr` を渡して green と判定したとき、
+  そのまま貼れる形でこのコマンドを印字する:
+
+  ```
+  この判定は sha 309303a に対するものである。この sha 以外をマージしないこと:
+    gh pr merge 365 --squash --delete-branch --match-head-commit 309303ab4ee5d0a07f7a094782cd80b6a7840dbe
+  ```
+
+  ⚠ **確かめていないこと**: `--match-head-commit` を実際に渡して、head が変わった状態で
+  `gh pr merge` を実行し、意図通り失敗することそのものは、この Issue #294 の作業では
+  実地に再現していない（`gh pr merge --help` の説明文と、フラグが存在すること自体は
+  確認済み）。
+- **報告・PR 本文に緑を書くときは、どの sha で見たかを必ず添える**
+  （`AGENTS.md` が commit 数の実測について同じ規律を要求しているのと同じ理由——
+  「緑だった」だけでは、どの時点の話か読む側が復元できない）。
+
 ---
 
 ## 3. してはいけないこと
@@ -230,8 +272,8 @@ gh pr list --state open --limit 20
 | **手元の `pnpm run pack:check` が赤い** | `dist/` に古い `.map` が居残る（`tsc` は `outDir` を掃除しない）。**CI では起きない** | `rm -rf packages/*/dist && pnpm run build` |
 | **擬似 provider の数字を「性能」と読む** | arm A（擬似埋め込み）の **MRR は 0.018**＝実質ランダム | 想起の質を測るなら `recorded`（ADR 0051）。`deterministic` は配線と契約の検査用 |
 | **`npm view` で publish の成否を判断する** | registry の読み取り側は書き込みに数分遅れ、**CDN を迂回する `?write=true` でも 404 を返す**（ADR 0066 測ったこと8） | `npm publish` の出力で判断する |
-| **「CI が緑」を素朴に判定する**（PR 番号だけで見る／run 全体の `conclusion` を見る／`mergeStateStatus` を見る／手元の門の緑で代用する） | **check の本数は時間とともに増えうる・run と job の `conclusion` は別・`mergeStateStatus` は終端後の結果であって根拠にならない・手元の緑は CI の緑を予測しない**（Issue #228。5点のうち run/job の差・手元と CI の乖離は本 ADR 0132 で自分の `gh` 呼び出しにより再検算した） | §2.1 の手順どおり、**head sha を明示**して `check-runs` を job 単位で読む。`node scripts/ci-green-check.mjs --pr <番号>` が機械化している |
-| **ADR PR をマージするとき、索引の再生成を忘れる** | `docs/decisions/README.md` の ADR 索引は**機械生成**であり（[ADR 0137](./decisions/0137-adr-index-generated-from-source.md)）、**ADR を足す PR の作成者は索引を触らない**——触らないことが並行 PR 間の行位置の衝突を消している仕組みである。⟹ **マージする側が再生成しないと `main` の索引が陳腐化する**（`main` 限定の鮮度の歯が赤くなる） | **squash merge する直前に、PR ブランチ上で**次を実行してコミットし、push してからマージする: `git fetch origin main && git merge origin/main` → **`node scripts/adr-renumber.mjs`**（このブランチが足した ADR の番号が `origin/main` で既に使われていないか確認し、衝突していれば空いている次の番号へ機械的に付け替える。ADR 0179） → `node scripts/generate-adr-index.mjs` → commit → push → CI の緑を引き直す（§2.1）→ merge。⚠ **マージ「後」に `main` 上で再生成する形にしない**——`ci.yml` は `on: push: branches: [main]` であり、**マージで生まれた `main` のコミットが索引の古いまま CI に入って赤くなる**（その赤は履歴に残る）。索引再生成の手順は ADR 0137「決定」2番、採番の手順は ADR 0179
+| **「CI が緑」を素朴に判定する**（PR 番号だけで見る／run 全体の `conclusion` を見る／`mergeStateStatus` を見る／手元の門の緑で代用する） | **check の本数は時間とともに増えうる・run と job の `conclusion` は別・`mergeStateStatus` は終端後の結果であって根拠にならない・手元の緑は CI の緑を予測しない**（Issue #228。5点のうち run/job の差・手元と CI の乖離は本 ADR 0132 で自分の `gh` 呼び出しにより再検算した）。**⚠ さらに、緑は sha に紐づく事実であり、時間とともに腐る**——判定した後に1コミットでも push すると、その確認は無効になる（Issue #294。2026-09-16、PR #283 で実際に踏んだ） | §2.1 の手順どおり、**head sha を明示**して `check-runs` を job 単位で読む。`node scripts/ci-green-check.mjs --pr <番号>` が機械化している。**マージ直前に引き直し**（§2.1.1）、`gh pr merge --match-head-commit <sha>` で見た sha と実際にマージされる sha の一致を道具側で強制する |
+| **ADR PR をマージするとき、索引の再生成を忘れる** | `docs/decisions/README.md` の ADR 索引は**機械生成**であり（[ADR 0137](./decisions/0137-adr-index-generated-from-source.md)）、**ADR を足す PR の作成者は索引を触らない**——触らないことが並行 PR 間の行位置の衝突を消している仕組みである。⟹ **マージする側が再生成しないと `main` の索引が陳腐化する**（`main` 限定の鮮度の歯が赤くなる） | **squash merge する直前に、PR ブランチ上で**次を実行してコミットし、push してからマージする: `git fetch origin main && git merge origin/main` → **`node scripts/adr-renumber.mjs`**（このブランチが足した ADR の番号が `origin/main` で既に使われていないか確認し、衝突していれば空いている次の番号へ機械的に付け替える。ADR 0179） → `node scripts/generate-adr-index.mjs` → commit → push → CI の緑を引き直す（§2.1・**§2.1.1**——索引再生成のコミット自体が sha を変えるため、判定はこの push の**後**でなければならない）→ merge（`gh pr merge --match-head-commit <sha>` で、引き直した sha 以外がマージされないようにする）。⚠ **マージ「後」に `main` 上で再生成する形にしない**——`ci.yml` は `on: push: branches: [main]` であり、**マージで生まれた `main` のコミットが索引の古いまま CI に入って赤くなる**（その赤は履歴に残る）。索引再生成の手順は ADR 0137「決定」2番、採番の手順は ADR 0179
 | **CI の履歴から失敗率を数える**（「この故障は稀だ」「この test は N 回に1回落ちる」） | **再実行（rerun）は run 全体の `conclusion` を上書きする。**⟹ `status=failure` で run を絞って数えると、**再実行で緑になった回を取りこぼす。**⟹ **履歴から数えた失敗率は、必ず下限になる。**【実測】[Issue #261](https://github.com/takecchi/mnemora/issues/261) の対象 incident 自身がその実例である——失敗ジョブを再実行して緑にしたため、`status=failure` では拾えなくなった | **run ではなく個々の job の attempt を見る。**それをしていないなら、**「稀である」と断定しない**——「数えた範囲では N 件。これは下限である」と書くこと（本書 §5「確かめていないこと」の適用）。実例と数字は [ADR 0141](./decisions/0141-local-embedding-load-retry.md) §2.1 |
 
 ### 4.1 ⚠ 静かに失敗する道具（「出力が出た」を成功と読まない）

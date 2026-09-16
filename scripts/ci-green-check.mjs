@@ -17,6 +17,12 @@
  *    ⚠ これは「もう増えない」ことの証明ではない——2回とも同じだった、という
  *    それ以上でもそれ以下でもない事実を返すだけである（`compareCheckRunNameSets` の
  *    docstring 参照）。
+ * 5. **「CI が緑」は sha に紐づく事実であり、PR に紐づく事実ではない**（Issue #294）。
+ *    緑と判定した後に1コミットでも push すると、その確認は無効になる。
+ *    `--pr` を渡し、判定が green のとき、**判定した sha を `--match-head-commit` に
+ *    埋め込んだ `gh pr merge` コマンドをそのまま印字する**——文書で「引き直せ」と
+ *    書くだけでなく、道具（`gh`）自身に「見た sha と違う sha はマージさせない」を
+ *    強制させる。
  *
  * **このツールが判定しないこと**: 手元の6つの門（typecheck/lint/format:check/test/
  * build/pack:check）の結果。手元の緑は CI の緑を予測しない（`docs/autonomy.md` §4）
@@ -35,7 +41,11 @@
  * `1` = red、`2` = pending（まだ判定できない）、`3` = 実行時エラー（`gh` 呼び出し失敗等）。
  */
 import { spawnSync } from "node:child_process";
-import { compareCheckRunNameSets, verdict } from "./ci-green-check-lib.mjs";
+import {
+  compareCheckRunNameSets,
+  formatMatchHeadCommitHint,
+  verdict,
+} from "./ci-green-check-lib.mjs";
 
 function parseArgs(argv) {
   const args = { recheckAfter: null, json: false };
@@ -228,6 +238,12 @@ function main() {
 
   if (args.json) {
     console.log(JSON.stringify({ repo, sha, verdict: finalVerdict, stability }, null, 2));
+  }
+
+  if (finalVerdict.status === "green" && args.pr) {
+    // Issue #294:「緑は sha に紐づく」を、文書の指示だけでなく道具でも強制する。
+    // `--sha` 直指定のときは PR 番号が無いため出さない。
+    console.log(formatMatchHeadCommitHint(args.pr, sha));
   }
 
   if (finalVerdict.status === "green") process.exit(0);
