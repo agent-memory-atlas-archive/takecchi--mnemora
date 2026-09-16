@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { ZodError } from "zod";
 import type { Ctx } from "../ctx.js";
 import type { TokenCounter } from "../interfaces/token-counter.js";
 import type { VectorStore } from "../interfaces/vector-store.js";
@@ -1538,15 +1539,21 @@ describe("recall() — status ゲート（段1と同じ status IN ('active','con
 describe("recall() — RecallQuerySchema による入力検証", () => {
   it("limit が非正の場合は zod のエラーで拒否する", async () => {
     const { runtime } = buildRuntime();
-    await expect(runtime.recall(ctx, { limit: 0 })).rejects.toThrow();
+    // テスト名が「zod のエラーで」と失敗理由を明示している——別の理由（例: 実装側の
+    // typo によるモジュール解決エラー）で失敗しても緑になってはいけないため、
+    // 例外の型を zod の ZodError に固定する（RecallQuerySchema.parse が投げるのはこれ）。
+    await expect(runtime.recall(ctx, { limit: 0 })).rejects.toThrow(ZodError);
   });
 
   it("excludeProvenanceKinds に未知の値を渡すと拒否する", async () => {
     const { runtime } = buildRuntime();
+    // 上と同じ RecallQuerySchema.parse の呼び出しが投げる ZodError を検証する
+    // （describe が「RecallQuerySchema による入力検証」であり、このテストも同じ
+    // 検証経路を通る——契約は「zod によって拒否されること」である）。
     await expect(
       // @ts-expect-error 意図的に不正な値を渡す
       runtime.recall(ctx, { excludeProvenanceKinds: ["fabricated"] }),
-    ).rejects.toThrow();
+    ).rejects.toThrow(ZodError);
   });
 });
 

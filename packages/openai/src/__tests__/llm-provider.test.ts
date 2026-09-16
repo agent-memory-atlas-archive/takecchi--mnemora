@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { z } from "zod";
+import { z, ZodError } from "zod";
 import type { Ctx } from "@mnemora/core";
 import { OpenAILLMProvider } from "../llm-provider.js";
 
@@ -96,6 +96,12 @@ describe("OpenAILLMProvider.completeStructured", () => {
       client: { chat: { completions: { create } } } as never,
     });
 
+    // このテストの契約は「何らかの例外を投げること」だけであり、`kind` までは
+    // 主張していない（テスト名が「例外を投げる」としか言っていない）。空応答が
+    // `OpenAILLMProviderError(kind: "no_content")` になることは `refusal.test.ts`
+    // が `error.kind`/`error.message` の両方で精密に検証している——ここで型を
+    // 足すのは、その検証を弱い形で重複させ、内部表現に結合するだけになる
+    // （Issue #168 の項目「.toThrow() に引数が無い4箇所」の判定: ここは対象外）。
     await expect(
       provider.completeStructured(ctx, {
         prompt: { messages: [{ role: "user", content: "hi" }] },
@@ -113,11 +119,14 @@ describe("OpenAILLMProvider.completeStructured", () => {
       client: { chat: { completions: { create } } } as never,
     });
 
+    // テスト名が「スキーマに適合しなければ」と失敗理由を明示している——
+    // `req.schema.parse(...)`（llm-provider.ts）が投げるのは zod の ZodError であり、
+    // 別の理由（`no_content` 等）で失敗しても緑になってはいけない。
     await expect(
       provider.completeStructured(ctx, {
         prompt: { messages: [{ role: "user", content: "hi" }] },
         schema: sampleSchema,
       }),
-    ).rejects.toThrow();
+    ).rejects.toThrow(ZodError);
   });
 });
