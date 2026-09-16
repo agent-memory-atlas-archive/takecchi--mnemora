@@ -43,6 +43,11 @@ import type { RecallResult } from "./recall.js";
  *
  * **`packages/core` は「会話ログ全部だと何文字か」を知りようがない**（会話ログは
  * 呼び出し側にしか無い）。⟹ その値は必ず引数で受け取る。ここで推定しない。
+ *
+ * **同じ理由で、連想枠（`RecallQuery.association`、ADR 0151）が実際に何件を
+ * 本体へ昇格させるかも、`packages/core` は知りようがない**（ADR 0166）——
+ * `RecallFootprintShape.associationCount` として引数で受け取る。省略すれば
+ * 連想枠を使わない呼び出しと1バイトも変わらない。
  */
 
 // ---------------------------------------------------------------------------
@@ -342,6 +347,25 @@ export interface RecallFootprintShape {
   limit?: number;
   /** `RecallQuery.digestBandLimit`。省略時は `DEFAULT_DIGEST_BAND_LIMIT`。 */
   digestBandLimit?: number;
+  /**
+   * 連想枠（`RecallQuery.association`、ADR 0151）が実際に **本体（memories tier）へ
+   * 昇格させると見込む件数**。省略時は `0`（＝連想枠を一切使わない、これまでの呼び出しと
+   * 1バイトも変わらない。ADR 0166「後方互換」）。
+   *
+   * ⚠⚠ **これは `association.maxCount` ではない。**`packages/core` は「連想枠が実際に
+   * 何件を本体へ昇格させるか」を `memoryCountInScope` や `maxCount` だけから知りようがない
+   * ——実際の昇格件数は、除外集合の外に居る候補の**埋め込み空間上の類似度**
+   * （`minSimilarity` の閾値・アンカーごとの ANN 近傍分布）に依存する
+   * `recall-runtime.ts` の連想段を見よ）。これは `FullLogComparisonInput.fullLogChars`
+   * が「呼び出し側にしか無い値」として引数で渡されるのと同じ理由付けである
+   * ——ここで推定しない。呼び出し側が実測（`footprintSampleFromRecall` を使った較正）
+   * か、過去の実測から見積もった値を持っているときだけ渡すこと。
+   *
+   * **構造上の上限**: `memoryCountInScope - min(limit, memoryCountInScope)`
+   * （＝ `limit` の外に居る候補の総数）を超える分は、渡しても切り詰められる
+   * ——昇格できる候補がそれ以上存在しないため。
+   */
+  associationCount?: number;
 }
 
 /** 見積もりの内訳。**「なぜその数になったか」を後から説明できる形で返す**（北極星の問い3）。 */
@@ -355,8 +379,17 @@ export interface RecallFootprintEstimate {
    * 固定分（`fixedIndexChars`）は丸ごと `index` 側へ帰属させている。
    */
   byTier: { digest: number; index: number };
-  /** 返ると見積もった Memory の件数（= `min(limit, memoryCountInScope)`）。 */
+  /**
+   * 返ると見積もった Memory の件数
+   * （= `min(limit, memoryCountInScope) + associationCount`。後者は構造上の上限で
+   * 切り詰め済み。`shape.associationCount` を渡さなければ後者は常に0）。
+   */
   returnedMemories: number;
+  /**
+   * 連想枠によって本体へ昇格したと見積もった件数（切り詰め後）。
+   * `shape.associationCount` を渡さなければ常に `0`。
+   */
+  associationCount: number;
   /** 目次帯に載ると見積もった件数。 */
   bandEntries: number;
   /** 件数上限（`limit`）で切られているか。切られていれば、会話が伸びても digest tier は増えない。 */
@@ -387,14 +420,36 @@ function bandEntryChars(charsPerDigest: number): number {
 /**
  * `recall()` が積むであろう文字数を見積もる。**LLM を呼ばない。DB も引かない。**
  *
- * 式（すべて `recall-runtime.ts` の構造をそのまま写したもの）:
+ * 式（すべて `recall-runtime.ts` の構造をそのまま写したもの。ADR 0166 で
+ * `associationCount` の項を足した——`shape.associationCount` を渡さなければ
+ * `連想の件数 = 0` になり、下の式は ADR 0166 以前と1バイトも変わらない）:
  *
  * ```
- * 返る件数   = min(limit, memoryCountInScope)
- * 帯の件数   = min(digestBandLimit, memoryCountInScope - 返る件数)
- * 帯の費用   = min(帯の件数 × (63 + 1 + min(charsPerDigest, 120)), DIGEST_BAND_MAX_CHARS)
- * 合計       = fixedIndexChars + 返る件数 × charsPerDigest + 帯の費用
+ * 素の返る件数 = min(limit, memoryCountInScope)
+ * 連想の件数   = min(associationCount, memoryCountInScope - 素の返る件数)
+ * 返る件数     = 素の返る件数 + 連想の件数
+ * 帯の件数     = min(digestBandLimit, memoryCountInScope - 返る件数)
+ * 帯の費用     = min(帯の件数 × (63 + 1 + min(charsPerDigest, 120)), DIGEST_BAND_MAX_CHARS)
+ * 合計         = fixedIndexChars + 返る件数 × charsPerDigest + 帯の費用
  * ```
+ *
+ * **連想の項に、新しい自由係数を1つも足していない**（ADR 0166「決めたこと」）。
+ * 連想枠が実際にやっているのは「目次帯に載るはずだった候補を、`memories` tier へ
+ * 動かす」ことだけであり（`recall-runtime.ts` 段5の `excludeMemoryIds:
+ * finalMemories.map(...)` が、連想で昇格した候補も目次帯の対象から除く）、
+ * **`returnedMemories` を増やして `bandEligible` を減らす**という、既存の2項
+ * （`charsPerDigest` / `fixedIndexChars`）だけで表現できる形で足りる。
+ *
+ * ⟹ **これが 42〜162ターン行で費用が減り、322〜642ターン行で費用が増えるという
+ * 非単調な実測（ADR 0166「なぜ非単調か」）を、この式がそのまま説明する**——
+ * 帯が飽和していない領域（`bandEligible <= digestBandLimit`）では、昇格1件ごとに
+ * 帯の1件（費用 `63+1+min(charsPerDigest,120)`）が消え、本体の1件
+ * （費用 `charsPerDigest`）に置き換わる。このリポジトリの既定プロファイルでは
+ * `charsPerDigest`（≒15.5）が帯の1件の費用（≒79.5）より小さいため、**置き換えは
+ * 正味で費用を減らす。**帯が既に `digestBandLimit` で頭打ちの領域
+ * （`bandEligible > digestBandLimit`）では、昇格した候補はどのみち帯に表示されて
+ * いなかった（表示されるのは先頭 `digestBandLimit` 件だけ）ので、帯の費用は
+ * 変わらず、本体側の費用だけが純増する。
  */
 export function estimateRecallFootprint(
   shape: RecallFootprintShape,
@@ -404,7 +459,14 @@ export function estimateRecallFootprint(
   const limit = shape.limit ?? DEFAULT_RECALL_LIMIT;
   const bandLimit = shape.digestBandLimit ?? DEFAULT_DIGEST_BAND_LIMIT;
 
-  const returnedMemories = Math.min(limit, inScope);
+  const baseReturnedMemories = Math.min(limit, inScope);
+  const requestedAssociationCount = Math.max(0, shape.associationCount ?? 0);
+  // 構造上の上限: limit の外に居る候補の総数を超えては昇格できない。
+  const associationCount = Math.min(
+    requestedAssociationCount,
+    Math.max(0, inScope - baseReturnedMemories),
+  );
+  const returnedMemories = baseReturnedMemories + associationCount;
   const bandEligible = Math.max(0, inScope - returnedMemories);
   const bandEntries = Math.min(bandLimit, bandEligible);
 
@@ -424,6 +486,7 @@ export function estimateRecallFootprint(
     chars: digestChars + indexChars,
     byTier: { digest: digestChars, index: indexChars },
     returnedMemories,
+    associationCount,
     bandEntries,
     memoriesCappedByLimit: inScope > limit,
     bandSaturated: uncappedBandChars >= DIGEST_BAND_MAX_CHARS,

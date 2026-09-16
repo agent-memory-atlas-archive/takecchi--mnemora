@@ -1,6 +1,19 @@
 import { describe, expect, it, vi } from "vitest";
-import type { Ctx, ObserveInput, ObserveResult, RecallResult, Runtime } from "@mnemora/core";
-import { buildMnemoraPrompt, reportMemoryUsage } from "../mnemora-path.js";
+import type {
+  Ctx,
+  ObserveInput,
+  ObserveResult,
+  RecallQuery,
+  RecallResult,
+  Runtime,
+} from "@mnemora/core";
+import type { Conversation } from "../scenario.js";
+import {
+  DEFAULT_MNEMORA_PATH_ASSOCIATION,
+  buildMnemoraPrompt,
+  queryRecall,
+  reportMemoryUsage,
+} from "../mnemora-path.js";
 
 function recallWith(memories: RecallResult["memories"]): RecallResult {
   return {
@@ -18,6 +31,55 @@ function recallWith(memories: RecallResult["memories"]): RecallResult {
     explain: { stages: [] },
   };
 }
+
+/** `queryRecall` が `runtime.recall` に実際に渡した `RecallQuery` を捕まえるだけの fake。 */
+function fakeRuntimeCapturingQuery(captured: { query?: RecallQuery }): Runtime {
+  return {
+    recall: async (_ctx: Ctx, query: RecallQuery) => {
+      captured.query = query;
+      return recallWith([]);
+    },
+  } as unknown as Runtime;
+}
+
+const FAKE_CONVERSATION: Conversation = {
+  turns: [],
+  userUtterances: [],
+  query: "テストの質問",
+};
+
+describe("queryRecall（Issue #291 / ADR 0168: 既定で association を渡す）", () => {
+  it("opts.association を省略すると DEFAULT_MNEMORA_PATH_ASSOCIATION を渡す", async () => {
+    const captured: { query?: RecallQuery } = {};
+    const runtime = fakeRuntimeCapturingQuery(captured);
+
+    await queryRecall(runtime, { tenantId: "t" }, FAKE_CONVERSATION);
+
+    expect(captured.query?.text).toBe("テストの質問");
+    expect(captured.query?.association).toEqual(DEFAULT_MNEMORA_PATH_ASSOCIATION);
+  });
+
+  it("opts.association: null を渡すと association を渡さない（packages/core 既定の off のまま呼ぶ脱出口）", async () => {
+    const captured: { query?: RecallQuery } = {};
+    const runtime = fakeRuntimeCapturingQuery(captured);
+
+    await queryRecall(runtime, { tenantId: "t" }, FAKE_CONVERSATION, { association: null });
+
+    expect(captured.query?.association).toBeUndefined();
+    expect(captured.query && "association" in captured.query).toBe(false);
+  });
+
+  it("opts.association に明示的な値を渡すと、それをそのまま渡す（既定を上書きできる）", async () => {
+    const captured: { query?: RecallQuery } = {};
+    const runtime = fakeRuntimeCapturingQuery(captured);
+
+    await queryRecall(runtime, { tenantId: "t" }, FAKE_CONVERSATION, {
+      association: { maxCount: 3 },
+    });
+
+    expect(captured.query?.association).toEqual({ maxCount: 3 });
+  });
+});
 
 describe("buildMnemoraPrompt", () => {
   it("memories が0件なら index の行だけになる（空の digest 行は filter で落ちる）", () => {

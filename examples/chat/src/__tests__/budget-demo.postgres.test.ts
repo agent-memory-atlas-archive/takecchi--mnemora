@@ -42,11 +42,19 @@ import {
  * `usage.chars` の比較を提案していたが、それは実データでは成り立たない
  * （`budget-demo.ts` の `checkBudgetDemo` の doc 参照）。この歯は構造的に保証される
  * `byTier.digest` を見る。
- * - 検査していない: このデモの会話は `association` を申告しない（`cli.ts` の `chat` の
- *   経路をそのまま再現しているため）ので、`byTier.association` がここに現れることは無い。
- *   連想枠が budget の内側に入っていることは `packages/core` 側の
- *   `recall-association.test.ts` と、本 PR が足した
- *   `recall-budget-channel-registry.test.ts` が別途検査する。
+ * - ⚠ **追記（Issue #291 / ADR 0168）**: `queryRecall`（`mnemora-path.ts`）は
+ *   `RecallQuery.association` を既定で渡すようになった（`DEFAULT_MNEMORA_PATH_ASSOCIATION`
+ *   = `{ maxCount: 10 }`）ため、このデモの会話も `association` を申告している。
+ *   ⟹ `byTier.association` は欄として常に現れる（`RecallUsage.byTier.association` の
+ *   存在条件は「`association` を渡したかどうか」——`packages/core/src/recall.ts` の doc）。
+ *   `buildConversation(8)` はスコープ内総数が既定 `limit`(10) を超えないため、
+ *   段3.5が拾える「クエリの limit で既に返っている集合の外」の候補が無く、実測では
+ *   `byTier.association` は常に `0`（**検査していない**: 上の実測値
+ *   `chars=346`/`793` はこの `0` を含んだ値であり、association が非0になる規模
+ *   （`compare` の `over_limit` 行、ADR 0168）でこのデモ自体を測ってはいない）。
+ *   連想枠が budget の内側に収まることは `packages/core` 側の
+ *   `recall-association.test.ts` と `recall-budget-channel-registry.test.ts` が
+ *   別途検査する。
  */
 describe("examples/chat: budget-demo（budget あり/なし対比、本物の Postgres、Issue #306）", () => {
   it("budget を渡すと、memories tier（byTier.digest）が実際に減り、budget_dropped が出る", async () => {

@@ -1,14 +1,16 @@
 {
-  "_readme": "compare ベンチ(examples/chat の `compare` サブコマンド、北極星の物差し=mnemora/naive比)の基準値。scripts/compare-summary.mjs --baseline がこれを読む。retrieval-baseline.json / time-term-baseline.json と同じ考え方(『基準値をrepoにコミットし出所を添える』)を踏襲している。⚠ このベンチは他5本と違い、実測で2回のCI run(同一commit)が measuredAt を除いて完全一致したため(ADR 0133「測ったこと」)、⭐ 門にしている——mnemoraShareOfNaiveCharsの悪化とfactStatementSurvivedの退行(true→false)を検知するとexit 1になる(scripts/compare-summary-lib.mjs の computeRegressions)。⚠ CIのジョブがこのファイルを更新することはない(意図的な手作業のみ。ADR 0133参照)。",
+  "_readme": "compare ベンチ(examples/chat の `compare` サブコマンド、北極星の物差し=mnemora/naive比)の基準値。scripts/compare-summary.mjs --baseline がこれを読む。retrieval-baseline.json / time-term-baseline.json と同じ考え方(『基準値をrepoにコミットし出所を添える』)を踏襲している。⚠ このベンチは他5本と違い、実測で2回のCI run(同一commit)が measuredAt を除いて完全一致したため(ADR 0133「測ったこと」)、⭐ 門にしている——mnemoraShareOfNaiveCharsの悪化とfactStatementSurvivedの退行(true→false)を検知するとexit 1になる(scripts/compare-summary-lib.mjs の computeRegressions)。⚠ CIのジョブがこのファイルを更新することはない(意図的な手作業のみ。ADR 0133参照)。🔴 2026-09-16 追記(ADR 0168・Issue #291): examples/chat が recall() の連想枠を既定で使うようになったため、この基準値を更新した。値が退行に見えても、それはこの意図した変更の反映であり、bugではない——詳細は provenance.note と ADR 0168 を見ること。🔴🔴 2026-09-16 追記2(ADR 0170・Issue #339): turnCount=322 の行が、この直前の更新の時点では非決定だった(同一commitのCI再実行で mnemoraChars が 4481/4555/4558 と揺れる。ADR 0168 が固定した 4558 はその揺れの中の1点に過ぎなかった)。原因を直し(ADR 0170)、322行を再実測した値に差し替えた。他の11行は不変。",
   "schemaVersion": 1,
   "provenance": {
-    "commit": "d6a0092e8cdc31f821c0d89770080b5bd7d154d2",
-    "measuredAt": "2026-09-15T05:49:03.698Z",
-    "how": "gh run download 34934113298 -n compare で、この PR 自身の CI(example-chat ジョブ)が実際に生成した artifact compare.json を取得した。この作業環境には DATABASE_URL(本物の Postgres + pgvector)が無く、この bench をこの PR の作業者は一度も自分の手で実行していない(docs/autonomy.md §1.1)。この値は捏造ではなく、CI が実測した値である。",
-    "ciJob": "example-chat(pgvector/pgvector:pg17 の service container 上、本作業者はアクセスしていない)",
-    "providers": "llmMode=recorded / embeddingMode=recorded。⚠ ci.yml の compare ステップの当初のコメントは「OPENAI_API_KEYが無いためdeterministicで走る」としていたが、これは誤りだった(実測で判明。ADR 0133)——examples/chat/cassettes/compare.json が存在するため、OPENAI_API_KEY 無しでも decideProviderSource が『no-key』理由でrecorded(カセット再生)を選ぶ(examples/chat/src/providers.ts)。deterministic ではない。",
-    "repeatRuns": 2,
-    "note": "同一commit(d6a0092e8cdc31f821c0d89770080b5bd7d154d2)のCI runを2回実行し(run 34934113298のattempt1・attempt2)、measuredAtを除いてJSONが完全一致した(実際にdiffを取って確認済み。12行すべて含む)。⟹ 他5本のベンチ(decay/freshnessが実行ごとに揺れる、標本が小さい)と異なり、このベンチはrun間で揺れないことを実測した。だから⛔門にしない他5本とは異なり、このベンチは⭐門にしている。"
+    "commit": "6ca36aee8df9f49d758d90b2010518a8cc2b4c6b",
+    "measuredAt": "2026-09-16T00:40:54.973Z",
+    "how": "gh run download 35040893466 -n compare で、この PR(#336, ADR 0168)自身の CI(example-chat ジョブ)が実際に生成した artifact compare.json を取得した。この作業環境には元々 DATABASE_URL が無かったが、ADR 0167 と同じ方法で非特権 Postgres 17.11 + pgvector 0.8.0 クラスタをローカルに構築し、独立に同じ compare を実行して rows が完全に一致することを確認した上で、この基準値の本体には(手で数値を書かず)CI artifact をそのまま採用した。",
+    "ciJob": "example-chat(pgvector/pgvector:pg17 の service container 上、PR #336 の CI run 35040893466)",
+    "providers": "llmMode=recorded / embeddingMode=recorded（ADR 0133 で確定した通り、examples/chat/cassettes/compare.json の再生。deterministic ではない）。",
+    "repeatRuns": 1,
+    "note": "ADR 0168(Issue #291)により、queryRecall(mnemora-path.ts、compare/chat が使う想起経路)が既定で RecallQuery.association(maxCount=10)を渡すようになった。この基準値はその変更後の値である。旧値との対比: turnCount<=22の6行は不変(over_limitが起きないため連想枠は何も拾わない)。42/82/162ターンはmnemoraSharOfNaiveCharsが改善(61.7%→55.6%/74.5%→65.2%/84.7%→75.3%、目次帯の1件63字の固定費より本体への昇格コストが安いため)。322/642ターンは悪化(53.0%→56.0%/26.5%→27.6%、除外候補が目次帯の上限50件を超え連想枠が純追加になるため)——これがこの PR で唯一 ⭐ 門を赤くした理由であり、ADR 0168 が意図した変更である。再現性はこのPRのCI run 1回と、書き手が別環境(ローカルPostgres)で独立に走らせた測定の一致で確認した(ADR 0133 が行ったような同一commitのCI2回reRunは行っていない——1回のCI run + 独立環境での一致確認、という異なる形の裏取りである)。",
+    "reconfirmedAfterMainMerge": "2026-09-16: このブランチへ origin/main を2回取り込んだ(8e11663=PR #334 validAtゲート/Issue #280/ADR 0164、1021a93=PR #335 decay活動時計/Issue #305/ADR 0165、いずれも migration を含む)後、この PR 自身の CI run 35045819349(head 3b854e3、example-chat ジョブ)が生成した compare.json artifact を取得し、rows 12件を measuredAt を除いて突き合わせたところ、上記の値と1バイトも違わなかった(node で JSON.stringify した各フィールドをrow単位で比較)。⟹ #334/#335 は compare の実測値を動かしていない(validAt ゲートは valid_from/valid_until を使わないシナリオでは効かず、decay 活動時計は既定 'wall' で非破壊のため)。この事実確認のためだけであり、rows 自体はどちらの CI run(35040893466 / 35045819349)から取っても同じなので更新していない——ADR 0133 決定1が言う『CI artifact をそのまま基準値の本体にする』の対象は変わらず ADR 0168 が最初に固定した35040893466のままで正しい。",
+    "secondUpdate": "2026-09-16(ADR 0170・Issue #339): 上記の 322 行(4558)は、実は同一commitのCI再実行で 4481/4555/4558 と揺れる非決定値だった——ADR 0168 はこの揺れを検知しないまま最初に観測した値をそのまま基準値にしていた。原因(PostgresVectorStore.searchのORDER BYがADR 0167で足したmemory_id tie-breakに依存しており、memory_idがingestのたびに振り直されるランダムなUUIDであるため、重複コンテンツの多いこのベンチでfresh ingestごとに勝者が変わっていた)をADR 0170で直した。この PR 自身の CI run 35050847242 に対し、同一 job(examples/chat)を gh run rerun --job で2回追加実行し(計3回、attempt 1/2/3)、artifact ID直指定(10428986922 / 10429345663 / 10429615448)でそれぞれ取得した——measuredAt(2026-09-16T03:13:12.136Z / T03:20:28.517Z / T03:23:51.317Z、3つとも別物であることを確認済み)を除いて rows 12件すべてが3回ともバイト単位で一致した(node でJSON.stringifyしたrows配列をdiff)。⟹ 322行を新しい値(mnemoraChars=4547、mnemoraShareOfNaiveChars=0.5590115564298008)に差し替えた。他11行(642行を含む)はこのCI run群でも1バイトも変わっていない——642行はmnemoraCharsの値としては修正前後で不変だが、連想枠の中身(externalIdの集合)は修正前は非決定だったことをローカル実測で別途確認している(ADR 0170参照。この基準値ファイルはmnemoraCharsしか持たないため、その事実はここには現れない)。"
   },
   "llmMode": "recorded",
   "embeddingMode": "recorded",
@@ -117,9 +119,9 @@
       "turnCount": 42,
       "naiveChars": 1048,
       "naiveTokens": 684,
-      "mnemoraChars": 647,
-      "mnemoraTokens": 293,
-      "mnemoraShareOfNaiveChars": 0.6173664122137404,
+      "mnemoraChars": 583,
+      "mnemoraTokens": 277,
+      "mnemoraShareOfNaiveChars": 0.5562977099236641,
       "totalInScope": 14,
       "omitted": [
         {
@@ -128,7 +130,7 @@
           "countKind": "exact"
         }
       ],
-      "returnedCount": 10,
+      "returnedCount": 11,
       "annCandidateCount": 14,
       "factStatementSurvived": true
     },
@@ -137,9 +139,9 @@
       "turnCount": 82,
       "naiveChars": 2064,
       "naiveTokens": 1351,
-      "mnemoraChars": 1537,
-      "mnemoraTokens": 635,
-      "mnemoraShareOfNaiveChars": 0.7446705426356589,
+      "mnemoraChars": 1345,
+      "mnemoraTokens": 587,
+      "mnemoraShareOfNaiveChars": 0.6516472868217055,
       "totalInScope": 25,
       "omitted": [
         {
@@ -148,7 +150,7 @@
           "countKind": "exact"
         }
       ],
-      "returnedCount": 10,
+      "returnedCount": 13,
       "annCandidateCount": 25,
       "factStatementSurvived": true
     },
@@ -157,9 +159,9 @@
       "turnCount": 162,
       "naiveChars": 4083,
       "naiveTokens": 2674,
-      "mnemoraChars": 3459,
-      "mnemoraTokens": 1366,
-      "mnemoraShareOfNaiveChars": 0.8471711976487877,
+      "mnemoraChars": 3075,
+      "mnemoraTokens": 1272,
+      "mnemoraShareOfNaiveChars": 0.7531227038941954,
       "totalInScope": 49,
       "omitted": [
         {
@@ -168,7 +170,7 @@
           "countKind": "exact"
         }
       ],
-      "returnedCount": 10,
+      "returnedCount": 16,
       "annCandidateCount": 49,
       "factStatementSurvived": true
     },
@@ -177,9 +179,9 @@
       "turnCount": 322,
       "naiveChars": 8134,
       "naiveTokens": 5332,
-      "mnemoraChars": 4307,
-      "mnemoraTokens": 1698,
-      "mnemoraShareOfNaiveChars": 0.5295057782149004,
+      "mnemoraChars": 4547,
+      "mnemoraTokens": 1875,
+      "mnemoraShareOfNaiveChars": 0.5590115564298008,
       "totalInScope": 95,
       "omitted": [
         {
@@ -188,7 +190,7 @@
           "countKind": "exact"
         }
       ],
-      "returnedCount": 10,
+      "returnedCount": 20,
       "annCandidateCount": 95,
       "factStatementSurvived": true
     },
@@ -197,9 +199,9 @@
       "turnCount": 642,
       "naiveChars": 16223,
       "naiveTokens": 10636,
-      "mnemoraChars": 4306,
-      "mnemoraTokens": 1695,
-      "mnemoraShareOfNaiveChars": 0.26542563027800037,
+      "mnemoraChars": 4476,
+      "mnemoraTokens": 1850,
+      "mnemoraShareOfNaiveChars": 0.2759045799174012,
       "totalInScope": 189,
       "omitted": [
         {
@@ -208,7 +210,7 @@
           "countKind": "exact"
         }
       ],
-      "returnedCount": 10,
+      "returnedCount": 20,
       "annCandidateCount": 189,
       "factStatementSurvived": true
     }

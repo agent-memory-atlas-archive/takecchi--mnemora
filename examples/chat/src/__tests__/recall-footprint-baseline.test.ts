@@ -45,6 +45,22 @@ const baseline = JSON.parse(readFileSync(baselinePath, "utf8")) as BaselineFile;
 const rows = baseline.rows;
 
 /**
+ * ADR 0166: `queryRecall`（`mnemora-path.ts`）は連想枠を既定で使う（ADR 0168、`maxCount=10`）。
+ * ⟹ `row.returnedCount` は「素の返る件数（`min(DEFAULT_RECALL_LIMIT, totalInScope)`）」
+ * だけでなく、**連想枠が本体へ昇格させた件数**も含む。
+ *
+ * `estimateRecallFootprint` はこの昇格件数を `associationCount` として受け取る
+ * （`packages/core` は `maxCount` から実際の昇格件数を知りようがないため、呼び出し側=この歯が
+ * 実測から渡す。`recall-footprint.ts` の `RecallFootprintShape.associationCount` の doc）。
+ * **`row.returnedCount` は既に実測値**なので、ここから逆算するのは
+ * 「推定」ではなく「実測を較正の入力に変換しているだけ」である。
+ */
+function associationCountForRow(row: BaselineRow): number {
+  const baseReturned = Math.min(DEFAULT_RECALL_LIMIT, row.totalInScope);
+  return Math.max(0, row.returnedCount - baseReturned);
+}
+
+/**
  * ⚠ **なぜ 2.5% か**（実測ぎりぎりに置かない理由）。
  *
  * このファイルが実際に検算した値では、12行全体の最大誤差は **2ターン行
@@ -99,7 +115,10 @@ describe("calibrateRecallFootprint — hold-in 7行での較正", () => {
     it.each(holdOutRows)(
       "hold-out: turnCount=$turnCount (totalInScope=$totalInScope) の誤差が許容誤差以内",
       (row) => {
-        const est = estimateRecallFootprint({ memoryCountInScope: row.totalInScope }, calibrated);
+        const est = estimateRecallFootprint(
+          { memoryCountInScope: row.totalInScope, associationCount: associationCountForRow(row) },
+          calibrated,
+        );
         const err = relativeError(est.chars, row.mnemoraChars);
         expect(err).toBeLessThanOrEqual(ACCURACY_TOLERANCE);
       },
@@ -107,7 +126,10 @@ describe("calibrateRecallFootprint — hold-in 7行での較正", () => {
 
     it("12行全体(較正に使った7行 + hold-outの5行)の最大誤差が許容誤差以内", () => {
       const errors = rows.map((row) => {
-        const est = estimateRecallFootprint({ memoryCountInScope: row.totalInScope }, calibrated);
+        const est = estimateRecallFootprint(
+          { memoryCountInScope: row.totalInScope, associationCount: associationCountForRow(row) },
+          calibrated,
+        );
         return relativeError(est.chars, row.mnemoraChars);
       });
       const maxErr = Math.max(...errors);
@@ -135,7 +157,10 @@ describe("calibrateRecallFootprint — hold-in 7行での較正", () => {
       (row) => {
         const result = compareWithFullLog({
           fullLogChars: row.naiveChars,
-          shape: { memoryCountInScope: row.totalInScope },
+          shape: {
+            memoryCountInScope: row.totalInScope,
+            associationCount: associationCountForRow(row),
+          },
           profile: calibrated,
         });
 
@@ -155,7 +180,10 @@ describe("calibrateRecallFootprint — hold-in 7行での較正", () => {
       if (!row) throw new Error("baseline row not found: turnCount=8");
       const result = compareWithFullLog({
         fullLogChars: row.naiveChars,
-        shape: { memoryCountInScope: row.totalInScope },
+        shape: {
+          memoryCountInScope: row.totalInScope,
+          associationCount: associationCountForRow(row),
+        },
         profile: calibrated,
       });
       expect(result.verdict).toBe("full_log_smaller");
@@ -175,7 +203,7 @@ describe("BUILTIN_RECALL_FOOTPRINT_PROFILE（既定プロファイル）でも�
     const maxErrDefault = Math.max(
       ...rows.map((row) => {
         const est = estimateRecallFootprint(
-          { memoryCountInScope: row.totalInScope },
+          { memoryCountInScope: row.totalInScope, associationCount: associationCountForRow(row) },
           BUILTIN_RECALL_FOOTPRINT_PROFILE,
         );
         return relativeError(est.chars, row.mnemoraChars);
@@ -183,7 +211,10 @@ describe("BUILTIN_RECALL_FOOTPRINT_PROFILE（既定プロファイル）でも�
     );
     const maxErrCalibrated = Math.max(
       ...rows.map((row) => {
-        const est = estimateRecallFootprint({ memoryCountInScope: row.totalInScope }, calibrated);
+        const est = estimateRecallFootprint(
+          { memoryCountInScope: row.totalInScope, associationCount: associationCountForRow(row) },
+          calibrated,
+        );
         return relativeError(est.chars, row.mnemoraChars);
       }),
     );

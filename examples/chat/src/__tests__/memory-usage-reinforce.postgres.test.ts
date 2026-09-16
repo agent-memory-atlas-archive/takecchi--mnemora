@@ -79,8 +79,20 @@ describe("examples/chat: reportMemoryUsage → reinforce が本物の Postgres �
 
       await ingestConversation(handle.runtime, ctx, conversation);
 
+      // ⚠ `association: null`（Issue #291 / ADR 0168 追記）: `queryRecall` は
+      // ADR 0168 以降、既定で連想枠（`maxCount=10`）を渡す。この歯の前提
+      // （limit=10 の外に「一度も返らない対照群」が必ず残ること）は、
+      // 総数16件・除外6件のうち連想枠が拾える範囲（`maxCount=10`）に
+      // 収まってしまうと崩れる——実際に擬似 embedding では6件全部が連想枠に
+      // 吸収され、`recall1.memories.length` が16（絞り込み無し）になった
+      // （この歯が最初に検知した）。この歯が検査しているのは reinforce の
+      // 選別（Issue #301）であり連想枠ではないため、`association: null` で
+      // `packages/core` 側の既定（off）のまま呼び、対照群が構造的に残る
+      // という本来の前提を保つ。
+      const recallOpts = { association: null } as const;
+
       // --- 1回目の recall + 使用報告(t0) ---
-      const recall1 = await queryRecall(handle.runtime, ctx, conversation);
+      const recall1 = await queryRecall(handle.runtime, ctx, conversation, recallOpts);
       expect(recall1.index.totalInScope).toBe(16);
       expect(recall1.memories.length).toBeLessThan(16); // 前提: 実際に絞り込みが起きている
       const usedIds1 = new Set(recall1.memories.map((m) => m.memoryId));
@@ -90,7 +102,7 @@ describe("examples/chat: reportMemoryUsage → reinforce が本物の Postgres �
       // --- t1 = t0+200h に進めて、2回目の recall + 使用報告 ---
       const t1 = new Date(t0.getTime() + 200 * 60 * 60 * 1000);
       clock.set(t1);
-      const recall2 = await queryRecall(handle.runtime, ctx, conversation);
+      const recall2 = await queryRecall(handle.runtime, ctx, conversation, recallOpts);
       // 前提: 全件がまだ同じ基準時刻から一様に減衰しているため、順位はまだ動かず
       // 同じ10件が返ってくるはず(この前提が崩れたらこの歯は無意味になる)。
       const usedIds2 = new Set(recall2.memories.map((m) => m.memoryId));

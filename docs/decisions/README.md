@@ -178,6 +178,9 @@ alteroid (github.com/takecchi/alteroid) を根拠として引く箇所は、確�
 | [0163](./0163-memory-usage-reporting-example-chat.md) | `examples/chat` が `memory_usage` を報告する — `reinforce` を実アプリで発火させる（Issue #301） | 採用 (2026-09) |
 | [0164](./0164-valid-from-until-recall.md) | recall に `validAt` ゲートを足す — 段1へ押し下げ、`expired`/`not_yet_valid` で名指しする（Issue #280、Issue #202 第2弾） | 採用 (2026-09) |
 | [0165](./0165-decay-activity-clock.md) | 減衰の時計を2本にする — 壁時計（`decay_floor_at`）に加えて活動時計（`decay_floor_seq`）を持ち、テナントが選ぶ | 採用 (2026-09) |
+| [0166](./0166-recall-footprint-association-term.md) | `recall-footprint` の見積もりに連想枠の項を足す — 新しい自由係数は増やさず、構造から導く（PR #336 / ADR 0168 の前提） | 採用 (2026-09) |
 | [0167](./0167-association-getvectors-order-nondeterminism.md) | 連想枠（段3.5）の非決定性の原因は HNSW ではなく `getVectors()` の返却順依存だった — アンカー処理順をランク順に固定して直す（Issue #316） | 採用 (2026-09) |
+| [0168](./0168-examples-chat-uses-association.md) | `examples/chat` が recall() の連想枠を既定で使う — `maxCount=10`、既定 on は別の判断として分離する（Issue #291） | 採用 (2026-09) |
+| [0170](./0170-association-search-tiebreak-nondeterminism.md) | 連想枠の非決定性・第2段 — `search()` の完全一致タイと、`memory_id` tie-break が fresh ingest ごとに揺れる根本原因を直す（Issue #339） | 採用 (2026-09) |
 
 <!-- ADR-INDEX:GENERATED:END -->

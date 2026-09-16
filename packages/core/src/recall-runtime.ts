@@ -122,6 +122,41 @@ type ScoredCandidate = {
 };
 
 /**
+ * 段2（再スコア）の並び順。`score.total` 降順が主キーで、**同点のときのタイブレークを
+ * 明示する**（Issue #339 / ADR 0170）。
+ *
+ * **なぜ `packages/core` 自身がタイブレークを持つか**: `Array.prototype.sort` は
+ * 安定（ES2019+）なので、これが無ければ同点候補は adapter が返した順序をそのまま
+ * 保つ。`PostgresVectorStore.search()` は距離 → `recorded_at` DESC → `memory_id` の
+ * 3段で決定的に並べる（ADR 0170）が、**`lexical` チャンネル
+ * （`PostgresLexicalStore.search()`、`ORDER BY coverage DESC, rank DESC` に
+ * 完全なタイブレークが無い）や `testkit`/テスト用の fake 実装が同じ保証を持つとは
+ * 限らない。**ここで明示のタイブレークを足し、`packages/core` 自身が adapter の
+ * 返却順に依存しないようにする**（多層防御。ADR 0034/0056/0059 と同じ考え方
+ * ——正しさの担保を1箇所に置かない）。
+ *
+ * 1. `score.total` 降順。
+ * 2. 実効時刻（`occurredAt ?? recordedAt`、ADR 0039）降順——新しい方を先に。
+ * 3. `memory.id` 昇順——最終フォールバック。**ここまで落ちたとき**（`score.total` と
+ *    実効時刻の両方が完全一致したとき）は、`memory.id` が ingest のたびに
+ *    振り直されるランダムな UUID である adapter（`PostgresMemoryStore`）の場合、
+ *    **決定的だが fresh ingest をまたいで再現するとは限らない**——
+ *    `vector-store.ts` の3段目の tie-break と同じ性質の限界を引き継ぐ
+ *    （ADR 0170「確かめていないこと」）。
+ *
+ * テストからも直接呼べるよう、export する（`threshold-partition.test.ts` が
+ * `partitionByThreshold` を直接 import しているのと同じ作法）。
+ */
+export function compareScoredCandidates(a: ScoredCandidate, b: ScoredCandidate): number {
+  const scoreDiff = b.score.total - a.score.total;
+  if (scoreDiff !== 0) return scoreDiff;
+  const aTime = (a.memory.occurredAt ?? a.memory.recordedAt).getTime();
+  const bTime = (b.memory.occurredAt ?? b.memory.recordedAt).getTime();
+  if (aTime !== bTime) return bTime - aTime;
+  return a.memory.id < b.memory.id ? -1 : a.memory.id > b.memory.id ? 1 : 0;
+}
+
+/**
  * 段2の閾値比較の結果を、**網羅的な三分割**にする（ADR 0044）。
  *
  * **⚠ 以前は `filter(total >= t)` と `filter(total < t)` の2本を独立に走らせていた。
@@ -700,7 +735,9 @@ export async function runRecall(
       };
     },
   );
-  scored.sort((a, b) => b.score.total - a.score.total);
+  // `score.total` が同点のときのタイブレークは `compareScoredCandidates` の doc
+  // コメント参照（Issue #339 / ADR 0170）。
+  scored.sort(compareScoredCandidates);
 
   const scoreThreshold = validatedQuery.scoreThreshold ?? DEFAULT_SCORE_THRESHOLD;
   const partition = partitionByThreshold(scored, scoreThreshold);
@@ -1038,6 +1075,24 @@ export async function runRecall(
           }
         }
         // アンカーとの類似度降順に並べ、maxCount 件まで採る（docs/recall.md §9.2 手順6）。
+        //
+        // ⚠ **同点（similarity が完全一致）のときの並びは、意図して明示のタイブレークを
+        // 足さず、`vectorStore.search()` が返す順序にそのまま委ねている**（Issue #339 /
+        // ADR 0170、決めたこと）。`Array.prototype.sort` は安定（ES2019+）——同点候補は
+        // `associationHits`（= アンカーを `anchorIds` の順に処理し、各アンカーの
+        // `hits` を search() が返した順のまま push した配列）の挿入順を保つ。
+        // `VectorStore.search()` の doc（`packages/core/src/interfaces/vector-store.ts`）が
+        // 「同点のときの順序まで含めて adapter の責務」と明記しており、
+        // `PostgresVectorStore.search()` は距離 → `recorded_at` DESC → `memory_id` の
+        // 3段で決定的に並べる（同ファイルのクラス doc 参照）——**この段（recall-runtime.ts）
+        // 自身に memoryId 等での再タイブレークを重ねて足すと、adapter が既に確定した
+        // 順序（`recorded_at` に基づく、意味のある順序）を、無関係な UUID の辞書順で
+        // 上書きしてしまい、かえって adapter 側の修正を無効化する**。⟹ ここでは
+        // 「adapter が完全な順序を返す」契約に乗り、`recall-runtime.ts` 側では
+        // 何もしないことを選んだ（`scored.sort`、上の段2とは違う選択——あちらは
+        // `lexical` チャンネルの adapter 側の tie-break が不完全なままなので
+        // 多層防御を足したが、こちらは Memory を取得する前で `occurredAt`/`recordedAt`
+        // を持たず、同じ多層防御を足すには追加の DB 往復が要る。ADR 0170「採らなかった案」）。
         associationHits.sort((a, b) => b.similarity - a.similarity);
         const selectedHits = associationHits.slice(0, associationQuery.maxCount);
         const associationMemories =

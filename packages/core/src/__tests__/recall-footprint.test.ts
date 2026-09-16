@@ -8,7 +8,9 @@ import {
   footprintSampleFromRecall,
   type RecallFootprintProfile,
   type RecallFootprintSample,
+  type RecallFootprintShape,
 } from "../recall-footprint.js";
+import { DEFAULT_RECALL_LIMIT } from "../recall.js";
 import type { DigestEntry, RecallResult, RecalledMemory } from "../recall.js";
 
 /**
@@ -105,6 +107,129 @@ describe("estimateRecallFootprint — 帯が飽和した後は件数を増やし
     expect(b.bandEntries).toBe(a.bandEntries);
     // ⭐ chars 自体が増えない（会話が伸びても mnemora 側は伸びないという主張の核）。
     expect(b.chars).toBe(a.chars);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// associationCount（ADR 0166）— 連想枠の項
+// ---------------------------------------------------------------------------
+
+/**
+ * ⭐ **後方互換の歯**（ADR 0166、オーナーが名指しで要求したもの）。
+ *
+ * `shape.associationCount` を**渡さない**呼び出しは、ADR 0166 より前と
+ * 1ビットも変わらないことを、`toEqual` で丸ごと検査する
+ * ——特定の欄だけを見比べると、見落とした欄が静かに変わっていても気づけない。
+ */
+describe("estimateRecallFootprint — associationCount を渡さない呼び出しは、ADR 0166 より前と1ビットも変わらない（後方互換）", () => {
+  const shapesWithoutAssociation: RecallFootprintShape[] = [
+    { memoryCountInScope: 0 },
+    { memoryCountInScope: 5, limit: 10 },
+    { memoryCountInScope: 30, limit: 10 },
+    { memoryCountInScope: 100, limit: 10 },
+    { memoryCountInScope: 100_000, limit: 10 },
+  ];
+
+  it.each(shapesWithoutAssociation)(
+    "%o — 省略時と associationCount: 0 を明示したときの見積もりが完全に一致する",
+    (shape) => {
+      const omitted = estimateRecallFootprint(shape, shapeTestProfile);
+      const explicitZero = estimateRecallFootprint(
+        { ...shape, associationCount: 0 },
+        shapeTestProfile,
+      );
+      expect(omitted).toEqual(explicitZero);
+      // associationCount を渡していないのだから、昇格は起きていない。
+      expect(omitted.associationCount).toBe(0);
+    },
+  );
+
+  it("省略時の見積もりは、ADR 0166 以前の式（returnedMemories = min(limit, memoryCountInScope)）と一致する", () => {
+    // ADR 0166 以前の式をそのままここに複製し、実装から独立に検算する。
+    function preAdr0166(shape: { memoryCountInScope: number; limit?: number }) {
+      const inScope = Math.max(0, shape.memoryCountInScope);
+      const limit = shape.limit ?? DEFAULT_RECALL_LIMIT;
+      const bandLimit = 50; // DEFAULT_DIGEST_BAND_LIMIT
+      const returnedMemories = Math.min(limit, inScope);
+      const bandEligible = Math.max(0, inScope - returnedMemories);
+      const bandEntries = Math.min(bandLimit, bandEligible);
+      const perEntry = 63 + 1 + Math.min(shapeTestProfile.charsPerDigest, 120);
+      const bandChars = Math.min(bandEntries * perEntry, 4000);
+      const digestChars = returnedMemories * shapeTestProfile.charsPerDigest;
+      const indexChars = shapeTestProfile.fixedIndexChars + bandChars;
+      return { returnedMemories, bandEntries, chars: digestChars + indexChars };
+    }
+
+    for (const shape of shapesWithoutAssociation) {
+      const expected = preAdr0166(shape);
+      const actual = estimateRecallFootprint(shape, shapeTestProfile);
+      expect(actual.returnedMemories).toBe(expected.returnedMemories);
+      expect(actual.bandEntries).toBe(expected.bandEntries);
+      expect(actual.chars).toBe(expected.chars);
+    }
+  });
+});
+
+describe("estimateRecallFootprint — associationCount（連想枠が本体へ昇格させた件数）", () => {
+  it("帯が件数で飽和していない領域では、昇格1件ごとに『帯の1件』が『本体の1件』に置き換わる", () => {
+    // shapeTestProfile: charsPerDigest=100, fixedIndexChars=100。
+    // memoryCountInScope=30, limit=10 ⟹ 素の返る件数=10、帯資格=20（bandLimit=50未満、非飽和）。
+    const without = estimateRecallFootprint(
+      { memoryCountInScope: 30, limit: 10 },
+      shapeTestProfile,
+    );
+    const withAssociation = estimateRecallFootprint(
+      { memoryCountInScope: 30, limit: 10, associationCount: 3 },
+      shapeTestProfile,
+    );
+
+    expect(without.bandEntries).toBe(20);
+    expect(withAssociation.returnedMemories).toBe(13); // 10 + 3
+    expect(withAssociation.associationCount).toBe(3);
+    expect(withAssociation.bandEntries).toBe(17); // 20 - 3（帯から本体へ移った）
+
+    // 1件あたり: 帯の費用(63+1+min(100,120)=164) が消え、本体の費用(charsPerDigest=100) が増える。
+    // 差は 3 × (100 - 164) = -192（正味で減る）。
+    expect(withAssociation.chars).toBe(without.chars - 3 * 64);
+  });
+
+  it("帯が件数で既に飽和している領域では、昇格は帯の費用を減らさず、本体側の費用だけ純増する", () => {
+    // memoryCountInScope=100, limit=10 ⟹ 帯資格=90 > bandLimit(50) ⟹ 帯は件数で頭打ち。
+    const without = estimateRecallFootprint(
+      { memoryCountInScope: 100, limit: 10 },
+      shapeTestProfile,
+    );
+    const withAssociation = estimateRecallFootprint(
+      { memoryCountInScope: 100, limit: 10, associationCount: 5 },
+      shapeTestProfile,
+    );
+
+    expect(without.bandEntries).toBe(50);
+    expect(withAssociation.returnedMemories).toBe(15); // 10 + 5
+    expect(withAssociation.bandEntries).toBe(50); // 帯資格 85 はまだ50を超えるので変わらない
+    // 帯の費用は変わらない(どちらも DIGEST_BAND_MAX_CHARS で頭打ち) ので、
+    // 本体側の増分(5 × charsPerDigest=100 = 500)がそのまま純増になる。
+    expect(withAssociation.chars).toBe(without.chars + 5 * shapeTestProfile.charsPerDigest);
+  });
+
+  it("associationCount が limit の外に居る候補の総数を超えていたら、構造上の上限で切り詰める", () => {
+    // memoryCountInScope=12, limit=10 ⟹ limit の外は2件しかいない。
+    const est = estimateRecallFootprint(
+      { memoryCountInScope: 12, limit: 10, associationCount: 999 },
+      shapeTestProfile,
+    );
+    expect(est.associationCount).toBe(2);
+    expect(est.returnedMemories).toBe(12); // 全件が本体へ入り、帯は空になる
+    expect(est.bandEntries).toBe(0);
+  });
+
+  it("負の associationCount は 0 として扱う（構造上ありえない値を静かに受け入れない）", () => {
+    const est = estimateRecallFootprint(
+      { memoryCountInScope: 30, limit: 10, associationCount: -5 },
+      shapeTestProfile,
+    );
+    expect(est.associationCount).toBe(0);
+    expect(est.returnedMemories).toBe(10);
   });
 });
 

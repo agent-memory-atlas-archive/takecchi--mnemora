@@ -186,6 +186,26 @@ export interface VectorHit {
  */
 export interface VectorStore {
   upsert(ctx: Ctx, space: EmbeddingSpaceId, memoryId: MemoryId, vector: number[]): Promise<void>;
+  /**
+   * 距離昇順で最大 `opts.limit` 件を返す。
+   *
+   * **⚠ 距離が完全に一致する行が複数あるときの順序も、adapter の責務である**
+   * （Issue #339 / [ADR 0170](../../../../docs/decisions/0170-association-search-tiebreak-nondeterminism.md)）。
+   * `recall-runtime.ts` の段2（再スコア）・段3.5（連想枠、ADR 0151）は、どちらも
+   * `search()` が返す配列の**先頭から `limit`/`maxCount` 件を切り詰める**——
+   * `Array.prototype.sort` は安定（ES2019+）なので、距離が同点の候補は
+   * `search()` が返した順序をそのまま保つ。⟹ **同点候補が adapter ごとに違う順序で
+   * 返ると、`recall()` の結果が同じ入力・同じスコアに対して変わりうる。**
+   *
+   * `PostgresVectorStore` は距離 → `recorded_at` DESC → `memory_id` の3段で
+   * tie-break する（`packages/postgres/src/vector-store.ts` のクラス doc 参照）。
+   * **`memory_id` だけに頼る tie-break（ADR 0167 が最初に足した形）は不十分**
+   * だった——`memory_id` はテナントの内容とは無関係な、ingest のたびに新しく
+   * 振られる値であり、同一内容が重複記録される場面（例: `examples/chat` の
+   * `compare` が使う合成会話）では、DB を作り直すたびに同点候補の並び順が変わる。
+   * **adapter を新しく書くときは、距離だけでなく完全なタイブレークまで含めて
+   * 決定的な順序を返すこと。**
+   */
   search(
     ctx: Ctx,
     space: EmbeddingSpaceId,

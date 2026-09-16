@@ -30,8 +30,31 @@ function parseVectorLiteral(literal: string): number[] {
  *
  * `search` の `ORDER BY` には距離演算子の結果をそのまま昇順で書く（式にしない）。
  * これは docs/memory-model.md §10「規約」であり、`testkit`/`packages/postgres` の
- * `EXPLAIN` 検査対象そのものである。第2キーに `memory_id` を足してある
- * （距離が完全一致する行の tie-break、ADR 0167）。
+ * `EXPLAIN` 検査対象そのものである。
+ *
+ * **tie-break は3段**（Issue #339 / ADR 0170。ADR 0167 で足した `memory_id` 単独の
+ * tie-break は Issue #339 で不十分と判明した——`memory_id` は ingest のたびに
+ * `gen_random_uuid()` で新しく振られるランダムな UUID であり、同一 DB 内では
+ * 決定的でも、**DB を作り直す（fresh ingest）たびに勝者が変わる**。同一内容が
+ * 複数の Memory として重複記録される場面（`examples/chat` の `compare` が使う
+ * 合成会話は、少数の filler 文を100回以上使い回すため実際に埋め込みが bit-for-bit
+ * 一致する重複を大量に作る）で、この揺れが実際に⭐門の数字を動かした）:
+ *
+ * 1. 距離（そのまま昇順）。
+ * 2. `m.recorded_at`（降順——新しい方を先に。ingest はテナント内で逐次的に行われる
+ *    ため、同じ内容を何度作り直して ingest しても、**相対順序は再現する**——
+ *    `memory_id` と違って、値そのものはテナントの処理順に紐づく）。
+ * 3. `e.memory_id`（最終フォールバック）。**`recorded_at` まで完全一致したとき**
+ *    （同一トランザクション内の複数書き込み、あるいは同一ミリ秒内の連続書き込みで
+ *    起こりうる——`packages/core/src/runtime.ts` は `clock.now()` を呼び出しごとに
+ *    評価するため理論上は稀だが、否定はできない）だけ、ここへ落ちる。**この場合、
+ *    まさに ADR 0167 が足した動作（ランダム UUID 順）に戻る**——`recorded_at` が
+ *    競合した特定の行どうしの間でだけ、ingest ごとに順序が変わりうる。それ以外の
+ *    行（`recorded_at` が競合しない行）の順序には影響しない。
+ *
+ * **⟹ この3段を足しても「タイが起こらない」ことは保証しない。**保証しているのは
+ * 「`recorded_at` が競合しない限り、fresh ingest をまたいで順序が再現する」ことだけ
+ * である（ADR 0170「確かめていないこと」参照）。
  *
  * テーブルは事前に `registerEmbeddingSpace`（`./vector-space.ts`）で作られている前提。
  * 未登録の空間に対して呼ぶと Postgres の `relation does not exist` エラーになる
@@ -132,18 +155,21 @@ export class PostgresVectorStore implements VectorStore {
     const whereClause = sql.join(conditions, sql` AND `);
 
     // ORDER BY には距離演算子の結果をそのまま昇順で置く（式にしない。docs/recall.md §3）。
-    // `e.memory_id` を第2キーに足す（ADR 0167）——距離が完全一致する行が2件以上あるとき
-    // （例: 同一内容が別 memory として複数回記録された場合）、tie-break が無いと
-    // Postgres の内部順（物理配置・実行計画）に左右されて非決定的になる。
-    // ⚠ これ単独では Issue #316 の主因は直らない（主因は `getVectors()` 側の呼び出し順、
-    // ADR 0167 参照）——ここでの重複は「まだ実測していない、将来のデータ次第の潜在バグ」
-    // への予防であり、「決定性を名乗る以上、無いのは欠陥」という理由で足す。
+    // tie-break はクラス doc コメント（このファイル冒頭）のとおり3段
+    // （距離 → `m.recorded_at` DESC → `e.memory_id`、Issue #339 / ADR 0170）。
+    // **ADR 0167 が足した `e.memory_id` 単独の tie-break では、Issue #339 で
+    // 不十分と判明した**——`memory_id` は fresh ingest のたびにランダムに振り直される
+    // ため、同一内容の重複行が多数あるとき（`examples/chat` の `compare` の filler
+    // 会話がまさにこれを作る）、tie-break の勝者が ingest ごとに変わっていた。
+    // `m.recorded_at` はテナント内の処理順に紐づく値であり、fresh ingest をまたいでも
+    // **相対順序が再現する**ため、これを第2キーに昇格する。`e.memory_id` は
+    // `recorded_at` まで完全一致したときだけ効く最終フォールバックとして残す。
     const result = await this.db.execute(sql`
       SELECT e.memory_id AS memory_id, e.embedding <=> ${queryLiteral}::vector AS distance
       FROM ${sql.identifier(table)} e
       JOIN memories m ON m.id = e.memory_id AND m.tenant_id = e.tenant_id
       WHERE ${whereClause}
-      ORDER BY e.embedding <=> ${queryLiteral}::vector, e.memory_id
+      ORDER BY e.embedding <=> ${queryLiteral}::vector, m.recorded_at DESC, e.memory_id
       LIMIT ${opts.limit}
     `);
     return result.rows.map((row) => {
