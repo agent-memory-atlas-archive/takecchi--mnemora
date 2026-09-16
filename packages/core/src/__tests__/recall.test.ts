@@ -8,6 +8,7 @@ import {
   RecallResultSchema,
   RecallUsageSchema,
 } from "../recall.js";
+import type { FilteredOmission } from "../recall.js";
 
 describe("OmissionSchema — 10 の kind すべて", () => {
   // ⚠ 題は以前「7つの kind すべて」だった。ann_unreached（ADR 0026）が入った時点で 8 に
@@ -50,6 +51,52 @@ describe("OmissionSchema — 10 の kind すべて", () => {
     });
     expect(result.success).toBe(false);
   });
+
+  // ---------------------------------------------------------------------
+  // Issue #280（Issue #202 第2弾、ADR 0164）の変異試験「変異D」で見つけた穴を塞ぐ歯。
+  //
+  // `FilteredOmissionSchema` の `condition` の zod enum から値を1つ落としても、
+  // `tsc`（`satisfies z.ZodType<...>` は片方向の代入可能性しか見ないため）も
+  // 既存のテスト（`OmissionSchema` の網羅テストは `kind` の10種類だけを見ており、
+  // `condition` の全値までは検査していなかった）も、どちらも気づけなかった
+  // ——ADR 0164「変異試験」節に実測を記録した。
+  //
+  // ここでは `FilteredOmission["condition"]` の**型側の全メンバー**を
+  // `Record<FilteredOmission["condition"], true>` のキーとして列挙する
+  // ——このオブジェクト自体がコンパイル時の網羅性チェックになる:
+  // `FilteredOmission.condition` に新しい値が増えたのにここへ足し忘れると
+  // `tsc` が「キーが足りない」と落ち、逆に存在しない値を足すと「余分なキー」で
+  // 落ちる。**この配列を手で数え直さない**という規約を、型システムに強制させる形。
+  //
+  // その上で、各値が実際に `OmissionSchema`（＝ `FilteredOmissionSchema` の zod enum）
+  // を通ることを検査する。zod enum から値を落とす変異が入ると、ここが
+  // `success: false` になって落ちる——変異Dが実際に赤くなることを、この歯自体を
+  // 変異させて確認済み（ADR 0164「変異試験」節）。
+  // ---------------------------------------------------------------------
+  const ALL_FILTERED_CONDITIONS: Record<FilteredOmission["condition"], true> = {
+    tenant: true,
+    superseded: true,
+    forgotten: true,
+    archived: true,
+    taxonomy: true,
+    period: true,
+    decayed: true,
+    expired: true,
+    not_yet_valid: true,
+  };
+
+  it.each(Object.keys(ALL_FILTERED_CONDITIONS) as FilteredOmission["condition"][])(
+    "'filtered' の condition: %s は OmissionSchema を通る（FilteredOmission['condition'] の全値を網羅する）",
+    (condition) => {
+      const result = OmissionSchema.safeParse({
+        kind: "filtered",
+        condition,
+        count: 0,
+        countKind: "exact",
+      });
+      expect(result.success).toBe(true);
+    },
+  );
 
   it("accepts 'below_threshold'（nearMisses 省略可）", () => {
     const result = OmissionSchema.safeParse({

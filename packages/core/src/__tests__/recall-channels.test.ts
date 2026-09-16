@@ -389,7 +389,16 @@ describe("recall() — 歯②: 既定(channels 未指定)は ADR 0084 以前と1
           {
             stage: "scope",
             executed: true,
-            detail: { subjectId: null, occurredAfter: null, occurredBefore: null },
+            // Issue #280: validAt ゲートは既定で有効（マネージャー決定1）——省略時は
+            // NOW が基準時刻になる。この歯自体は「channels 未指定の既定動作」を
+            // 検査するものであり、validAt ゲートの導入そのものは対象外の変更である
+            // （decayGate と同じ扱い。この行の直下のコメント参照）。
+            detail: {
+              subjectId: null,
+              occurredAfter: null,
+              occurredBefore: null,
+              validAt: NOW.toISOString(),
+            },
           },
           {
             stage: "candidate_generation",
@@ -397,7 +406,13 @@ describe("recall() — 歯②: 既定(channels 未指定)は ADR 0084 以前と1
             // decayGate: ADR 0153（Issue #196）以降、既定で忘却ゲートが段1へ押し下げられる
             // ——ここは②の「1バイトも変わらない」歯の対象外(この PR で意図的に破壊的変更した
             // 箇所そのもの。PR 本文参照)。
-            detail: { channel: "ann", kPrime: 40, hits: 1, decayGate: "pushed_down" },
+            detail: {
+              channel: "ann",
+              kPrime: 40,
+              hits: 1,
+              decayGate: "pushed_down",
+              validityGate: "pushed_down",
+            },
           },
           {
             stage: "rescore",
@@ -451,13 +466,15 @@ describe("recall() — 歯②: 既定(channels 未指定)は ADR 0084 以前と1
 
     const candidateTraces = result.explain.stages.filter((s) => s.stage === "candidate_generation");
     expect(candidateTraces).toHaveLength(1);
-    // detail が過不足なく { channel, kPrime, hits, decayGate } であること
-    // （toEqual は多すぎず少なすぎずを見る。decayGate は ADR 0153 で増えた欄）。
+    // detail が過不足なく { channel, kPrime, hits, decayGate, validityGate } であること
+    // （toEqual は多すぎず少なすぎずを見る。decayGate は ADR 0153、validityGate は
+    // Issue #280 で増えた欄）。
     expect(candidateTraces[0]?.detail).toEqual({
       channel: "ann",
       kPrime: 40,
       hits: 2,
       decayGate: "pushed_down",
+      validityGate: "pushed_down",
     });
 
     expect(result.memories.length).toBeGreaterThan(0);

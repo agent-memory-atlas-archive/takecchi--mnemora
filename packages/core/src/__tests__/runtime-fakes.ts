@@ -128,6 +128,9 @@ export class FakeMemoryStore implements MemoryStore {
         payload: input.payload,
         occurredAt: input.occurredAt ?? null,
         recordedAt: input.recordedAt ?? new Date(),
+        // Issue #280: `occurredAt` と同じ経路。
+        validFrom: input.validFrom ?? null,
+        validUntil: input.validUntil ?? null,
       };
       this.backing.observations.set(observation.id, observation);
       return observation;
@@ -612,6 +615,8 @@ export class FakeMemoryStore implements MemoryStore {
     let filteredSuperseded = 0;
     let filteredForgotten = 0;
     let filteredPeriod = 0;
+    let filteredExpired = 0;
+    let filteredNotYetValid = 0;
     // 目次帯の候補（本 PR）: totalInScope に数える条件と**同じ条件**で in-scope の
     // Memory を集める。`digestBand` が要求されなかった場合はこの配列を使わない。
     const inScopeMemories: Memory[] = [];
@@ -640,6 +645,21 @@ export class FakeMemoryStore implements MemoryStore {
       if (!inPeriod) {
         filteredPeriod += 1;
         continue;
+      }
+      // Issue #280（Issue #202 第2弾）: validAt ゲート。`InMemoryMemoryStore`
+      // （`packages/testkit`）と同じ意味論（独立した2条件として数える）。
+      if (scope.validAt !== undefined) {
+        const isNotYetValid = memory.validFrom != null && memory.validFrom > scope.validAt;
+        const isExpired = memory.validUntil != null && memory.validUntil <= scope.validAt;
+        if (isNotYetValid) {
+          filteredNotYetValid += 1;
+        }
+        if (isExpired) {
+          filteredExpired += 1;
+        }
+        if (isNotYetValid || isExpired) {
+          continue;
+        }
       }
 
       totalInScope += 1;
@@ -692,6 +712,8 @@ export class FakeMemoryStore implements MemoryStore {
       filteredSuperseded: { count: filteredSuperseded, countKind: "exact" },
       filteredForgotten: { count: filteredForgotten, countKind: "exact" },
       filteredPeriod: { count: filteredPeriod, countKind: "exact" },
+      filteredExpired: { count: filteredExpired, countKind: "exact" },
+      filteredNotYetValid: { count: filteredNotYetValid, countKind: "exact" },
       digests,
       digestEligible,
     };
@@ -1168,6 +1190,16 @@ export class FakeVectorStore implements VectorStore {
       ) {
         continue;
       }
+      // Issue #280（Issue #202 第2弾）: `validAt` ゲート。`InMemoryVectorStore`
+      // （`packages/testkit`）と同じ意味論。
+      if (opts.filter.validAt !== undefined) {
+        if (memory.validFrom != null && memory.validFrom > opts.filter.validAt) {
+          continue;
+        }
+        if (memory.validUntil != null && memory.validUntil <= opts.filter.validAt) {
+          continue;
+        }
+      }
       hits.push({ memoryId: entry.memoryId, distance: cosineDistance(query, entry.vector) });
     }
     hits.sort((a, b) => a.distance - b.distance);
@@ -1304,6 +1336,15 @@ export class FakeLexicalStore implements LexicalStore {
         !(effectiveTime <= opts.filter.occurredBefore)
       ) {
         continue;
+      }
+      // Issue #280（Issue #202 第2弾）: `validAt` ゲート。`FakeVectorStore` と同じ意味論。
+      if (opts.filter.validAt !== undefined) {
+        if (memory.validFrom != null && memory.validFrom > opts.filter.validAt) {
+          continue;
+        }
+        if (memory.validUntil != null && memory.validUntil <= opts.filter.validAt) {
+          continue;
+        }
       }
       // 🔴 契約（ADR 0092）: クエリの語彙が0個なら何も返さない。1個以上一致すれば返す
       // （OR 意味論）——AND（すべて含む候補しか返さない）ではない。

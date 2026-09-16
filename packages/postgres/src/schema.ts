@@ -34,6 +34,9 @@ export const observations = pgTable("observations", {
   payload: jsonb("payload").notNull(),
   occurredAt: timestamp("occurred_at", { withTimezone: true, mode: "date" }),
   recordedAt: timestamp("recorded_at", { withTimezone: true, mode: "date" }).notNull(),
+  // Issue #280: `migrations/0014_observations_valid_from_until.sql` が足す。
+  validFrom: timestamp("valid_from", { withTimezone: true, mode: "date" }),
+  validUntil: timestamp("valid_until", { withTimezone: true, mode: "date" }),
 });
 
 export const memories = pgTable(

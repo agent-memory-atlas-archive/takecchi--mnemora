@@ -244,6 +244,12 @@ export async function runRecall(
   const stages: StageTrace[] = [];
   const omitted: Omission[] = [];
 
+  // 「この時刻において真だった記憶」ゲート（Issue #280、Issue #202 第2弾、
+  // マネージャー決定1）。既定で有効——`includeFullyDecayed` と同じ opt-out 型
+  // （`RecallQuery.includeOutsideValidity`）。省略時の基準時刻は `now`。
+  const validityGateActive = validatedQuery.includeOutsideValidity !== true;
+  const validAt = validatedQuery.validAt ?? now;
+
   // -------------------------------------------------------------------
   // 段0: スコープ確定（docs/recall.md §2 段0、マネージャー決定の「スコープの外延」）
   // -------------------------------------------------------------------
@@ -251,6 +257,7 @@ export async function runRecall(
     subjectId: ctx.subjectId,
     occurredAfter: validatedQuery.occurredAfter,
     occurredBefore: validatedQuery.occurredBefore,
+    validAt: validityGateActive ? validAt : undefined,
   };
   stages.push({
     stage: "scope",
@@ -259,6 +266,7 @@ export async function runRecall(
       subjectId: scope.subjectId ?? null,
       occurredAfter: scope.occurredAfter?.toISOString() ?? null,
       occurredBefore: scope.occurredBefore?.toISOString() ?? null,
+      validAt: scope.validAt?.toISOString() ?? null,
     },
   });
 
@@ -354,6 +362,8 @@ export async function runRecall(
         // 埋める方向に働く。`includeFullyDecayed: true` を渡すと `undefined` になり、
         // ADR 0153 より前の挙動（decayFloorAtAfter を渡さない）に戻る。
         decayFloorAtAfter: decayGateActive ? now : undefined,
+        // Issue #280: `period` と同じ形で段1へ押し下げる（`scope.validAt` の doc 参照）。
+        validAt: scope.validAt,
       },
       // subjectId は等値一致なので段1に降ろす（ADR 0023）。excludeProvenanceKinds も
       // 離散5値の独立列への等値比較なので同じ理由で段1に降ろす（ADR 0056）。period は
@@ -382,6 +392,9 @@ export async function runRecall(
         kPrime,
         hits: annHits.length,
         decayGate: decayGateActive ? "pushed_down" : "disabled",
+        // Issue #280: validAt ゲートは ANN・語彙の両チャンネルで同じ形（"pushed_down"）
+        // ——decayGate と違い語彙側も SQL の WHERE で絞るので "post_filtered" は無い。
+        validityGate: validityGateActive ? "pushed_down" : "disabled",
       },
     });
   }
@@ -405,6 +418,9 @@ export async function runRecall(
           excludeProvenanceKinds: validatedQuery.excludeProvenanceKinds,
           occurredAfter: scope.occurredAfter,
           occurredBefore: scope.occurredBefore,
+          // Issue #280: `period` と同じ形で語彙チャンネルの SQL にも直接効く
+          // （`decayFloorAtAfter` とは違い `LexicalFilter` が持つ欄）。
+          validAt: scope.validAt,
         },
       });
       lexicalExecuted = true;
@@ -424,6 +440,9 @@ export async function runRecall(
         kPrime,
         hits: lexicalHits.length,
         decayGate: decayGateActive ? "post_filtered" : "disabled",
+        // Issue #280: 語彙チャンネルも SQL の WHERE で絞る（decayGate の "post_filtered"
+        // とは違う）——`LexicalFilter.validAt` の doc 参照。
+        validityGate: validityGateActive ? "pushed_down" : "disabled",
       },
     });
   }
@@ -505,6 +524,15 @@ export async function runRecall(
     if (scope.occurredAfter && effectiveTime < scope.occurredAfter) continue;
     if (scope.occurredBefore && effectiveTime > scope.occurredBefore) continue;
     if (excludeKinds.has(memory.provenance.kind)) continue;
+    // validAt ゲート（Issue #280）: `period` と同じ多層防御——段1へも同じ述語を渡している
+    // （上の ann/lexical filter 構築部）が、ここでも改めて見る。`RecallQuery.validAt` の
+    // doc の述語そのもの。**exact な件数は `aggregateScope` から取るので、ここでは
+    // カウントしない**（`period` と同じ扱い。`decayed` とは違う——理由は
+    // `FilteredOmission.condition` の doc「`count`/`countKind` は `period` と同じ扱い」参照）。
+    if (scope.validAt !== undefined) {
+      if (memory.validFrom != null && memory.validFrom > scope.validAt) continue;
+      if (memory.validUntil != null && memory.validUntil <= scope.validAt) continue;
+    }
     // 忘却ゲート（ADR 0153）: `LexicalFilter` に decayFloorAtAfter を足さず（マネージャー決定3）、
     // ここで**全チャンネル共通**の述語を適用する——ANN の候補にも同じ述語が掛かる。
     // 既定で押し下げている ANN の候補は `memory.decayFloorAt > now` を段1で既に満たして
@@ -1114,6 +1142,25 @@ export async function runRecall(
       condition: "period",
       count: aggregate.filteredPeriod.count,
       countKind: aggregate.filteredPeriod.countKind,
+    });
+  }
+  // Issue #280: validAt ゲートが落とした件数を、理由ごとに分けて報告する
+  // （`FilteredOmission.condition` の doc「1つの "invalid" のような値に束ねない」）。
+  // `period` と同じく count === 0 では積まない——`decayed` と同じ既存の作法に揃える。
+  if (aggregate.filteredExpired.count > 0) {
+    omitted.push({
+      kind: "filtered",
+      condition: "expired",
+      count: aggregate.filteredExpired.count,
+      countKind: aggregate.filteredExpired.countKind,
+    });
+  }
+  if (aggregate.filteredNotYetValid.count > 0) {
+    omitted.push({
+      kind: "filtered",
+      condition: "not_yet_valid",
+      count: aggregate.filteredNotYetValid.count,
+      countKind: aggregate.filteredNotYetValid.countKind,
     });
   }
   // 理由ごとに1件ずつ返す（`filtered` の `condition` と同じ形）。

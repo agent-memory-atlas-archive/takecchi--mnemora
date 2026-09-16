@@ -143,6 +143,16 @@ export class InMemoryLexicalStore implements LexicalStore {
       ) {
         continue;
       }
+      // Issue #280（Issue #202 第2弾）: `validAt` ゲート。`in-memory-vector-store.ts` と
+      // 同じ述語・同じ境界。
+      if (opts.filter.validAt !== undefined) {
+        if (memory.validFrom != null && memory.validFrom > opts.filter.validAt) {
+          continue;
+        }
+        if (memory.validUntil != null && memory.validUntil <= opts.filter.validAt) {
+          continue;
+        }
+      }
 
       const contentTokens = tokenize(memory.content);
       // OR 意味論（ADR 0092）: クエリの語のうち、content に含まれるものを数える。

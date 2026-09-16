@@ -17,14 +17,16 @@ import type { ProvenanceKind } from "../provenance.js";
  *
  * **⚠ 後段の多層防御は、ここの全フィールドを覆ってはいない。**
  * `packages/core/src/recall-runtime.ts` は段1のあとに `subjectId`・`excludeProvenanceKinds`・
- * `period`（`occurredAfter`/`occurredBefore`。ADR 0059 で本 interface に加わった）を
- * 改めて見るが、**`status` と `decayFloorAtAfter` は見ない**。⟹ `status` と
- * `decayFloorAtAfter` については、ここの契約を adapter が守ることが**唯一の防衛線**である
+ * `period`（`occurredAfter`/`occurredBefore`。ADR 0059 で本 interface に加わった）・
+ * `validAt`（Issue #280。下記）を改めて見るが、**`status` と `decayFloorAtAfter` は
+ * 見ない**。⟹ `status` と `decayFloorAtAfter` については、ここの契約を adapter が
+ * 守ることが**唯一の防衛線**である
  * （実測: `FakeVectorStore` の `status` の絞りを落とす変異で、`recall-pipeline.test.ts` の
  * 既存の歯が実際に赤くなる。`subjectId` を落とす変異では赤くならない——後段が救うため）。
- * `subjectId`・`excludeProvenanceKinds`・`period` は後段にも同じ絞りが残るので、adapter が
- * この契約を落としても後段が結果の正しさを救う（`subjectId`/`excludeProvenanceKinds` は
- * ADR 0056、`period` は ADR 0059）——ただしこれは「段1で絞らなくてよい」ことの根拠ではない。
+ * `subjectId`・`excludeProvenanceKinds`・`period`・`validAt` は後段にも同じ絞りが残るので、
+ * adapter がこの契約を落としても後段が結果の正しさを救う（`subjectId`/
+ * `excludeProvenanceKinds` は ADR 0056、`period` は ADR 0059、`validAt` は Issue #280）
+ * ——ただしこれは「段1で絞らなくてよい」ことの根拠ではない。
  * 段1の絞りは over-fetch の窓（k'）を無駄にしないための最適化であり、後段フィルタが
  * 在ることは、どの場合も「filter を無視してよい」ことの根拠ではない。
  */
@@ -94,6 +96,27 @@ export interface VectorFilter {
    * recordedAt)`）・同じ境界の含み方（**包含、`<=`**）。詳細は `occurredAfter` の doc を参照。
    */
   occurredBefore?: Date;
+  /**
+   * **「この時刻において真だった記憶」ゲート**（Issue #280、Issue #202 第2弾、
+   * `@mnemora/core` の `RecallQuery.validAt` の doc 参照）。
+   *
+   * 述語: `(valid_from IS NULL OR valid_from <= validAt) AND
+   * (valid_until IS NULL OR valid_until > validAt)`。
+   * - `valid_from` は閉じた左端（`<=`）。
+   * - `valid_until` は**開区間の右端**（狭義の `>`）——同じ interface の
+   *   `decayFloorAtAfter` と同じ非包含の向き。**⚠ `occurredAfter`/`occurredBefore`
+   *   （両端とも包含）とは境界の扱いが違う。**「時刻を比較する欄はすべて同じ境界」と
+   *   決めつけないこと（`decayFloorAtAfter` の doc が既に警告している同型の罠）。
+   * - **両方 `NULL` は「いつでも真」**（「不明」ではない）。既存行の大多数が
+   *   `NULL`/`NULL` であるため（`RecallQuery.validAt` の doc 参照）。
+   *
+   * `period`（`occurredAfter`/`occurredBefore`、ADR 0059）と同じく**連続値の区間比較**
+   * だが、`period` とは違い**新しい索引を足していない**——理由は
+   * [ADR 0164](../../../../docs/decisions/0164-valid-from-until-recall.md) を参照。
+   * 要旨: 既存行の大多数が両端 `NULL` でこの述語を通るため、索引で絞れる対象
+   * （落ちる行）が少数であり、btree/部分索引でも計画が改善しない。
+   */
+  validAt?: Date;
 }
 
 /** `VectorStore.getVectors` が返す1件。 */

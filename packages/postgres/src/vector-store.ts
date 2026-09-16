@@ -86,6 +86,14 @@ export class PostgresVectorStore implements VectorStore {
     if (opts.filter.occurredBefore !== undefined) {
       conditions.push(sql`COALESCE(m.occurred_at, m.recorded_at) <= ${opts.filter.occurredBefore}`);
     }
+    // Issue #280（Issue #202 第2弾）: `validAt` ゲート。両端 NULL は「いつでも真」
+    // （`VectorFilter.validAt` の doc 参照）。`valid_until` は狭義の `>`（非包含）——
+    // `decayFloorAtAfter` と同じ境界の向き。
+    if (opts.filter.validAt !== undefined) {
+      conditions.push(
+        sql`(m.valid_from IS NULL OR m.valid_from <= ${opts.filter.validAt}) AND (m.valid_until IS NULL OR m.valid_until > ${opts.filter.validAt})`,
+      );
+    }
     // ADR 0056: 空配列は no-op（`VectorFilter.excludeProvenanceKinds` の doc 参照）。
     // `length > 0` で番わないと `<> ALL('{}')` という無駄な条件が出る——常に真になり実害は
     // 無いが（`<> ALL` は空配列に対して真）、`EXPLAIN` を読みにくくするので出さない。

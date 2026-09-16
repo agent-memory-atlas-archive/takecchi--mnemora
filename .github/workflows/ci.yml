@@ -1201,3 +1201,83 @@ jobs:
           name: time-term
           path: ${{ github.workspace }}/time-term.json
           if-no-files-found: ignore
+
+  validity:
+    name: "validAt ゲート(Issue #202 第2弾)が候補の有無を動かすかを実測し、値を残す（Issue #280）"
+    runs-on: ubuntu-latest
+    # `time-term` と同じ体裁——「実測値を Job Summary/artifact へ残す・落とすのは
+    # bench 自体が壊れたときだけ」という**非ゲート**ジョブ（ADR 0088）。
+    #
+    # ⚠ **なぜ閾値の門にしないか**: 標本は probe 2件であり、ADR 0033 §3 の規律
+    # （少標本からは失敗率も成功率も統計的に主張しない）にそのまま照らせば、
+    # 閾値判定に足る母数ではない（`time-term`/`identifier-probes` と同じ判断）。
+    #
+    # ⚠ **`compare`（ADR 0133、required 門）とは別物である。** このジョブは
+    # `examples/chat/compare-baseline.json` を一切参照せず、`examples/chat/src/scenario.ts`/
+    # `compare.ts` にも配線していない——`validity` 専用の probe set・専用の tenant
+    # スコープで、`compare` の回帰判定には一切影響しない。
+    #
+    # 🔴 **基準値ファイルは、まだ無い**（`time-term-baseline.json` のような形は、
+    # この PR の作業環境に DB が無く一度も自分の手で実行できていないため、
+    # 用意しなかった——ADR 0120 §5 が予告した「初回 CI の実測値をそのまま基準値に
+    # コミットする」手順を、この PR ではまだ踏んでいない。差分の Job Summary 出力は
+    # 次の担い手の作業とする。詳細は本 PR の ADR「射程外にしたもの」参照）。
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: pgvector/pgvector:pg17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: mnemora_ci
+          POSTGRES_INITDB_ARGS: "--encoding=UTF8"
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U postgres"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=10
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/mnemora_ci
+      # `validity` は `deterministic` LLM + `deterministic` embedding に固定される
+      # （`cli.ts` の `runValidity()` docstring）——`MNEMORA_PROVIDER_SOURCE`/
+      # `OPENAI_API_KEY` はこのジョブに関係が無い。
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+
+      - name: Enable corepack
+        run: corepack enable
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Enable required extensions (vector / btree_gin / pgcrypto)
+        run: |
+          PGPASSWORD=postgres psql -h localhost -U postgres -d mnemora_ci -c "select 1;" \
+            && PGPASSWORD=postgres psql -h localhost -U postgres -d mnemora_ci \
+              -c "CREATE EXTENSION IF NOT EXISTS vector;" \
+              -c "CREATE EXTENSION IF NOT EXISTS btree_gin;" \
+              -c "CREATE EXTENSION IF NOT EXISTS pgcrypto;"
+
+      - name: Run migrations (packages/postgres の唯一のマイグレーション実行口)
+        run: pnpm --filter @mnemora/postgres run migrate
+
+      - name: validAt ゲートが候補の有無をどう動かすかを実測する（2 probe・擬似 provider）
+        env:
+          MNEMORA_VALIDITY_JSON: ${{ github.workspace }}/validity.json
+        run: pnpm --filter @mnemora/example-chat run validity
+
+      - name: 実測値そのもの（機械可読）を成果物として残す
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: validity
+          path: ${{ github.workspace }}/validity.json
+          if-no-files-found: ignore

@@ -273,6 +273,11 @@ export function buildNewMemoryFromCandidate(params: BuildNewMemoryParams): NewMe
     occurredAt: params.observation.occurredAt ?? null,
     recordedAt: params.now,
     lastReinforcedAt: null,
+    // Issue #280: `occurredAt` と同じ経路で `Observation` から素通しする
+    // （`Observation.validFrom`/`validUntil` の doc コメント参照）。1回の `observe()`
+    // から複数候補が抽出されると、全候補が同じ区間を共有する（`occurredAt` と同型の限界）。
+    validFrom: params.observation.validFrom ?? null,
+    validUntil: params.observation.validUntil ?? null,
     strength: 1,
     halfLifeHours: params.halfLifeHours,
     decayFloorAt,

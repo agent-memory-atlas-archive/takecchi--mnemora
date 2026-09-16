@@ -69,6 +69,8 @@ import { formatRecallExplainDemo, runRecallExplainDemo } from "./recall-explain.
 import { createMutableClock } from "./mutable-clock.js";
 import { formatTimeTermReport, runTimeTermArm } from "./time-term-arm.js";
 import { buildTimeTermJson } from "./time-term-json.js";
+import { formatValidityReport, runValidityArm } from "./validity-arm.js";
+import { buildValidityJson } from "./validity-json.js";
 import { formatNoApiCallsNotice } from "./usage-meter.js";
 
 /** `chat` サブコマンドで使う会話の長さ(filler 往復数)。サンプルアプリの裁量値。 */
@@ -865,6 +867,55 @@ async function runTimeTerm(): Promise<void> {
 }
 
 /**
+ * `validAt` ゲート（Issue #280、Issue #202 第2弾）を測る arm(PR 本文)。
+ *
+ * **provider は既定で `deterministic` に倒す**（`runTimeTerm()` と同じ理由——ペアの
+ * 本文が厳密に同一なので `similarity` は構成上定数になり、この測定は provider 層に
+ * 依らない。カセットの再録も `OPENAI_API_KEY` も要らない）。
+ *
+ * **`MutableClock` は要らない**——動かす項は `recordedAt`（壁時計）ではなく
+ * `validFrom`/`validUntil`（`observe()` に明示的に渡す `Date`）なので、`time-term` と
+ * 違って `Clock` を注入し直す必要がない。
+ */
+async function runValidity(): Promise<void> {
+  const databaseUrl = requireDatabaseUrl();
+  const measuredAt = new Date();
+  const commit = tryGitRevParseHead(process.cwd());
+  const handle = await createExampleRuntime(databaseUrl, {
+    ...process.env,
+    MNEMORA_LLM: process.env.MNEMORA_LLM ?? "deterministic",
+    MNEMORA_EMBEDDING: process.env.MNEMORA_EMBEDDING ?? "deterministic",
+  });
+  printProviderMode(handle.llmMode, handle.embeddingMode);
+  try {
+    console.log(
+      "\n「内容は同一・validFrom/validUntil だけ違う」ペアで、" +
+        "validAt ゲートが候補の有無をどう動かすかを測る。\n",
+    );
+    const report = await runValidityArm({
+      armLabel: "validity",
+      tenantIdPrefix: "validity",
+      runtime: handle.runtime,
+      memoryStore: handle.memoryStore,
+      llmMode: handle.llmMode,
+      embeddingMode: handle.embeddingMode,
+    });
+    console.log(formatValidityReport(report));
+
+    // `MNEMORA_VALIDITY_JSON` が設定されているときだけ機械可読な結果を書く
+    // （`time-term`/`retrieval` と同じ、未設定なら挙動を変えない規約。ADR 0088 §2）。
+    const jsonPath = process.env.MNEMORA_VALIDITY_JSON;
+    if (jsonPath) {
+      const json = buildValidityJson({ report, measuredAt, commit });
+      writeFileSync(jsonPath, `${JSON.stringify(json, null, 2)}\n`, "utf-8");
+      console.log(`\n[validity] 機械可読な結果を書き出した: ${jsonPath}`);
+    }
+  } finally {
+    await handle.close();
+  }
+}
+
+/**
  * Issue #109(#106 由来): `retrieval` の probe 7件は**すべて日本語の query**で、
  * ASCII の識別子・固有名詞を含む query が0件だった——#106 の報告者の用途
  * (人名・チャンネル名・社内システム名・案件コード・チケット番号)を、
@@ -1383,6 +1434,8 @@ function printHelp(): void {
       "                                                                      #   OPENAI_API_KEY があれば実 API、無ければ記録の再生(ADR 0051)",
       "  DATABASE_URL=... pnpm --filter @mnemora/example-chat run time-term # 時間項(freshness/decay)を意味的類似度から分離して測る",
       "                                                                      #   既定は擬似 provider(similarity が構成上定数になるため provider に依らない)",
+      "  DATABASE_URL=... pnpm --filter @mnemora/example-chat run validity  # validAt ゲート(Issue #280)が候補の有無をどう動かすかを測る",
+      "                                                                      #   既定は擬似 provider。MNEMORA_VALIDITY_JSON で機械可読出力",
       "  DATABASE_URL=... pnpm --filter @mnemora/example-chat run identifier-probes",
       "                                                                      # ASCII識別子・固有名詞を含む probe(Issue #109)を@mnemora/local-embeddingで測る",
       "                                                                      #   鍵・カセット不要。日本語意味probe7件・識別子probe30件(sparse/dense haystack)を別々に集計する",
@@ -1429,6 +1482,8 @@ async function main(): Promise<void> {
     await runRetrieval();
   } else if (command === "time-term") {
     await runTimeTerm();
+  } else if (command === "validity") {
+    await runValidity();
   } else if (command === "identifier-probes") {
     await runIdentifierProbes();
   } else if (command === "association-probes") {

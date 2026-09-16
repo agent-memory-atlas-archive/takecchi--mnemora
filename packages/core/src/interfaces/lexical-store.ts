@@ -28,6 +28,13 @@ export interface LexicalFilter {
   excludeProvenanceKinds?: ProvenanceKind[];
   occurredAfter?: Date;
   occurredBefore?: Date;
+  /**
+   * Issue #280（Issue #202 第2弾）: `VectorFilter.validAt` と同じ絞り・同じ意味
+   * （`@mnemora/core` の `RecallQuery.validAt` の doc 参照）。`period` と同じ扱いで
+   * 両チャンネルに存在する——`decayFloorAtAfter`（`LexicalFilter` は持たない）とは
+   * 違い、この欄は語彙チャンネルの SQL にも直接効く。
+   */
+  validAt?: Date;
 }
 
 export interface LexicalHit {

@@ -68,7 +68,7 @@ export class PostgresMemoryStore implements MemoryStore {
   async createObservation(ctx: Ctx, input: NewObservation): Promise<Observation> {
     const externalId = input.externalId ?? null;
     const inserted = await this.db.execute(sql`
-      INSERT INTO observations (id, tenant_id, subject_id, external_id, kind, payload, occurred_at, recorded_at)
+      INSERT INTO observations (id, tenant_id, subject_id, external_id, kind, payload, occurred_at, recorded_at, valid_from, valid_until)
       VALUES (
         gen_random_uuid(),
         ${ctx.tenantId},
@@ -77,7 +77,9 @@ export class PostgresMemoryStore implements MemoryStore {
         ${input.kind},
         ${JSON.stringify(input.payload)}::jsonb,
         ${input.occurredAt ?? null},
-        ${input.recordedAt ?? new Date()}
+        ${input.recordedAt ?? new Date()},
+        ${input.validFrom ?? null},
+        ${input.validUntil ?? null}
       )
       ON CONFLICT (tenant_id, external_id) WHERE external_id IS NOT NULL
       DO NOTHING
@@ -126,7 +128,7 @@ export class PostgresMemoryStore implements MemoryStore {
     const externalId = input.externalId ?? null;
     return this.db.transaction(async (tx) => {
       const inserted = await tx.execute(sql`
-        INSERT INTO observations (id, tenant_id, subject_id, external_id, kind, payload, occurred_at, recorded_at)
+        INSERT INTO observations (id, tenant_id, subject_id, external_id, kind, payload, occurred_at, recorded_at, valid_from, valid_until)
         VALUES (
           gen_random_uuid(),
           ${ctx.tenantId},
@@ -135,7 +137,9 @@ export class PostgresMemoryStore implements MemoryStore {
           ${input.kind},
           ${JSON.stringify(input.payload)}::jsonb,
           ${input.occurredAt ?? null},
-          ${input.recordedAt ?? new Date()}
+          ${input.recordedAt ?? new Date()},
+          ${input.validFrom ?? null},
+          ${input.validUntil ?? null}
         )
         ON CONFLICT (tenant_id, external_id) WHERE external_id IS NOT NULL
         DO NOTHING
@@ -969,6 +973,23 @@ export class PostgresMemoryStore implements MemoryStore {
       ${occurredBefore}::timestamptz IS NULL OR COALESCE(occurred_at, recorded_at) <= ${occurredBefore}::timestamptz
     )`;
 
+    // Issue #280（Issue #202 第2弾）: validAt ゲート。`scope.validAt` が無ければ常に真
+    // （`RecallQuery.includeOutsideValidity: true` のときと同じ「絞りなし」）。
+    // 両端とも NULL は「いつでも真」（`RecallQuery.validAt` の doc 参照）。
+    const validAt = scope.validAt ?? null;
+    const isValid = sql`(
+      ${validAt}::timestamptz IS NULL OR (
+        (valid_from IS NULL OR valid_from <= ${validAt}::timestamptz)
+        AND (valid_until IS NULL OR valid_until > ${validAt}::timestamptz)
+      )
+    )`;
+    const isExpired = sql`(
+      ${validAt}::timestamptz IS NOT NULL AND valid_until IS NOT NULL AND valid_until <= ${validAt}::timestamptz
+    )`;
+    const isNotYetValid = sql`(
+      ${validAt}::timestamptz IS NOT NULL AND valid_from IS NOT NULL AND valid_from > ${validAt}::timestamptz
+    )`;
+
     const digestBand = opts?.digestBand;
     // `digestBand` が無ければ余計な仕事をしない（doc コメント・PR 指示のとおり）——
     // このサブクエリ群自体を SQL テキストに載せない。
@@ -988,19 +1009,20 @@ export class PostgresMemoryStore implements MemoryStore {
           FROM (
             SELECT id, digest, COALESCE(occurred_at, recorded_at) AS eff_time
             FROM scoped
-            WHERE status IN ('active', 'contested') AND ${inPeriod} ${excludeFilter}
+            WHERE status IN ('active', 'contested') AND ${inPeriod} AND ${isValid} ${excludeFilter}
             ORDER BY COALESCE(occurred_at, recorded_at) DESC, id DESC
             LIMIT ${digestBand.limit}
           ) band
         ) AS digests,
         count(*) FILTER (
-          WHERE status IN ('active', 'contested') AND ${inPeriod} ${excludeFilter}
+          WHERE status IN ('active', 'contested') AND ${inPeriod} AND ${isValid} ${excludeFilter}
         )::int AS digest_eligible_count`
       : sql``;
 
     const result = await this.db.execute(sql`
       WITH scoped AS (
-        SELECT id, subject_id, digest, occurred_at, recorded_at, embedding_status, status
+        SELECT id, subject_id, digest, occurred_at, recorded_at, embedding_status, status,
+               valid_from, valid_until
         FROM memories
         WHERE tenant_id = ${ctx.tenantId} ${subjectFilter}
       )
@@ -1010,28 +1032,34 @@ export class PostgresMemoryStore implements MemoryStore {
           FROM (
             SELECT subject_id AS key, count(*)::int AS cnt
             FROM scoped
-            WHERE status IN ('active', 'contested') AND ${inPeriod}
+            WHERE status IN ('active', 'contested') AND ${inPeriod} AND ${isValid}
             GROUP BY subject_id
           ) g
         ) AS groups,
         count(*) FILTER (
-          WHERE status IN ('active', 'contested') AND ${inPeriod}
+          WHERE status IN ('active', 'contested') AND ${inPeriod} AND ${isValid}
         )::int AS in_scope,
         count(*) FILTER (
-          WHERE status IN ('active', 'contested') AND ${inPeriod} AND embedding_status = 'pending'
+          WHERE status IN ('active', 'contested') AND ${inPeriod} AND ${isValid} AND embedding_status = 'pending'
         )::int AS not_indexed_pending,
         count(*) FILTER (
-          WHERE status IN ('active', 'contested') AND ${inPeriod} AND embedding_status = 'failed'
+          WHERE status IN ('active', 'contested') AND ${inPeriod} AND ${isValid} AND embedding_status = 'failed'
         )::int AS not_indexed_failed,
         count(*) FILTER (
-          WHERE status IN ('active', 'contested') AND ${inPeriod} AND embedding_status = 'skipped'
+          WHERE status IN ('active', 'contested') AND ${inPeriod} AND ${isValid} AND embedding_status = 'skipped'
         )::int AS not_indexed_skipped,
         count(*) FILTER (WHERE status = 'archived')::int AS archived,
         count(*) FILTER (WHERE status = 'superseded')::int AS superseded,
         count(*) FILTER (WHERE status = 'forgotten')::int AS forgotten,
         count(*) FILTER (
           WHERE status IN ('active', 'contested') AND NOT (${inPeriod})
-        )::int AS period_filtered
+        )::int AS period_filtered,
+        count(*) FILTER (
+          WHERE status IN ('active', 'contested') AND ${inPeriod} AND ${isExpired}
+        )::int AS expired_filtered,
+        count(*) FILTER (
+          WHERE status IN ('active', 'contested') AND ${inPeriod} AND ${isNotYetValid}
+        )::int AS not_yet_valid_filtered
         ${digestBandColumns}
       FROM scoped
     `);
@@ -1046,6 +1074,8 @@ export class PostgresMemoryStore implements MemoryStore {
       superseded: number;
       forgotten: number;
       period_filtered: number;
+      expired_filtered: number;
+      not_yet_valid_filtered: number;
       digests?: { memoryId: string; digest: string }[];
       digest_eligible_count?: number;
     };
@@ -1080,6 +1110,8 @@ export class PostgresMemoryStore implements MemoryStore {
       filteredSuperseded: { count: row.superseded, countKind: "exact" },
       filteredForgotten: { count: row.forgotten, countKind: "exact" },
       filteredPeriod: { count: row.period_filtered, countKind: "exact" },
+      filteredExpired: { count: row.expired_filtered, countKind: "exact" },
+      filteredNotYetValid: { count: row.not_yet_valid_filtered, countKind: "exact" },
       digests,
       digestEligible,
     };

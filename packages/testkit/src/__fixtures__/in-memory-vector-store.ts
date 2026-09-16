@@ -181,6 +181,17 @@ export class InMemoryVectorStore implements VectorStore {
       ) {
         continue;
       }
+      // Issue #280（Issue #202 第2弾）: `validAt` ゲート。両端 NULL は「いつでも真」
+      // （`VectorFilter.validAt` の doc 参照）。`validUntil` は狭義の `>`（非包含）——
+      // postgres 実装の `m.valid_until > ${validAt}` と揃える。
+      if (opts.filter.validAt !== undefined) {
+        if (memory.validFrom != null && memory.validFrom > opts.filter.validAt) {
+          continue;
+        }
+        if (memory.validUntil != null && memory.validUntil <= opts.filter.validAt) {
+          continue;
+        }
+      }
       hits.push({ memoryId: entry.memoryId, distance: cosineDistance(query, entry.vector) });
     }
     hits.sort((a, b) => a.distance - b.distance);

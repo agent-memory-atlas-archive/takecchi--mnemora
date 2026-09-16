@@ -3698,6 +3698,111 @@ export function describeMemoryStoreConformance(options: MemoryStoreConformanceOp
       expect(aggregate.filteredPeriod.count).toBe(7);
     });
 
+    // -----------------------------------------------------------------------
+    // aggregateScope の validAt ゲート（Issue #280、Issue #202 第2弾）
+    //
+    // `period` と同じ4箇所の複製先——`recall-runtime.ts` の候補フィルタ、
+    // `PostgresMemoryStore.aggregateScope`、`InMemoryMemoryStore.aggregateScope`、
+    // `packages/core` のテスト用 `FakeMemoryStore.aggregateScope`——を持つ。この適合テストが
+    // 届くのは adapter の2つ（postgres / in-memory）だけである（period と同じ限界）。
+    // -----------------------------------------------------------------------
+
+    const VALID_AT = new Date("2026-06-01T00:00:00.000Z");
+
+    it("aggregateScope は validUntil が validAt 以前の Memory を totalInScope から除き、filteredExpired に計上する（境界も落ちる、狭義の `>` の逆）", async () => {
+      const store = await createStore();
+      const ctx: Ctx = { tenantId: "tenant-1" };
+      // 境界ちょうど（validUntil === validAt）は「もう真ではない」側——expired に入る。
+      await store.createMemory(
+        ctx,
+        buildNewMemoryFixture({ tenantId: "tenant-1", validUntil: VALID_AT }),
+      );
+      for (let i = 0; i < 4; i += 1) {
+        await store.createMemory(
+          ctx,
+          buildNewMemoryFixture({
+            tenantId: "tenant-1",
+            validUntil: new Date(VALID_AT.getTime() - 1000),
+            contentHash: `expired-${i}`,
+          }),
+        );
+      }
+      await store.createMemory(
+        ctx,
+        buildNewMemoryFixture({
+          tenantId: "tenant-1",
+          validUntil: new Date(VALID_AT.getTime() + 1000),
+        }),
+      );
+
+      const aggregate = await store.aggregateScope(ctx, { validAt: VALID_AT });
+      expect(aggregate.totalInScope).toBe(1);
+      expect(aggregate.filteredExpired.count).toBe(5);
+      expect(aggregate.filteredExpired.countKind).toBe("exact");
+      expect(aggregate.filteredNotYetValid.count).toBe(0);
+    });
+
+    it("aggregateScope は validFrom が validAt より後の Memory を totalInScope から除き、filteredNotYetValid に計上する（境界は含まれる側）", async () => {
+      const store = await createStore();
+      const ctx: Ctx = { tenantId: "tenant-1" };
+      // 境界ちょうど（validFrom === validAt）は「もう真になっている」側——in scope。
+      await store.createMemory(
+        ctx,
+        buildNewMemoryFixture({ tenantId: "tenant-1", validFrom: VALID_AT }),
+      );
+      for (let i = 0; i < 6; i += 1) {
+        await store.createMemory(
+          ctx,
+          buildNewMemoryFixture({
+            tenantId: "tenant-1",
+            validFrom: new Date(VALID_AT.getTime() + 1000),
+            contentHash: `not-yet-valid-${i}`,
+          }),
+        );
+      }
+
+      const aggregate = await store.aggregateScope(ctx, { validAt: VALID_AT });
+      expect(aggregate.totalInScope).toBe(1);
+      expect(aggregate.filteredNotYetValid.count).toBe(6);
+      expect(aggregate.filteredNotYetValid.countKind).toBe("exact");
+      expect(aggregate.filteredExpired.count).toBe(0);
+    });
+
+    it("⚠ 鳴ってはいけない側: validAt を渡さなければ validity は一切絞らない", async () => {
+      const store = await createStore();
+      const ctx: Ctx = { tenantId: "tenant-1" };
+      await store.createMemory(ctx, buildNewMemoryFixture({ tenantId: "tenant-1" }));
+      await store.createMemory(
+        ctx,
+        buildNewMemoryFixture({
+          tenantId: "tenant-1",
+          validFrom: new Date("2099-01-01T00:00:00.000Z"),
+          contentHash: "far-future",
+        }),
+      );
+
+      const aggregate = await store.aggregateScope(ctx, {});
+      expect(aggregate.totalInScope).toBe(2);
+      expect(aggregate.filteredExpired.count).toBe(0);
+      expect(aggregate.filteredNotYetValid.count).toBe(0);
+    });
+
+    it("aggregateScope は validFrom/validUntil が両方 null の Memory を、どの validAt でも in scope のまま数える（マネージャー決定1）", async () => {
+      const store = await createStore();
+      const ctx: Ctx = { tenantId: "tenant-1" };
+      await store.createMemory(
+        ctx,
+        buildNewMemoryFixture({ tenantId: "tenant-1", validFrom: null, validUntil: null }),
+      );
+
+      const aggregate = await store.aggregateScope(ctx, {
+        validAt: new Date("2099-01-01T00:00:00.000Z"),
+      });
+      expect(aggregate.totalInScope).toBe(1);
+      expect(aggregate.filteredExpired.count).toBe(0);
+      expect(aggregate.filteredNotYetValid.count).toBe(0);
+    });
+
     it("aggregateScope は notIndexed を理由ごと（pending/failed/skipped）に分けて数え、totalInScope からは除かない", async () => {
       // 各理由の件数を**すべて異なる数**にする。同数だと、理由の取り違え
       // （例: failed を数えるべきところで skipped を数える）が起きても

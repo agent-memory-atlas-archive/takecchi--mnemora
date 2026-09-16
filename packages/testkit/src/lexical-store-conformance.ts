@@ -28,6 +28,10 @@ export interface PrepareLexicalMemoryAttrs {
   occurredAt?: Date | null;
   /** ADR 0039: `occurredAt` が `null`/未指定のときに実効時刻として使われる値。 */
   recordedAt?: Date;
+  /** Issue #280（Issue #202 第2弾）: `filter.validAt` の歯が使う。 */
+  validFrom?: Date | null;
+  /** Issue #280: `filter.validAt` の歯が使う。 */
+  validUntil?: Date | null;
 }
 
 export interface LexicalStoreConformanceOptions {
@@ -468,6 +472,51 @@ export function describeLexicalStoreConformance(options: LexicalStoreConformance
 
       expect(ids).toContain(insideByRecordedAtId);
       expect(ids).not.toContain(outsideByRecordedAtId);
+    });
+
+    // -------------------------------------------------------------------
+    // filter.validAt（Issue #280、Issue #202 第2弾）: `vector-store-conformance.ts` と
+    // 同じ境界（`validFrom` は `<=`、`validUntil` は狭義の `>`）。
+    // -------------------------------------------------------------------
+
+    it("filter.validAt: validUntil が境界と*ちょうど同じ*記憶は除外される（狭義の `>`）", async () => {
+      const store = await createStore();
+      const ctx: Ctx = { tenantId: "tenant-1" };
+      const boundary = new Date("2026-01-01T00:00:00.000Z");
+      const onBoundaryId = await prepareMemory(ctx, {
+        content: "obsidian shards glimmer",
+        validUntil: boundary,
+      });
+      const stillValidId = await prepareMemory(ctx, {
+        content: "obsidian shards glimmer",
+        validUntil: new Date(boundary.getTime() + 1000),
+      });
+
+      const hits = await store.search(ctx, "obsidian shards", {
+        limit: 10,
+        filter: { tenantId: "tenant-1", validAt: boundary },
+      });
+      const ids = hits.map((hit) => hit.memoryId);
+
+      expect(ids).not.toContain(onBoundaryId);
+      expect(ids).toContain(stillValidId);
+    });
+
+    it("filter.validAt: validFrom/validUntil が両方 null の記憶は、いつ問うても返る（マネージャー決定1「いつでも真」）", async () => {
+      const store = await createStore();
+      const ctx: Ctx = { tenantId: "tenant-1" };
+      const alwaysValidId = await prepareMemory(ctx, {
+        content: "obsidian shards glimmer",
+        validFrom: null,
+        validUntil: null,
+      });
+
+      const hits = await store.search(ctx, "obsidian shards", {
+        limit: 10,
+        filter: { tenantId: "tenant-1", validAt: new Date("2099-01-01T00:00:00.000Z") },
+      });
+
+      expect(hits.map((hit) => hit.memoryId)).toContain(alwaysValidId);
     });
 
     it("filter は複数同時に渡すと AND になる（どれか1つが不一致なら返らない）", async () => {

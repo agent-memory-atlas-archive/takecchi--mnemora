@@ -91,6 +91,13 @@ export function buildLexicalSearchSelect(
   if (opts.filter.occurredBefore !== undefined) {
     conditions.push(sql`COALESCE(occurred_at, recorded_at) <= ${opts.filter.occurredBefore}`);
   }
+  // Issue #280（Issue #202 第2弾）: `validAt` ゲート。`PostgresVectorStore.search`
+  // （vector-store.ts）と同じ述語・同じ境界（`valid_until` は狭義の `>`）。
+  if (opts.filter.validAt !== undefined) {
+    conditions.push(
+      sql`(valid_from IS NULL OR valid_from <= ${opts.filter.validAt}) AND (valid_until IS NULL OR valid_until > ${opts.filter.validAt})`,
+    );
+  }
   // ADR 0056: 空配列は no-op。`length > 0` で番わないと `<> ALL('{}')` という常に真の
   // 条件が出るだけで実害は無いが、EXPLAIN を読みにくくするので出さない
   // （`vector-store.ts` と同じ判断）。

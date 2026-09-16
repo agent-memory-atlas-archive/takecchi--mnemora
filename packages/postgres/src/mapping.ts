@@ -140,6 +140,8 @@ export interface ObservationRow {
   payload: unknown;
   occurred_at: string | null;
   recorded_at: string;
+  valid_from: string | null;
+  valid_until: string | null;
 }
 
 export function rowToObservation(row: ObservationRow): Observation {
@@ -152,6 +154,8 @@ export function rowToObservation(row: ObservationRow): Observation {
     payload: row.payload,
     occurredAt: parsePgTimestamp(row.occurred_at),
     recordedAt: parsePgTimestamp(row.recorded_at),
+    validFrom: parsePgTimestamp(row.valid_from),
+    validUntil: parsePgTimestamp(row.valid_until),
   };
 }
 

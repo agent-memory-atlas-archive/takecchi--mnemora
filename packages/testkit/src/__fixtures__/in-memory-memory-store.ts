@@ -104,6 +104,9 @@ export class InMemoryMemoryStore implements MemoryStore {
         payload: input.payload,
         occurredAt: input.occurredAt ?? null,
         recordedAt: input.recordedAt ?? new Date(),
+        // Issue #280: `occurredAt` と同じ経路。
+        validFrom: input.validFrom ?? null,
+        validUntil: input.validUntil ?? null,
       };
       this.observations.set(observation.id, observation);
       return observation;
@@ -716,6 +719,8 @@ export class InMemoryMemoryStore implements MemoryStore {
     let filteredSuperseded = 0;
     let filteredForgotten = 0;
     let filteredPeriod = 0;
+    let filteredExpired = 0;
+    let filteredNotYetValid = 0;
     // 目次帯の候補（ADR 0073）: totalInScope に数える条件と**同じ条件**で in-scope の
     // Memory を集める。`digestBand` が要求されなかった場合はこの配列を使わない。
     const inScopeMemories: Memory[] = [];
@@ -749,6 +754,25 @@ export class InMemoryMemoryStore implements MemoryStore {
       if (!inPeriod) {
         filteredPeriod += 1;
         continue;
+      }
+      // Issue #280（Issue #202 第2弾）: validAt ゲート。両端 null は「いつでも真」
+      // （`RecallQuery.validAt` の doc 参照）。`postgres` 実装（`memory-store.ts`）と同じ、
+      // **独立した2条件**として数える（`count(*) FILTER` を2本立てるのと同じ形）——
+      // どちらか一方でも成立すればスコープ外だが、両方成立しうる壊れたデータ
+      // （`validFrom > validUntil`）でも両方のカウンタへ計上する。`continue` で
+      // 早期に打ち切ると片方しか数えなくなり、postgres 側の独立集計と食い違う。
+      if (scope.validAt !== undefined) {
+        const isNotYetValid = memory.validFrom != null && memory.validFrom > scope.validAt;
+        const isExpired = memory.validUntil != null && memory.validUntil <= scope.validAt;
+        if (isNotYetValid) {
+          filteredNotYetValid += 1;
+        }
+        if (isExpired) {
+          filteredExpired += 1;
+        }
+        if (isNotYetValid || isExpired) {
+          continue;
+        }
       }
 
       totalInScope += 1;
@@ -802,6 +826,8 @@ export class InMemoryMemoryStore implements MemoryStore {
       filteredSuperseded: { count: filteredSuperseded, countKind: "exact" },
       filteredForgotten: { count: filteredForgotten, countKind: "exact" },
       filteredPeriod: { count: filteredPeriod, countKind: "exact" },
+      filteredExpired: { count: filteredExpired, countKind: "exact" },
+      filteredNotYetValid: { count: filteredNotYetValid, countKind: "exact" },
       digests,
       digestEligible,
     };

@@ -88,8 +88,36 @@ export interface FilteredOmission {
    * 段2の直前で全チャンネルの候補に対して掛ける後置フィルタが実際に落とした件数
    * だけである。**⟹ `countKind` は常に `"lower_bound"`（押し下げで落ちた分は
    * この数に含まれておらず、実際の総数はこれ以上でありうる）。
+   *
+   * **`"expired"`/`"not_yet_valid"`（Issue #280、Issue #202 第2弾、マネージャー決定3）**:
+   * `RecallQuery.validAt` ゲート（既定 `now`）が落とした Memory を名指しする。
+   * - `"expired"`: `validUntil` が `validAt` 以前（`validUntil <= validAt`）——
+   *   その事実はもう真ではない。
+   * - `"not_yet_valid"`: `validFrom` が `validAt` より後（`validFrom > validAt`）——
+   *   その事実はまだ真になっていない。
+   *
+   * **⚠ 1つの `"invalid"` のような値に束ねない。** ゲートは両端を独立に落とす
+   * （`validFrom` 超過と `validUntil` 超過は別の原因）。1つに束ねると、
+   * 「まだ来ていない」のか「もう過ぎた」のかを呼び出し側が判定できなくなり、
+   * **issue が禁じる「片方だけ名指しして残りが黙って減る」形になる**——
+   * `"superseded"`/`"forgotten"` を分けた ADR 0027 と同じ判断。
+   *
+   * **`count`/`countKind` は `"period"` と同じ扱い（`"decayed"` とは違う）**:
+   * 段1（ANN・語彙の両チャンネル）へ SQL の `WHERE` として押し下げているため
+   * （`VectorFilter.validAt`/`LexicalFilter.validAt`。`"decayed"` は ANN にしか
+   * 押し下げていないので `lower_bound` になるのと対照的）、`MemoryStore.aggregateScope`
+   * の `count(*) FILTER` で厳密集計できる。⟹ `countKind` は常に `"exact"`。
    */
-  condition: "tenant" | "superseded" | "forgotten" | "archived" | "taxonomy" | "period" | "decayed";
+  condition:
+    | "tenant"
+    | "superseded"
+    | "forgotten"
+    | "archived"
+    | "taxonomy"
+    | "period"
+    | "decayed"
+    | "expired"
+    | "not_yet_valid";
   count: number;
   countKind: CountKind;
 }
@@ -298,6 +326,8 @@ const FilteredOmissionSchema = z.object({
     "taxonomy",
     "period",
     "decayed",
+    "expired",
+    "not_yet_valid",
   ]),
   count: z.number().int().nonnegative(),
   countKind: CountKindSchema,
@@ -537,14 +567,16 @@ export const DIGEST_BAND_MAX_ENTRY_CHARS = 120;
  * この値を一度も生成しない（`recall-runtime.ts` に push 箇所ゼロ）。「値が無い」のではなく
  * 「値は在るが生成されない」であり、この2つは型を読む側にとって別の事実である
  * （詳細は `FilteredOmission.condition` の doc、[ADR 0117](../../../docs/decisions/0117-unreachable-union-values-inventory.md)）。
- * **period・status（archived / superseded / forgotten）が実際に `filtered` として
- * 報告される次元である。** taxonomy は Phase 1 に実体が無い（labels テーブルは Phase 2、docs/memory-model.md §8）ため、
+ * **period・status（archived / superseded / forgotten）・validity（expired /
+ * not_yet_valid、Issue #280）が実際に `filtered` として報告される次元である。**
+ * taxonomy は Phase 1 に実体が無い（labels テーブルは Phase 2、docs/memory-model.md §8）ため、
  * この集約では常に発生しない（型としての `FilteredOmission.condition: 'taxonomy'` は
  * Phase 2 向けに残す）。
  *
  * **件数はすべてこの集約1本から取る**（ADR 0011 が段1から締め出した
  * `count(*) OVER ()` の代わりに指定した経路と同じ発想）。`groups` の総和・`totalInScope`・
- * `filteredArchived`/`filteredSuperseded`/`filteredForgotten`/`filteredPeriod`/`notIndexed`
+ * `filteredArchived`/`filteredSuperseded`/`filteredForgotten`/`filteredPeriod`/
+ * `filteredExpired`/`filteredNotYetValid`/`notIndexed`
  * の各件数を、
  * 別々のクエリではなく同一の集約クエリから得ることで、書き込みが並行して起きていても
  * 「群カウントと totalInScope の総和が一致する」という被覆不変条件が構造的に崩れない。
@@ -552,7 +584,7 @@ export const DIGEST_BAND_MAX_ENTRY_CHARS = 120;
 export interface ScopeAggregate {
   /** 群カウント（第3階、axis は Phase 1 では常に 'subject'）。totalInScope に一致するよう合算できる。 */
   groups: GroupCount[];
-  /** スコープ内（tenant + subject? + period? + status ゲート）の総数。 */
+  /** スコープ内（tenant + subject? + period? + status ゲート + validity? ゲート）の総数。 */
   totalInScope: number;
   /** groups の総和が totalInScope と一致することの信頼度。Phase 1 は常に 'exact'。 */
   countKind: CountKind;
@@ -584,6 +616,19 @@ export interface ScopeAggregate {
   filteredForgotten: { count: number; countKind: CountKind };
   /** 時間窓（period）の外にあるため落ちた件数。period 未指定なら常に0。 */
   filteredPeriod: { count: number; countKind: CountKind };
+  /**
+   * Issue #280: `validUntil` が `scope.validAt` 以前で落ちた件数
+   * （`FilteredOmission.condition: 'expired'` の doc 参照）。`scope.validAt` が
+   * `undefined`（ゲート無効）なら常に0。`filteredPeriod` と同じく `countKind` は
+   * 常に `'exact'`（段1へ SQL として押し下げているため厳密集計できる）。
+   */
+  filteredExpired: { count: number; countKind: CountKind };
+  /**
+   * Issue #280: `validFrom` が `scope.validAt` より後で落ちた件数
+   * （`FilteredOmission.condition: 'not_yet_valid'` の doc 参照）。同上、
+   * `scope.validAt` が `undefined` なら常に0、`countKind` は常に `'exact'`。
+   */
+  filteredNotYetValid: { count: number; countKind: CountKind };
   /**
    * 目次帯（`IndexBand.digestBand`）に載せる候補（スコープ内 かつ
    * `AggregateScopeOptions.digestBand.excludeMemoryIds` に含まれないもの）を、
@@ -1006,6 +1051,50 @@ export interface RecallQuery {
    */
   includeFullyDecayed?: boolean;
   /**
+   * **「この時刻において真だった記憶」を問う**（Issue #280、Issue #202 第2弾、
+   * マネージャー決定1）。
+   *
+   * 述語: `(validFrom IS NULL OR validFrom <= validAt) AND
+   * (validUntil IS NULL OR validUntil > validAt)`。
+   * - `validFrom` は**閉じた左端**（`<=`）。
+   * - `validUntil` は**開区間の右端**（狭義の `>`）——`includeFullyDecayed` の
+   *   `VectorFilter.decayFloorAtAfter` が採る狭義 `>` に境界の扱いを揃えた
+   *   （「ちょうど境界の Memory を含めるかどうか」を、同じ repo 内で2通りに
+   *   しない）。`validUntil` の瞬間そのものは、もう真ではない側に入る。
+   * - **`validFrom`/`validUntil` が両方 `null` の Memory は「いつでも真」と扱う**
+   *   （「不明」ではない）。**理由**: この PR の時点で、両方 `null` が既存行の
+   *   大多数である（[ADR 0145](../../../docs/decisions/0145-valid-from-until-storage.md)
+   *   が配線するまで、この2列に非 null を書く経路が1つも無かった）。「不明」と
+   *   解釈すると、この述語は既存のほぼ全ての記憶を落とす——「いつ時点で真だったか
+   *   分からない記憶は無いことにする」という、この issue が意図しない挙動になる。
+   *
+   * **省略時の既定は `now`**（＝ゲートは既定で効く）。`includeFullyDecayed` と同じ
+   * opt-out 型——`valid_until` を過ぎた記憶は定義上もう真ではなく、黙って返すのは
+   * 誤りである。**この既定は実質非破壊である**: この PR の時点で、production の
+   * どの書き込み経路も `validFrom`/`validUntil` に非 null を書いていない
+   * （ADR 0145 が配線した読み書きを、`ObserveXxxInput` 経由で初めて production に
+   * つなぐのは本 PR 自身——「射程外にしたもの」参照）。⟹ 既存の呼び出しが渡す
+   * `Memory` の `validFrom`/`validUntil` は常に両方 `null` であり、上の述語は
+   * 常に恒真になる。**既定を on にしても、この PR の時点で挙動は1バイトも
+   * 変わらない**（歯: `packages/core/src/__tests__/recall-validity.test.ts` の
+   * 「両方 null の既存データでは絞りが恒真になる」)。
+   *
+   * **段1（ANN・語彙の両チャンネル）へ押し下げる**（`VectorFilter.validAt`/
+   * `LexicalFilter.validAt`。`period`/ADR 0059 と同じ形——`includeFullyDecayed` とは
+   * 違い、語彙チャンネルも SQL の `WHERE` で絞る。理由は `VectorFilter.validAt` の
+   * doc を参照）。**新しい索引は足していない**——理由は
+   * [ADR 0164](../../../docs/decisions/0164-valid-from-until-recall.md) を参照。
+   */
+  validAt?: Date;
+  /**
+   * `validAt` ゲートの明示的な opt-out（`includeFullyDecayed` と対称）。
+   *
+   * `true` を渡すと、`validFrom`/`validUntil` を一切見ない——この PR より前の挙動
+   * （区間の内外を問わずすべての記憶が候補に残る）に戻る。**`validAt` を同時に
+   * 渡しても無視される**（ゲートそのものが無効になるため）。
+   */
+  includeOutsideValidity?: boolean;
+  /**
    * **連想枠（Issue #200、北極星「聞かれていないことを、自分から思い出す」）。**
    *
    * **省略時は連想を一切走らせない**（既定 off）——`association` を渡さない呼び出しの
@@ -1153,6 +1242,8 @@ export const RecallQuerySchema = z.object({
   scoreThreshold: z.number().optional(),
   digestBandLimit: z.number().int().positive().optional(),
   includeFullyDecayed: z.boolean().optional(),
+  validAt: z.date().optional(),
+  includeOutsideValidity: z.boolean().optional(),
   association: RecallAssociationQuerySchema.optional(),
 }) satisfies z.ZodType<RecallQuery>;
 
@@ -1171,12 +1262,19 @@ export interface RecallScope {
   subjectId?: string;
   occurredAfter?: Date;
   occurredBefore?: Date;
+  /**
+   * Issue #280: `RecallQuery.validAt` ゲートが有効なときの基準時刻。`recall-runtime.ts`
+   * が `RecallQuery.includeOutsideValidity` を見て、ゲート無効なら `undefined` にする
+   * （`period` が未指定なら `undefined` のままなのと同じ形）。
+   */
+  validAt?: Date;
 }
 
 export const RecallScopeSchema = z.object({
   subjectId: z.string().min(1).optional(),
   occurredAfter: z.date().optional(),
   occurredBefore: z.date().optional(),
+  validAt: z.date().optional(),
 }) satisfies z.ZodType<RecallScope>;
 
 /**

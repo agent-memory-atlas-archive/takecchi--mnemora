@@ -2130,6 +2130,10 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
       payload,
       occurredAt: input.occurredAt ?? null,
       recordedAt: clock.now(),
+      // Issue #280: `occurredAt` と同じ経路（`Observation.validFrom`/`validUntil` の
+      // doc コメント参照。deferred 抽出でも値が残るよう Observation に持たせる）。
+      validFrom: input.validFrom ?? null,
+      validUntil: input.validUntil ?? null,
     };
 
     const { observation, created, jobs } = await deps.memoryStore.createObservationWithOutbox(
