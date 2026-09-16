@@ -8,8 +8,15 @@ Release の tag にあるという既存の決定（[ADR 0070](./docs/decisions/
 ## 過去のバージョンについて
 
 **v0.1.0 〜 v0.1.9 の変更は、このファイルには書き起こしていない。**
-[GitHub Releases](https://github.com/takecchi/mnemora/releases) の各 tag を参照すること。
-このファイルは **v1.0.0 以降を対象とする**（理由: [ADR 0169](./docs/decisions/0169-changelog-hand-curated.md) 決定4）。
+[GitHub Releases](https://github.com/takecchi/mnemora/releases) の各 tag を参照すること
+（理由: [ADR 0169](./docs/decisions/0169-changelog-hand-curated.md) 決定4）。
+
+⚠ **このファイルの初版と ADR 0169 決定4 は「v1.0.0 以降を対象とする」と書いていた。**
+そう書いた時点では、次に出る Release が `v1.0.0` になる見込みだった。**実際に出たのは
+2026-09-16 の `v0.2.0` である**（tag が指すのは `c52be47`）。⟹ **このファイルが実際に
+対象としているのは `0.2.0` 以降である。**書き起こさない範囲（v0.1.0 〜 v0.1.9）は
+決定4 のまま変えていない。⛔ **ADR 0169 の本文は当時の記録なので書き換えていない**
+（`AGENTS.md`）。
 
 ## 何を載せるか
 
@@ -22,10 +29,31 @@ Release の tag にあるという既存の決定（[ADR 0070](./docs/decisions/
 
 ## [1.0.0] - 未リリース
 
+⛔ **`v1.0.0` の tag はまだ切られていない。**【実測】2026-09-16、`gh release list --limit 10` の
+最新は `v0.2.0` であり、`npm view @mnemora/<pkg> dist-tags` は6パッケージとも `latest: 0.2.0` を返す。
+
+**この節は `0.2.0` からの差分を対象とする。載せる項目は、いま1件も無い。**
+【実測】`git rev-parse v0.2.0` と `git rev-parse origin/main` がどちらも `c52be47…` を返す
+——**`v0.2.0` の tag 以降、`origin/main` に commit が1本も入っていない。**⟹ 利用者に見える
+変更も無い。
+
+⚠ **`v1.0.0` に何が入るか・いつ切るかは、この節を書いた時点で決まっていない。**
+経緯は [docs/roadmap.md](./docs/roadmap.md) §7.12 に在る。
+
+---
+
+## [0.2.0] - 2026-09-16
+
+**Release**: [v0.2.0](https://github.com/takecchi/mnemora/releases/tag/v0.2.0)（pre-release ではない）。
+**tag が指すのは `c52be47`**、**前の版は `v0.1.9`**（`6c9d101`）。⟹ **この節は
+`v0.1.9` → `v0.2.0` の差分である**（【実測】`git rev-list --count v0.1.9..v0.2.0` = 30）。
+
 対象パッケージの公開範囲: `@mnemora/core` / `@mnemora/testkit` / `@mnemora/postgres` /
 `@mnemora/openai` / `@mnemora/anthropic` / `@mnemora/local-embedding`。
 **破壊的変更はすべて `@mnemora/core` と `@mnemora/testkit` に限られる**
-（`openai`/`anthropic`/`local-embedding` の `src` に v0.1.9 からの差分は無い）。
+（`openai`/`anthropic`/`local-embedding` の `src` に v0.1.9 からの差分は無い。【実測】
+`git diff --stat v0.1.9..v0.2.0 -- packages/openai/src packages/anthropic/src packages/local-embedding/src`
+が空を返す）。
 
 **postgres 利用者へ**: 新しいマイグレーション（`0013`/`0014`/`0015`）が増えている。
 適用手順・破壊的変更ごとの対応方法は [docs/migration-v1.md](./docs/migration-v1.md) を見ること

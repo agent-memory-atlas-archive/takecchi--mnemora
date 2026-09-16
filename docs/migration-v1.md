@@ -1,9 +1,29 @@
-# v0.1.9 → v1.0.0 移行ガイド
+# v0.1.9 → v0.2.0 移行ガイド
 
-**この文書は v0.1.9 の利用者が v1.0.0 へ上げるときに、何をどう直すかだけを扱う。**
+**この文書は v0.1.9 の利用者が v0.2.0 へ上げるときに、何をどう直すかだけを扱う。**
 各変更の設計判断・検討した代替案・引き受けた負債は、リンク先の ADR を見ること
 ——ここでは複製しない（`AGENTS.md` の反重複規律）。ユーザー向けの新機能・バグ修正の
 一覧は [CHANGELOG.md](../CHANGELOG.md) を見ること。
+
+---
+
+## ⚠ この文書は当初「v0.1.9 → v1.0.0」として書かれた
+
+**そう書いた時点では、次に出る Release が `v1.0.0` になる見込みだった。**
+**実際に出たのは 2026-09-16 の `v0.2.0` であり、下に挙げる🔴6+1件・🟡3件は
+すべて `v0.2.0` に入って出荷された**（tag `v0.2.0` が指すのは `c52be47`。
+【実測】`gh release list --limit 10` の最新が `v0.2.0`、
+`npm view @mnemora/<pkg> dist-tags` が6パッケージとも `latest: 0.2.0`）。
+⟹ **表題と本文の版を `v0.2.0` に直した。手順の中身は1件も変えていない。**
+
+⛔ **`v1.0.0` はまだ切られていない。**⟹ **`v0.2.0` → `v1.0.0` の移行手順は、
+この文書には無い**——**`v1.0.0` に何が入るかが決まっていないため、まだ書けない。**
+経緯は [docs/roadmap.md](./roadmap.md) §7.12 に在る。
+
+**ファイル名が `migration-v1.md` のままである理由**: この名前は
+[`docs/roadmap.md`](./roadmap.md)・[ADR 0165](./decisions/0165-decay-activity-clock.md)・
+[ADR 0169](./decisions/0169-changelog-hand-curated.md) から参照されており、
+**それらは当時の記録なので書き換えない**（`AGENTS.md`）。⟹ **名前は据え置き、中身だけを実態に合わせた。**
 
 ---
 
@@ -12,7 +32,7 @@
 **ほとんどの利用者は何もしなくてよい。** `createRuntime()`（`@mnemora/postgres` /
 `@mnemora/openai` などの実装を渡して組み立てる）で作った `Runtime` を、
 `observe()`/`recall()`/`reflect()`/`consolidate()`/`forget()` の5つの動詞だけで
-使っているなら、v1.0.0 でコードの変更は要らない。
+使っているなら、v0.2.0 でコードの変更は要らない。
 
 下の🔴6+1件はすべて「**独自の adapter・独自の `Runtime` 実装・独自のテスト基盤コードを
 書いている場合**」にだけ影響する。あなたが該当するかどうかは、次の表で判定できる:
@@ -110,7 +130,7 @@ interface NewRecallRecord {
   // ...
 }
 
-// 新（v1.0.0）
+// 新（v0.2.0）
 interface NewRecallRecord {
   returnedMemories: RecallRecordMemory[]; // { memoryId, score, retrievedVia, companionOf?, associationOf? }
   // ...
@@ -182,7 +202,7 @@ switch (omission.condition) {
 
 **誰が影響を受けるか**: `Runtime` interface を**自分で実装している**場合——
 `createRuntime()`（`@mnemora/core`）で組み立てた `Runtime` をそのまま使っているだけなら
-影響しない（`createRuntime()` は v1.0.0 で `getRecall` を実装済みで返す）。自分で
+影響しない（`createRuntime()` は v0.2.0 で `getRecall` を実装済みで返す）。自分で
 `Runtime` を実装するのは主に次のようなケース: テストのための mock/stub、`Runtime` を
 ラップする独自の facade、`Runtime` interface に依存するが `createRuntime()` を経由しない
 独自実装。
@@ -215,7 +235,7 @@ async getRecall(ctx: Ctx, recallId: RecallId): Promise<RecallRecord | null> {
 describeTenantSettingsStoreConformance({
   name: "my-tenant-settings-store",
   createStore: () => new MyTenantSettingsStore(),
-  // v1.0.0 で必須になった:
+  // v0.2.0 で必須になった:
   supportsDecayClock: false, // 自作 adapter が getDecayClock/setDecayClock/
                               // getDefaultHalfLifeRecalls/getActivitySeq を実装していないなら false
 });
@@ -260,7 +280,7 @@ describeTenantSettingsStoreConformance({
 2. その `Memory` を `recall()` で取得している。
 
 **該当しない場合は何も変わらない**——`Runtime.observe()` 経由では v0.1.9 の時点で
-`validFrom`/`validUntil` に値を書く経路が存在しなかった（v1.0.0 で初めて
+`validFrom`/`validUntil` に値を書く経路が存在しなかった（v0.2.0 で初めて
 `ObserveUtteranceInput`/`ObserveEventInput`/`ObserveDocumentInput` に追加された）ため、
 通常の利用者（`Runtime.observe()` だけで記憶を作っている場合）は影響を受けない。
 
@@ -286,7 +306,7 @@ recall したいなら、`RecallQuery.includeOutsideValidity: true` を渡す。
 ### `PostgresVectorStore.search` の `ORDER BY` に `memory_id` の tie-break が追加された
 
 **影響を受ける条件**: 通常は無し。距離が完全に一致する候補が複数あるとき、以前は
-順序が未定義だったが、v1.0.0 では `memory_id` の順に決定的になる。**この変更で
+順序が未定義だったが、v0.2.0 では `memory_id` の順に決定的になる。**この変更で
 recall の結果が意味的に変わることは無い**——同点だった候補の並び順が固定されるだけ。
 
 根拠: [ADR 0167](./decisions/0167-association-getvectors-order-nondeterminism.md)。
