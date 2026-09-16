@@ -188,6 +188,93 @@ await runtime.observe(ctx, {
 適合テスト（conformance suite）に食わせて検査できる。`@mnemora/postgres` 自身の実装も
 この適合テストで検査している。
 
+## この package が作るオブジェクト（共有 DB へ入れる前に確認すること）
+
+**mnemora を、他のアプリと同じ Postgres データベースへ同居させる場合**は、
+下の名前が既存のオブジェクトと衝突しないか、導入前に確認すること。専用スキーマへ
+隔離したい場合は上の「専用スキーマを指定する」を見ること（テーブル・索引は
+`--schema` で指定したスキーマの下に作られる。advisory lock のキーは
+「advisory lock のキー」の節を見ること）。
+
+**この一覧は自動生成ではない。**`packages/postgres/migrations/*.sql` を
+ファイル名順に適用した最終形として人手で導出し、
+[`scripts/__tests__/readme-postgres-objects.test.mjs`](../../scripts/__tests__/readme-postgres-objects.test.mjs)
+（[`scripts/readme-postgres-objects-lib.mjs`](../../scripts/readme-postgres-objects-lib.mjs)）が
+migrations と `src/` の現物から機械的に導いた集合と突き合わせている。**この一覧が
+CI で赤くなったら、コードではなくこの一覧のほうを直すこと**（歯が正、この文章が従。
+導出のやり方・DROP された索引を数えない理由は [ADR 0202](../../docs/decisions/0202-postgres-shared-db-object-names.md) 参照）。
+
+⚠ **`CREATE FUNCTION`（`mnemora_lexical_normalize` 等）は対象外。**関数名も
+理屈のうえでは共有 DB で衝突しうるが、この節・この歯はそれを検査しない
+（ADR 0202「引き受けた負債」）。
+
+### テーブル（8）
+
+- `memories`
+- `memory_events`
+- `observations`
+- `outbox`
+- `recall_usages`
+- `recalls`
+- `tenant_activity`
+- `tenant_settings`
+
+### 索引（20）
+
+- `idx_memories_by_subject`
+- `idx_memories_contested`
+- `idx_memories_contested_with`
+- `idx_memories_lexical`
+- `idx_memories_period_ann_stage`
+- `idx_memories_provenance_kind`
+- `idx_memories_recall_gate`
+- `idx_memories_recall_gate_seq`
+- `idx_memories_requeue_embed`
+- `idx_memories_superseded_by`
+- `idx_memories_tags`
+- `idx_memory_events_by_kind`
+- `idx_memory_events_by_memory`
+- `idx_memory_events_by_retention`
+- `idx_observations_by_subject`
+- `idx_outbox_claimable`
+- `idx_outbox_pending`
+- `idx_recalls_by_subject`
+- `uq_memories_extraction`
+- `uq_observations_external_id`
+
+### 実行時に増える系列（埋め込み空間ごと）
+
+`registerEmbeddingSpace` を呼ぶたびに、その `EmbeddingSpaceId`
+（`(provider, model, dimensions)`）ごとに次の名前が1組ずつ増える
+（[`src/embedding-space-table.ts`](./src/embedding-space-table.ts)）:
+
+- テーブル: `memory_embeddings_<space>`
+- 索引（HNSW）: `idx_memory_embeddings_hnsw_<space>`
+
+`<space>` は `provider` / `model` / `dimensions` を小文字化・非英数字を `_` に置換して
+連結したスラグ（例: `openai_text_embedding_3_small_1536`）。**PostgreSQL の識別子は
+63バイトまで**のため、これを超える場合は末尾を切り詰め、内容から導いたハッシュ片
+（8桁の16進）を足して衝突を避ける——⚠ **この歯は接頭辞の一致しか検査していない。
+実際に切り詰め・ハッシュ付与が起きたときの具体的な名前は確かめていない**
+（ADR 0202「引き受けた負債」2番）。
+
+### advisory lock のキー
+
+`runMigrations`（マイグレーション適用）と `registerEmbeddingSpace`
+（埋め込み空間ごとのテーブル作成）は、それぞれ別の `pg_advisory_lock` キーで
+プロセス間排他を行う（[`src/migrate.ts`](./src/migrate.ts)・
+[`src/vector-space.ts`](./src/vector-space.ts)）。**`pg_advisory_lock` のキー空間は
+データベース全体で共有される**——同じ DB の別アプリが同じ数値をキーに使っていると
+無関係な処理同士が意図せずブロックし合う。
+
+- `--schema` 未指定、または `--schema public`: 固定の既定キーを使う。
+  - `runMigrations`: `7190158676462701299`（`MIGRATION_LOCK_KEY`）
+  - `registerEmbeddingSpace`: `-4359922960011245935`（`REGISTER_EMBEDDING_SPACE_LOCK_KEY`）
+- それ以外の `--schema <name>` を指定した場合: 固定値ではなく、次のシード文字列を
+  sha256 でハッシュして導出した値になる（`deriveAdvisoryLockKey`）。
+  - `runMigrations`: シード `mnemora:runMigrations:advisory-lock:<schema>`
+  - `registerEmbeddingSpace`: シード `mnemora:registerEmbeddingSpace:advisory-lock:<schema>`
+
 ## もっと詳しく
 
 - [docs/memory-model.md](../../docs/memory-model.md) §10 — DB schema・規約
