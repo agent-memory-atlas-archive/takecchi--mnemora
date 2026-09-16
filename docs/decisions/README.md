@@ -201,5 +201,6 @@ alteroid (github.com/takecchi/alteroid) を根拠として引く箇所は、確�
 | [0191](./0191-ci-green-verdict-bound-to-sha.md) | 「CI が緑」の判定を sha に縛る——`gh pr merge --match-head-commit` を道具側で強制する（Issue #294） | 採用 (2026-09) |
 | [0192](./0192-adr-index-freshness-enforced-in-pull-request-ci.md) | ADR 索引の鮮度を、CI の `pull_request` でも強制する — 手順が守られたかを、注意力ではなく機構で確かめる（Issue #267） | 採用 (2026-09) |
 | [0193](./0193-ann-unreached-covers-full-window.md) | `ann_unreached` を「窓が満杯でも鳴る」形に直す — `ann-truncation.ts` の約束をようやく果たす | 採用 (2026-09) |
+| [0195](./0195-six-gates-verified-in-ci.md) | 6つの門の緑は CI で確かめる——手元で全体を走らせることを止まる条件にしない（Issue #407） | 採用 (2026-09) |
 
 <!-- ADR-INDEX:GENERATED:END -->
