@@ -135,7 +135,7 @@ export function buildLexicalSearchSelect(
       ) AS rank
     FROM memories
     WHERE ${whereClause}
-    ORDER BY coverage DESC, rank DESC
+    ORDER BY coverage DESC, rank DESC, recorded_at DESC, id
     LIMIT ${opts.limit}
   `;
 }
@@ -150,11 +150,26 @@ export function buildLexicalSearchSelect(
  * **書き込み口を持たない**——索引は `memories` への書き込みに自動で追随するため、
  * 同期の口が要らない（同 doc）。
  *
- * `search` の `ORDER BY` は `coverage DESC, rank DESC`（ADR 0092。`LexicalHit.coverage`/
- * `rank` の doc: どちらも大きいほど上位）。`coverage` はそのまま
- * `ScoreBreakdown.lexicalMatch` に入る値であり、`rank` は同値のときのタイブレークにしか
- * 使わない。`rank` の尺度は `ts_rank_cd` 固有であり、`VectorHit.distance`
+ * `search` の `ORDER BY` は `coverage DESC, rank DESC, recorded_at DESC, id`
+ * （前半2段は ADR 0092。後半2段は
+ * [ADR 0175](../../../docs/decisions/0175-lexical-search-tiebreak-nondeterminism.md)
+ * （Issue #345）——`vector-store.ts` の `search()` が
+ * [ADR 0170](../../../docs/decisions/0170-association-search-tiebreak-nondeterminism.md)
+ * （Issue #339）で採った「距離 → `recorded_at` DESC → `memory_id`」の3段と同じ形の、
+ * 語彙チャンネル版）。`LexicalHit.coverage`/`rank` の doc: どちらも大きいほど上位。
+ * `coverage` はそのまま `ScoreBreakdown.lexicalMatch` に入る値であり、`rank` は同値のときの
+ * タイブレークにしか使わない。`rank` の尺度は `ts_rank_cd` 固有であり、`VectorHit.distance`
  * （コサイン距離）とは比較できない（ADR 0084 §5）。
+ *
+ * **なぜ `id` だけでなく `recorded_at` を挟むのか**: `id` は `gen_random_uuid()` が
+ * ingest のたびに新しく振るランダムな UUID であり、**同一 DB 内では決定的でも、
+ * DB を作り直す（fresh ingest）と大小関係が変わる**——ADR 0170 が Issue #339 で
+ * 突き止めた根本原因と同じ構造の欠陥が、語彙チャンネル側にもコードとして存在していた
+ * （実害を実測したわけではない。ADR 0175「確かめていないこと」参照）。`recorded_at` は
+ * テナント内の ingest 処理順に紐づく値であり、**fresh ingest をまたいでも相対順序が
+ * 再現する。**`id` は最終フォールバック——`recorded_at` まで完全一致したときだけ効く。
+ * **`recorded_at` が衝突した行どうしの間でだけ、非決定に戻る**（ADR 0170「引き受けた
+ * 負債」1番をそのまま引き継ぐ残余。ADR 0175 決めたこと参照）。
  *
  * **⚠ `mnemora_lexical_coverage`/`ts_rank_cd` はどちらも `float8`/`real` を返す。**
  * `pg`（node-postgres）は float4/float8 を JS の `number` として返す型パーサを

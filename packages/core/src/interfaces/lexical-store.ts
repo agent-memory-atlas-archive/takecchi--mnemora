@@ -103,6 +103,37 @@ export interface LexicalHit {
  * （ADR 0084 §8 の負債）。
  */
 export interface LexicalStore {
+  /**
+   * `coverage` 降順・同値なら `rank` 降順で最大 `opts.limit` 件を返す（クラス doc
+   * 「返り値は `coverage` の降順である。同値なら `rank` の降順でタイブレークする」）。
+   *
+   * **⚠ `coverage`/`rank` の両方が完全に一致する行が複数あるときの順序も、adapter の
+   * 責務である**（Issue #345 /
+   * [ADR 0175](../../../../docs/decisions/0175-lexical-search-tiebreak-nondeterminism.md)、
+   * `VectorStore.search` の doc（`packages/core/src/interfaces/vector-store.ts`）が
+   * [ADR 0170](../../../../docs/decisions/0170-association-search-tiebreak-nondeterminism.md)
+   * で書いたのと同じ形の契約の、語彙チャンネル版）。
+   *
+   * **⚠ これが効く理由は「core が返却順をそのまま使うから」ではない。**
+   * `recall-runtime.ts` の段2（再スコア）は `compareScoredCandidates`（ADR 0170 決定2）で
+   * 候補を**並べ直す**——`score.total` → 実効時刻 → `memory.id` の3段であり、
+   * `memory.id` は一意なので**全順序**である。⟹ 段2に届いた後の並びは、
+   * `search()` が返した順序に依存しない。
+   * **効くのは、その手前の `opts.limit` による切り詰めである**——`search()` は
+   * 「同点の候補のうち、どの `limit` 件を返すか」を決めており、
+   * **そこで落ちた候補は段2に一度も届かない。**⟹ 同点候補の順序が adapter ごとに
+   * （あるいは DB を作り直すたびに）変われば、**候補集合そのものが変わり、`recall()` の
+   * 結果が同じ入力に対して変わりうる。**ADR 0170 が Issue #339 で実際に踏んだのも
+   * この機序である（あちらは `maxCount`／段2の `limit` による切り詰めだった）。
+   *
+   * `PostgresLexicalStore` は `coverage` → `rank` → `recorded_at` DESC → `id` の4段で
+   * tie-break する（`packages/postgres/src/lexical-store.ts` のクラス doc参照）。
+   * **`id` だけに頼る tie-break は不十分**——`id` はテナントの内容とは無関係な、
+   * ingest のたびに新しく振られる値であり、同一内容が重複記録される場面（同じ `content`
+   * を持つ行が複数ある場合、`coverage`/`ts_rank_cd` はどちらも完全に一致する）では、
+   * DB を作り直すたびに同点候補の並び順が変わる。**adapter を新しく書くときは、
+   * `coverage`/`rank` だけでなく完全なタイブレークまで含めて決定的な順序を返すこと。**
+   */
   search(
     ctx: Ctx,
     query: string,
