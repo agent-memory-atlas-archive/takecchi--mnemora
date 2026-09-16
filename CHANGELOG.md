@@ -29,30 +29,98 @@ Release の tag にあるという既存の決定（[ADR 0070](./docs/decisions/
 
 ## [1.0.0] - 未リリース
 
-⛔ **`v1.0.0` の tag はまだ切られていない。**【実測】2026-09-16、`gh release list --limit 10` の
-最新は `v0.2.0` であり、`npm view @mnemora/<pkg> dist-tags` は6パッケージとも `latest: 0.2.0` を返す。
+⛔ **`v1.0.0` の tag はまだ切られていない。**【実測】2026-09-17、`gh release list` の最新は `v0.2.0`。
 
-**この節は `0.2.0` からの差分を対象とする。載せる項目は、いま1件も無い。**
-【実測】2026-09-17、`git rev-parse v0.2.0` は `c52be478…`、`git rev-parse origin/main` は
-`9e13ac87…` を返す——**`v0.2.0` の tag 以降、`origin/main` に commit が2本入っている**
-（`git log --oneline v0.2.0..origin/main`）:
+**この節は `0.2.0` からの差分を対象とする。**
 
-- `d2f5e40`（PR #359、`docs(changelog,migration,release,roadmap): …`）——変更ファイルは
-  `CHANGELOG.md` / `docs/migration-v1.md` / `docs/release-v1.md` / `docs/roadmap.md` の
-  4件のみ。**docs のみの PR。**
-- `9e13ac8`（PR #362、`test(core,postgres): …`、Issue #293 / ADR 0177）——変更ファイルは
-  ADR 1件・ADR 索引1件と、`packages/core/src/__tests__/` の test ファイル3件・
-  `packages/postgres/src/__tests__/recall.postgres.test.ts`。**すべて `__tests__/` 配下か
-  ドキュメントで、`packages/*/src` の非テストコードに差分は無い**（commit 本文も
-  「本番コードは変更していない」と明記）。**テスト追加のみの PR。**
+⭐ **数えた基準を明記する。**この節の数字は `v0.2.0` … **`4b92134`** の範囲を数えたものである。
+⟹ 🔴 **`origin/main` がこれより進んでいたら、この節は腐っている可能性がある**——読む人が
+`git log --oneline 4b92134..origin/main` で自分で判定できる。**数字を焼き込む以上、`main` が動けば
+必ず腐る**（`docs/roadmap.md` §7.0 と同じ規律を、この節にも掛ける）。
 
-どちらも、冒頭「何を載せるか」節の除外規則（docs のみの PR・テスト追加のみの PR は
-載せない）に当たる。⟹ **どちらも載せる対象ではなく、項目は引き続き0件。**
-（【実測】`git diff --stat v0.2.0 origin/main -- packages/core/src packages/postgres/src` の
-出力4件がすべて `__tests__/` 配下であることを確認した。）
+【実測】`git rev-list --count v0.2.0..4b92134` は **36**、
+うち `feat`/`fix` は **13本**。冒頭「何を載せるか」の除外規則（docs のみ・テスト追加のみ・
+内部スクリプト・ADR 索引の再生成は載せない）に当てると、**利用者に見える PR は8本**である。
+⚠ **項目の件数は9件で、PR の本数と一致しない**——PR #416 が「後方互換の追加」と「破壊的変更」を
+**両方**持つため、下では2項目に分けて書いている。⟹ **PR の本数と項目の件数を同じ数だと思わないこと。**
 
-⚠ **`v1.0.0` に何が入るか・いつ切るかは、この節を書いた時点で決まっていない。**
-経緯は [docs/roadmap.md](./docs/roadmap.md) §7.12 に在る。
+⚠ **「`packages/*/src` を触ったか」で数えないこと。**この規則とずれる例が両方向に在る——
+`0016`/`0017` のマイグレーション追加（PR #396）は `src` を1行も触らないが**載せる**（利用者が
+マイグレーションを流す必要がある）。逆に PR #383 は `packages/*/src` を触っているが
+**doc コメントのみで実行コードに差分が無い**ので**載せない**。
+
+### 変更（破壊的）
+
+⚠ **3件ある。1件目・2件目と、3件目とで壊れ方が違う。**
+
+**1件目・2件目は「返り値の型に必須フィールドが増えた」形**である。⟹ **読むだけの利用者は影響を受けない。**
+**自分で組み立てている側**（独自 adapter・テストダブル）だけが型エラーになる。
+
+🔴 **3件目は「公開クラスのメソッドの署名が変わった」形**である。⟹ **呼んでいる側が壊れる。**
+同期から `Promise` へ変わったので、**引数を直しただけでは足りない**（`await` が要る）。
+
+- `FilteredOmission` に必須フィールド `scopeRelation` が増えた。`decayed` だけが
+  `totalInScope` の**内側**を数えるという非対称を、契約として明示するもの
+  （[#352](https://github.com/takecchi/mnemora/issues/352) / [ADR 0174](./docs/decisions/0174-filtered-omission-scope-relation.md)、PR #376）
+- `Omission` の `over_limit` に `stage` が増えた。連想枠（段3.5）の `maxCount` 切り捨てを
+  段1 の打ち切りと区別して名乗るため（[#375](https://github.com/takecchi/mnemora/issues/375) /
+  [ADR 0188](./docs/decisions/0188-association-over-limit-omission.md)、PR #391）
+- 🔴 **`@mnemora/testkit` の `InMemoryTenantSettingsStore.setDefaultHalfLifeRecalls` の署名が変わった。**
+  `(tenantId: string, recalls: number): void` → **`(ctx: Ctx, recalls: number): Promise<void>`**。
+  ADR 0197 が `TenantSettingsStore` interface に同名の**本番**メソッドを足したため名前が衝突し、
+  **テスト専用フックのほうを消して本番の口だけを残した**
+  （[ADR 0197](./docs/decisions/0197-set-default-half-life-recalls.md)、PR #416）。
+  ⟹ 呼んでいた側は **`store.setDefaultHalfLifeRecalls({ tenantId }, recalls)` へ書き換え、
+  返り値を `await` する**必要がある。
+  ⚠ **これは `@mnemora/testkit/fixtures` の公開型である**——`packages/testkit/src/fixtures.ts` は
+  `v0.2.0` の時点で既に `InMemoryTenantSettingsStore` を export しており、
+  `@mnemora/testkit` は publish 対象6本の1つである。
+  ⟹ ⭐ **`@mnemora/core` だけを見て数えると、この1件は落ちる。**
+  ⚠ **移行手順は複製しない**——[docs/migration-v1.md](./docs/migration-v1.md)
+  「8. `InMemoryTenantSettingsStore.setDefaultHalfLifeRecalls`（`@mnemora/testkit`）の
+  シグネチャが変わった」を見ること
+
+### 変更（挙動）
+
+- **`ann_unreached` が「窓が満杯のときにも」鳴るようになった。**従来は
+  `annHits.length < kPrime` のときだけ鳴っていたため、**近似索引が取りこぼしたのに窓は満杯**
+  という場合に沈黙していた（[ADR 0193](./docs/decisions/0193-ann-unreached-covers-full-window.md)、PR #399）。
+  ⟹ 北極星「知らないことを、知らないと言える」の穴を1つ塞いだ
+- **`sweepArchive` が `opts.clock` 省略時に `tenant_settings.decay_clock` へ従うようになった。**
+  従来は掃引だけが常に壁時計で動いていたため、`decay_clock = activity`/`either` を選んだ
+  テナントで「想起では生きている記憶が archive される」ことがあった
+  （[#364](https://github.com/takecchi/mnemora/issues/364) / [ADR 0186](./docs/decisions/0186-sweep-archive-follows-decay-clock.md)、PR #379）
+- **語彙チャンネルの `search()` に決定的な最終キーが入った。**同点の候補の順序が
+  呼び出しごとに変わりうる状態を解消（[#345](https://github.com/takecchi/mnemora/issues/345) /
+  [ADR 0175](./docs/decisions/0175-lexical-search-tiebreak-nondeterminism.md)、PR #390）
+
+### 追加
+
+- **`TenantSettingsStore.setDefaultHalfLifeRecalls`**（任意メソッド）。テナント既定の
+  半減期を「recall 回数」で設定する本番の経路（[ADR 0197](./docs/decisions/0197-set-default-half-life-recalls.md)、PR #416）。
+  ⭕ **任意メソッドなので、この追加そのものは後方互換**——実装していない adapter は従来どおり動く。
+  ⚠ **ただし同じ PR #416 は破壊的変更も1件持っている**（上「変更（破壊的）」の3件目。
+  `@mnemora/testkit` の `InMemoryTenantSettingsStore` の同名メソッドの署名）。
+  ⟹ **「任意メソッドだから丸ごと後方互換」と読まないこと。**
+
+### 変更（性能）
+
+- **`PostgresVectorStore.upsert` が、閾値を越えたときだけ埋め込み表を `ANALYZE` するようになった。**
+  新しい埋め込み空間へ大量投入した直後は統計が無く、**HNSW 索引が選ばれない窓**が在った
+  （[#360](https://github.com/takecchi/mnemora/issues/360) /
+  [ADR 0194](./docs/decisions/0194-embedding-space-analyze-threshold.md)、PR #406）
+
+### DB
+
+- **マイグレーションが2本増えた（`0016` / `0017`）。**`memories.provenance_kind` と
+  `provenance->>kind` の一致を `CHECK` 制約で強制する
+  （[#273](https://github.com/takecchi/mnemora/issues/273) / [ADR 0182](./docs/decisions/0182-provenance-kind-matches-provenance-check.md)、PR #396）。
+  ⟹ **上げるときに `pnpm --filter @mnemora/postgres run migrate` が要る。**
+  手順と、既存行の走査を `NOT VALID` で切り離した理由は
+  [docs/migration-v1.md](./docs/migration-v1.md)「v0.2.0 以降に追加されたマイグレーション」を見ること
+
+⚠ **`v1.0.0` をいつ切るかは、この節を書いた時点で決まっていない。**7項目の現在地は
+[docs/roadmap.md](./docs/roadmap.md) §7.13 に在る。
 
 ---
 
