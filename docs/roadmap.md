@@ -453,6 +453,7 @@ Issue #200（北極星「聞かれていないことを、自分から思い出�
 | **立てた人** | **担い手。オーナーではない。**オーナーは 2026-09-16 に「roadmap に組み込んでいい」と承認した——**承認したのは「置くこと」であって、中身の日付ではない** |
 | **満了する日** | **2026-09-20**（§7.3 の表の最後の日） |
 | **正はどれか** | ⛔ **この表ではない。正は日報である。** |
+| ⭐ **いまの判定** | **2026-09-16 の再監査（`main = 9fcd47c` の現物のコードから）で、7項目は 在る5 / 半分2。**⟹ ⛔ **§7.2 の v1.0 の定義を、書いてあるとおりには満たしていない。**物差し（⭐門）は緑。残件1件ごとの「止める / 止めない」と、何が残っているかは **§7.10**。 |
 
 **⛔ 正は日報である。**延伸・前倒しが起きたら、**まず日報が動き、この表は後から直る。**⟹ **この表と日報が食い違ったら、日報を信じること。**この表を直すのは、差分を日報で報告した担い手の仕事である。
 
@@ -509,34 +510,72 @@ Issue #200（北極星「聞かれていないことを、自分から思い出�
 
 | 警報日 | ここまでに**着手できていなければ疑う**もの | ⭐ 前に何が終わっていれば入れるか（**揃えば日付を待たない**） | 実績 |
 |---|---|---|---|
-| **2026-09-16(水)** | [#302](https://github.com/takecchi/mnemora/issues/302) 項目1 の歯／[#304](https://github.com/takecchi/mnemora/issues/304) 項目6 の歯／[#306](https://github.com/takecchi/mnemora/issues/306) 項目7 の歯／[#291](https://github.com/takecchi/mnemora/issues/291) の probe 集合を**作る**／[#312](https://github.com/takecchi/mnemora/issues/312) 項目3 の実演／[#204](https://github.com/takecchi/mnemora/issues/204) 本体／[#301](https://github.com/takecchi/mnemora/issues/301) 項目4 | **何も要らない。⭐ 7本すべて、いま同時に出せる**（§7.5）。⚠ **[#307](https://github.com/takecchi/mnemora/pull/307) の着地で #298 の3段の鎖が消えた** —— 項目3 に残るのは実演1本だけ | `—（未記入）` |
-| **2026-09-17(木)** | #291 で**測る**／#301 が着地 ⟹ **項目4**／#312 が着地 ⟹ **項目3** | #291 の測定 ← probe 集合が在ること。#301・#312 ← **何も要らない**（9/16 に着地していればこの行は空になる） | `—（未記入）` |
-| **2026-09-18(金)** | 項目2 の道を決めて実装 ⟹ **項目2**／[#303](https://github.com/takecchi/mnemora/issues/303) 実装 ⟹ **項目5** | 項目2 ← **#291 の測定結果**（🔴 唯一の本当の前提）。#303 ← ⭐門の基準値更新が #301 と*着地で*重ならないこと（§7.5） | `—（未記入）` |
-| **2026-09-19(土)** | **7項目の再監査** —— ⛔ 文書ではなく**本番コードからの呼び出しを `grep` で数える**（§7.1 の教訓） | 7項目すべてが「在る」に到達していること | `—（未記入）` |
-| **2026-09-20(日)** | 再監査で出た漏れの修正／**v1.0 を切れる状態まで**（README・移行ガイド・CHANGELOG・`pack:check`）。⛔ `version` を上げる・publish・Release はオーナー専権（§7.8） | 再監査が終わっていること | `—（未記入）` |
+| **2026-09-16(水)** | [#302](https://github.com/takecchi/mnemora/issues/302) 項目1 の歯／[#304](https://github.com/takecchi/mnemora/issues/304) 項目6 の歯／[#306](https://github.com/takecchi/mnemora/issues/306) 項目7 の歯／[#291](https://github.com/takecchi/mnemora/issues/291) の probe 集合を**作る**／[#312](https://github.com/takecchi/mnemora/issues/312) 項目3 の実演／[#204](https://github.com/takecchi/mnemora/issues/204) 本体／[#301](https://github.com/takecchi/mnemora/issues/301) 項目4 | **何も要らない。⭐ 7本すべて、いま同時に出せる**（§7.5）。⚠ **[#307](https://github.com/takecchi/mnemora/pull/307) の着地で #298 の3段の鎖が消えた** —— 項目3 に残るのは実演1本だけ | ⭐ **全7本が 2026-09-16 に着地した。**#302→[#324](https://github.com/takecchi/mnemora/pull/324)／#304→[#325](https://github.com/takecchi/mnemora/pull/325)／#306→[#330](https://github.com/takecchi/mnemora/pull/330)／#291 の probe 集合→[#323](https://github.com/takecchi/mnemora/pull/323)（条件②の破れは [#327](https://github.com/takecchi/mnemora/pull/327) で訂正）／#312→[#328](https://github.com/takecchi/mnemora/pull/328)／#204→[#313](https://github.com/takecchi/mnemora/pull/313)／#301→[#332](https://github.com/takecchi/mnemora/pull/332) |
+| **2026-09-17(木)** | #291 で**測る**／#301 が着地 ⟹ **項目4**／#312 が着地 ⟹ **項目3** | #291 の測定 ← probe 集合が在ること。#301・#312 ← **何も要らない**（9/16 に着地していればこの行は空になる） | ⭐ **前倒し。9/16 中に全部終わった** ⟹ この行は予定どおり空になった。#291 の測定は [#323](https://github.com/takecchi/mnemora/pull/323)／[#327](https://github.com/takecchi/mnemora/pull/327) で実施し、非決定性（[#316](https://github.com/takecchi/mnemora/issues/316)）の原因は [#333](https://github.com/takecchi/mnemora/pull/333) が `getVectors()` の返却順依存と特定して塞いだ |
+| **2026-09-18(金)** | 項目2 の道を決めて実装 ⟹ **項目2**／[#303](https://github.com/takecchi/mnemora/issues/303) 実装 ⟹ **項目5** | 項目2 ← **#291 の測定結果**（🔴 唯一の本当の前提）。#303 ← ⭐門の基準値更新が #301 と*着地で*重ならないこと（§7.5） | ⭐ **前倒し。どちらも 9/16 に着地。**項目2 の道は **(a)（`examples/chat` が使う）**に決まり [#336](https://github.com/takecchi/mnemora/pull/336)（ADR 0168）で着地。#303→[#331](https://github.com/takecchi/mnemora/pull/331)。⚠ **ただし項目2 は §7.4 の再監査で「在る」に届かなかった**——理由は §7.4 の「項目2 を『在る』と数えなかった理由」 |
+| **2026-09-19(土)** | **7項目の再監査** —— ⛔ 文書ではなく**本番コードからの呼び出しを `grep` で数える**（§7.1 の教訓） | 7項目すべてが「在る」に到達していること | ⭐ **前倒し。2026-09-16 に実施**（本 PR）。⛔ **前提「7項目すべてが『在る』に到達していること」は満たされないまま監査した**——満たされたかどうかを決めるのが監査だからである。結果は **在る5 / 半分2 / 無い0**（§7.4） |
+| **2026-09-20(日)** | 再監査で出た漏れの修正／**v1.0 を切れる状態まで**（README・移行ガイド・CHANGELOG・`pack:check`）。⛔ `version` を上げる・publish・Release はオーナー専権（§7.8） | 再監査が終わっていること | **部分的に 9/16 に着地。**README・移行ガイド・CHANGELOG は [#344](https://github.com/takecchi/mnemora/pull/344)（`ea7b4e3`）と [#341](https://github.com/takecchi/mnemora/pull/341)（`3b1cf27`）で着地。⚠ **`pack:check` の実行結果は確かめていない。**⛔ 再監査で出た漏れ（§7.4 の ⚠2、#329、項目2）は**未修正** |
+
+**⭐ 実績の要約: 5日ぶんの予定が、すべて 2026-09-16 の1日に着地した。**⛔ **これは隠さない**——オーナーの指示は「**この予定が延伸または早まった場合は日報で報告が欲しい**」であり、**前倒しも報告の対象である**（§7.3 冒頭）。
+
+⚠ **ただし「全部終わった」ではない。**§7.4 の再監査は **在る5 / 半分2**（項目2・項目6）で終わっており、**§7.2 の v1.0 の定義（7項目が*外から見て*満たされる）には届いていない。**⟹ **日程は4日ぶん前倒しになり、残ったのは日数では詰まらない2件である。**残件ごとの判定は §7.10。
+
+⚠ **この前倒しは §7.9 の「早まる条件」の1つ目そのものである**——「#291 の測定が 9/16 中に返る ⟹ 鎖1（5段）の残りが一気に詰まる」。**実際に返り、実際に詰まった。**⛔ **そして §7.9 は「早まっても目標日 2026-09-20 は動かさない」と定めている。**⟹ **この表の警報日は、いま全行が「既に着手済み」であり、警報としての役目を終えている。**
 
 **⚠ この表に無いもの: 減衰の設計見直し（[Issue #305](https://github.com/takecchi/mnemora/issues/305)）。**2026-09-16 にオーナーが直接「**早速修正改修に取り掛かってください**」と指示し、**時間減衰と時間ベースでない減衰の両方を持つ**ことが決まった（§7.9 の延びる条件2）。⛔ **別の担い手が設計中であり、日付はここに書かない**——**担い手が決まっていない予定を、推測で日へ置かないため**である。⚠ **これは項目4 の前提（何をもって「遠ざかる」とするか）に直接効く。**⟹ 設計が着地したら §7.3 と §7.4 の項目4 の行を**書き直すこと。**
 
 **⚠ 単位は PR 本数であって人日ではない。**日数を先に決めて中身を割り当てたのではなく、**§7.5 で依存の鎖に分解してから、鎖の段に警報日を貼った。**実測の母数は「mnemora は 2026-09-15 に 35本、2026-09-16 は 00:08〜04:03（約4時間）に 19本の PR を着地させた」である 【実測】。**⟹ 4日間で残り 10〜13本という量は、この母数に対して制約ではない。**⛔ **だから「1日1項目」のように均していない。**制約は §7.5 の**鎖の長さ**だけである。
 
-### 7.4 充足状況（2026-09-16 05:00 JST、現物のコードから）
+### 7.4 充足状況（2026-09-16 再監査、現物のコードから）
 
-**⛔ 文書・型・ADR ではなく、「本番コード（`__tests__` を除く）から誰が呼んでいるか」を軸に数えた。**
+**⛔ 文書・型・ADR ではなく、「本番コード（`__tests__` / `__fixtures__` / `*.test.ts` を除く）から誰が呼んでいるか」を軸に数えた。**
 
-| # | 目指す姿 | いま | 何が動けば「在る」になるか（関数の粒度） | issue |
+**⚠ この表は 05:00 JST 版（`main = 8ae7750`）を、v1.0 スコープの実装が全部着地した後に当て直したものである。**⛔ **コードを読んだのは `main = 9fcd47c` 時点である。**その後 `main` は [#344](https://github.com/takecchi/mnemora/pull/344)（`ea7b4e3`）・[#341](https://github.com/takecchi/mnemora/pull/341)（`3b1cf27`）まで進んだが、**どちらも `docs/` と `scripts/publish-targets.mjs` しか触っておらず、`packages/` と `examples/chat/src` に差分は無い** 【実測: `git diff --stat 9fcd47c..3b1cf27`】⟹ **下の判定は現在の `main` でもそのまま成り立つ。**⛔ **前版の判定をそのまま引き継いでいない**——7項目すべて、`grep -n` で呼び出しの鎖をたどり直した。**動いた行は「どちらへ動いたか」を行内に書く。**
+
+| # | 目指す姿 | いま | 根拠（本番コードの呼び出しの鎖） | 残っているもの |
 |---|---|---|---|---|
-| 1 | 言ったことを、次の日も覚えている | **在る** | 既定の余裕は `strategies/decay.ts:47-52` の `floorAt()` × `interfaces/tenant-settings-store.ts:9` の `DEFAULT_HALF_LIFE_HOURS=720` × `decay.ts:23` の閾値 0.05 ⟹ **作成 + 約129.6日** 【逆算】。[#286](https://github.com/takecchi/mnemora/pull/286) が忘却ゲートを**既定で**通した後もここは壊れていない。⚠ **ただし本物の Postgres で日をまたいで測る歯は無い。**⚠ **そしてこの「約129.6日」は `halfLifeHours` が絶対時間であることに乗っている ⟹ [#305](https://github.com/takecchi/mnemora/issues/305) の設計見直しで動きうる** | [#302](https://github.com/takecchi/mnemora/issues/302)（維持）/ [#305](https://github.com/takecchi/mnemora/issues/305) |
-| 2 | 聞かれていないことを、自分から思い出す | **半分** | ①`examples/chat/src/mnemora-path.ts:84` の `runtime.recall(ctx, {text, budget})` に `association` を渡す、**または** ②`packages/core/src/recall.ts:1015` の既定を倒す（⚠ ②は ADR 0151 が北極星の**問い1** で却下済み ⟹ 新 ADR が要る）。**「自分で作る」側は [#204](https://github.com/takecchi/mnemora/issues/204)（PR #313・ADR 0157）で着地済み**——`packages/core/src/runtime.ts:140` の `TICK_SUPPORTED_JOB_KINDS` は今 `["extract","embed","consolidate","reflect"]`。⚠ **ただし既定 off の opt-in である**：`runtime.ts:112` の `RuntimeConfig.autoQueueConsolidateReflectOnExtract`（既定 `false`。`runtime.ts:1692-1693` で `?? false` として読む）を `true` にしない限り `tick()`/`observe()` は `consolidate`/`reflect` の種を積まない。**このフラグを有効化する本番コードは0件** 【実測】——`grep -rn "autoQueueConsolidateReflectOnExtract" packages/ examples/ --include="*.ts"` の命中は `runtime.ts` 自身の定義・実装と `packages/core/src/__tests__/runtime.test.ts` のみ | [#291](https://github.com/takecchi/mnemora/issues/291)（🔴 関門） |
-| 3 | なぜそれを思い出したのかを、後から説明できる | **半分** | ⭐ **機構は [#307](https://github.com/takecchi/mnemora/pull/307)（[ADR 0155](./decisions/0155-recall-score-breakdown-persisted.md)）で一巡した**——`recalls` に per-memory の内訳が永続化され、`MemoryStore.getRecall(ctx, id)` で読み戻せる。🔴 **だが呼ぶ本番コードが0件**（`Runtime` に口が無く、`examples/chat` にも言及が無い。ADR 0155 自身が「`examples/chat` の配線はこの PR の範囲外」と明記）⟹ **残るのは「採用側が届く場所に口を出し、`examples/chat` が `recallId` から引いて見せる」1本だけ** | [#312](https://github.com/takecchi/mnemora/issues/312)（[#298](https://github.com/takecchi/mnemora/issues/298) は CLOSED） |
-| 4 | 使われない記憶が、静かに遠ざかる | **半分** | `examples/chat` の呼び出し側が `runtime.observe(ctx, {kind:'memory_usage', recallId, usedMemoryIds})` を呼ぶこと。⭐ **残るギャップはこれ1つだけ** ——[#286](https://github.com/takecchi/mnemora/pull/286)（ADR 0153）が「`decay_floor_at` を読み取りフィルタに使う経路が無い」を閉じ、`sweepArchive` の非自動は [ADR 0114](./decisions/0114-archive-sweep-for-decayed-memories.md) 決定3 の**意図した設計**（穴ではない）。⛔ ⚠ **ただし「遠ざかる」の定義そのものが動く**——[#305](https://github.com/takecchi/mnemora/issues/305) でオーナーが「**時間減衰と時間ベースでないものの両方を持つ**」と決めた。**別の担い手が設計中**（§7.9 の条件2） | [#301](https://github.com/takecchi/mnemora/issues/301) / [#305](https://github.com/takecchi/mnemora/issues/305) |
-| 5 | 間違いを正すと、古いほうが先に出てこなくなる | **半分** | `examples/chat` に**訂正シナリオを新規に作り**、そこから `runtime.markContested`（`runtime.ts:2611`）→ `runtime.resolveContested`（`:2710`）を呼ぶ。⚠ **「配線するだけ」では済まない** —— [ADR 0134](./decisions/0134-mark-contested-explicit-operation.md) が「検出は呼び出し側の役目」と決めているため、**アプリ側が何をもって矛盾と決めるかを選ぶ必要がある**。⭕ **ただし ADR の上書きは要らない**（これは §7.5 の (乙) であり、ADR 0134 決定2 が名指しで指定した場所である） | [#303](https://github.com/takecchi/mnemora/issues/303) |
-| 6 | 知らないことを、知らないと言える | **在る** | `Omission.kind` 11種すべてに本番の生成コードと歯が在ることを**種ごとに数え直した**。⚠ #286 は `kind` ではなく `FilteredOmission.condition` に新値 `"decayed"` を足し、コード上で「`archived` に相乗りしない」と明記している ⟹ **新しい落ち方が同じ顔で返る形にはなっていない**。維持の要は `examples/chat/src/compare.ts:184-186` の `const exhaustive: never` | [#304](https://github.com/takecchi/mnemora/issues/304)（維持） |
-| 7 | どれだけ載せるかを、使う側が決められる | **在る** | ①`budget` 未指定なら `effectiveTokenBudget()`（`recall-runtime.ts:185-192`）が `undefined` を返す = **隠れた既定上限は無い** ②指定すれば削れて `budget_dropped` に出る ③連想枠も**予算の内側**（`recall-runtime.ts:949`）。⚠ 弱点は `examples/chat/src/cli.ts:194-215` の対比デモが `__tests__` の外で、**消えても CI が緑**なこと | [#306](https://github.com/takecchi/mnemora/issues/306)（維持） |
+| 1 | 言ったことを、次の日も覚えている | **在る**（既定の `wall` 時計） | 書き: `runtime.ts:1802` `buildNewMemoriesForCandidates` → `extraction.ts:272` `defaultDecayStrategy.floorAt()` → `extraction.ts:311` が `NewMemory.decayFloorAt` に載せる（`strategies/reflect.ts:143` / `strategies/consolidate.ts:105` も同型）。読み: `recall-runtime.ts:344` `decayGateActive`（**既定 on の opt-out**）→ `:490` で段1の ANN へ押し下げ → `:680` で全チャンネル共通の後置 `survivesDecayGate()`（`:387`）。余裕は `strategies/decay.ts:23` `DEFAULT_DECAY_THRESHOLD = 0.05` × `interfaces/tenant-settings-store.ts:9` `DEFAULT_HALF_LIFE_HOURS = 720` ⟹ `720 × log2(1/0.05)` = **3111.79時間 = 約129.66日** 【実測: node で評価】。⭐ **05:00 版の「本物の Postgres で日をまたいで測る歯は無い」は解消した**——`packages/postgres/src/__tests__/recall-decay-cross-day.postgres.test.ts:98`（+24h で返る）/ `:146`（+約129.6日で落ちる）、[#324](https://github.com/takecchi/mnemora/pull/324) | 🔴 **`decay_clock: 'activity'` を選んだテナントでは破れる**（[#338](https://github.com/takecchi/mnemora/issues/338)、下の⚠1）。⚠ 上の歯は `DATABASE_URL` が無いと走らない |
+| 2 | 聞かれていないことを、自分から思い出す | **半分**（⛔ 動いていない） | 機構は在り、非テストの経路から実際に走る: `examples/chat/src/mnemora-path.ts:22` `DEFAULT_MNEMORA_PATH_ASSOCIATION = { maxCount: 10 }` → `:112` `queryRecall()` の `:118-119` が `opts.association` 省略時にこれを渡す → `runtime.recall()` → `recall-runtime.ts:988` 以降の段3.5。`chat`（`cli.ts:204` → `budget-demo.ts:51`）と `compare`（`compare.ts:154` → `mnemora-path.ts:135`）の両方が通り、**CI も毎回 `compare` を回す**（`.github/workflows/ci.yml:361`）。🔴 **だが `packages/core` の既定は off のまま**——`recall.ts:1104` が `association?:` の optional で既定値の代入が無く、`recall-runtime.ts:988` の `if (associationQuery !== undefined)` が off の実体。⟹ **npm から `@mnemora/core` を入れた利用者に届く既定の振る舞いは「聞かれたことしか返さない」**。on にしている唯一の呼び手 `examples/chat` は `package.json:4` で `"private": true`、`scripts/publish-targets.mjs` の `PUBLISH_TARGETS` 6件に**入っていない** | 🔴 **下の「⛔ 項目2 を『在る』と数えなかった理由」を参照。オーナー判断が要る** |
+| 3 | なぜそれを思い出したのかを、後から説明できる | **在る**（⭐ 半分 → 在る） | `cli.ts:1503` `command === "explain"` → `:1504` `runExplain()`（`:282`）→ `:293` `runRecallExplainDemo()` → `recall-explain.ts:128` **`runtime.getRecall(ctx, recallId)`** → `runtime.ts:2463`（口の宣言は `:1205`、公開は `:3685`）→ `packages/postgres/src/memory-store.ts:1208` → `mapping.ts:265` `rowToRecallRecord`。内訳は**毎回実計算して書く**: `recall-runtime.ts:1484` `createRecall()` の `:1497-1503` が `finalMemories` から `score` / `retrievedVia` / `companionOf` / `associationOf` を写し、`score` の出どころは `strategies/scoring.ts` の `total = affinity × decay × tagMatch × freshness × strength`（定数の詰め物ではない）。`recall-explain.ts:132` は存在しない `recallId` で `null` 経路も実演する。[#328](https://github.com/takecchi/mnemora/pull/328) | ⚠ `digest` は `recalls` に載らない（`recall-runtime.ts:1493-1496`）⟹ `recall-explain.ts:134-142` が `memoryStore.get` を併用している。**`Runtime` だけでは本文が戻らない**。⚠ `mapping.ts:276` は `returned_memories` を zod 検証せず素通し |
+| 4 | 使われない記憶が、静かに遠ざかる | **在る**（⭐ 半分 → 在る） | 呼び手が**2本**（どちらもテスト外）: ①`cli.ts:217`（`runChat()` の会話ループ）②`compare.ts:161`（**北極星の主測定そのもの**）。どちらも `mnemora-path.ts:181` `reportMemoryUsage()` → `:190-194` `runtime.observe(ctx, {kind:"memory_usage", recallId, usedMemoryIds})` → `runtime.ts:2251` → `:2147` `handleMemoryUsage` → `:2162` `memoryStore.recordUsage`（`packages/postgres/src/memory-store.ts:943`、`ON CONFLICT DO NOTHING` で冪等）→ `:2171-2173` `memoryStore.reinforce`（`memory-store.ts:866`）が `last_reinforced_at` と `decay_floor_at` を進める（`:926-937`、巻き戻しを WHERE 句で防ぐ）。効き先は2つ: 段2のスコア（`recall-runtime.ts:726` → `strategies/scoring.ts:215` `computeDecay`）と、段1の忘却ゲート（`recall-runtime.ts:490` / `:680`）。[#332](https://github.com/takecchi/mnemora/pull/332) | ⚠ **効いているのは「最後に使われた時刻」の1点だけ**——`recall_usages` は**書き込み専用**で、SELECT する本番コードが0件（`memory-store.ts:952` の INSERT のみ）⟹ 使用*回数*は順位にも掃引にも効かない。⚠ `strength` は候補集合の上で**常に 1** で、`total` の乗算因子として順位にゼロ寄与（`reinforce` の SET 句に `strength` が無い）。内訳に印字されるので効いて見える |
+| 5 | 間違いを正すと、古いほうが先に出てこなくなる | **在る**（⭐ 半分 → 在る） | `cli.ts:1507` `command === "correction"` → `:1508` `runCorrection()`（`:337`）→ `:346` `runCorrectionDemo()`（`correction-demo.ts:111`）→ `:142` `runtime.markContested` → `:146` `runtime.resolveContested(..., {kind:"supersede", winnerId})` → `runtime.ts:2970` の `:3063-3070` が敗者を `status:"superseded"` + `supersededById` にし、`packages/postgres/src/memory-store.ts:1518` `resolveContestedPair` が **CAS + 1トランザクション**で書く。**recall に効く経路**: `recall-runtime.ts:474`（ANN）/ `:550`（語彙）/ `:1057`（連想枠）の filter がいずれも `status: ["active","contested"]` 固定 ⟹ **`superseded` は段1の SQL から外れ、候補にすら上がらない**。訂正前の `contested` 段階では `:851-856` の段3（`contradiction_resolution`）が対向を `limit` 無視で強制同伴する（`:884` `retrievedVia:"mandatory_companion"`）——`correction-demo.ts:94` の `limit: 1` は**この段3 を実際に発火させるため**（既定 `limit: 10` だと2件とも自然に枠内に入り、段3 が一度も鳴らない）。消えた側は `omitted` に出る（`memory-store.ts:1142` `filteredSuperseded` → `recall-runtime.ts:1284-1290`）。[#331](https://github.com/takecchi/mnemora/pull/331) | ⚠ **デモは Memory 2件の箱庭**——`CORRECTION_SCENARIO.turns`（filler 込み12発話）は本番コードから一度も使われず、`observe()` するのは `original` / `correction` の2件だけ（`correction-demo.ts:116-127`）。⚠ **`correction` サブコマンドに CI の歯が無い**（`ci.yml` に `run correction` が0件）⟹ `cli.ts:1507` の dispatch 行が消えても CI は緑。歯が守るのは `test:db` が拾う `__tests__/correction-demo.postgres.test.ts` だけで、そこも `omitted` を一度も assert していない |
+| 6 | 知らないことを、知らないと言える | **半分**（⛔ 在る → 半分に**下げた**） | `Omission.kind` **11種すべてに本番の生成箇所が在る**（種ごとに数え直した。`recall.ts:295-306` の型に対し `recall-runtime.ts:445/459/993/1010`・`697,1274-1321`・`750`・`770`・`1192`・`1334`・`790/812/820`・`1370`・`831`・`761`・`967`）。網羅の歯も在る: `examples/chat/src/compare.ts:193` `formatOmittedSummary` の `switch` が11種を列挙し `:226` `const exhaustive: never = o;`。[#325](https://github.com/takecchi/mnemora/pull/325) | 🔴 **忘却ゲートで落ちた記憶が、既定経路では `omitted` のどこにも出ない**（[#329](https://github.com/takecchi/mnemora/issues/329)、検証して**妥当**）。`condition:"decayed"` を作るのは `recall-runtime.ts:697` の1箇所だけで、入口は `:680` の**後置**フィルタ。一方 ANN は `:490` で段1の SQL へ押し下げており（`packages/postgres/src/vector-store.ts:99-101`）、落ちた分は**候補集合にすら入らず原理的に数えられない**。`aggregateScope`（`:1274-1327`）も `decayed` を数えない。⟹ **既定の主経路で最も多く起きる「黙って減らす」が、まさに名乗らない。**⚠ リポジトリ自身が `recall-decay-cross-day.postgres.test.ts:187-189` で「出ないこと」を逐語で assert している ⟹ 直すなら歯も反転する（**仕様判断**） |
+| 7 | どれだけ載せるかを、使う側が決められる | **在る** | ①`recall-runtime.ts:238-245` `effectiveTokenBudget()` に**既定値を入れる分岐が存在しない**（`budget` が無ければ `undefined`）。段4本体も `:1165-1166` `let keptUnits = allUnits; if (budget) {...}` ⟹ 未指定なら切り詰めブロックに入らない。trace は `:1197-1200` が `budgetApplied: false` を外へ出す ②指定すれば `:1180-1186` で後ろから削り `:1192` `budget_dropped` に出る ③連想枠は**予算の内側**で、`:1163` `[...units, ...associationUnits]` の後ろに連結されるので**最初に落ちる** ⭐ **05:00 版の「対比デモが `__tests__` の外で、消えても CI が緑」は解消した**——`examples/chat/src/__tests__/budget-demo.postgres.test.ts` が3ケースを実 Postgres で検査し、`ci.yml:334` の `test:db` が拾う。特に `budget-demo.ts:87-94` `withoutBudgetHasNoAppliedTruncation` が「隠れた既定上限が無い」を名指しで検査する。[#330](https://github.com/takecchi/mnemora/pull/330) | ⚠ **`estimateRecallFootprint` は本番の呼び手が0件**（`recall-footprint.ts:454`。呼ぶのは同ファイル `:606` の `compareWithFullLog` と、テスト2本だけ）⟹ #284 の数え方では**この関数は「在る」に数えていない**。項目7 が立っているのは `budget` 経路であって footprint ではない。⚠ **「量」の隠れ上限は無いが「件数」の既定は在る**（`:329` `DEFAULT_RECALL_LIMIT` = 10）。⚠ `budget: {}` は `budgetApplied: true` と名乗るが1件も落とさない |
 
-**在る3（項目1・6・7）/ 半分4（項目2・3・4・5）/ 無い0。**⚠ **この節を訂正する前は「在る4 / 半分3 / 無い0」と書いてあったが、上の表を数え直すと合わなかった**（「在る」は項目1・6・7の3件、「半分」は項目2・3・4・5の4件）。
+**在る5（項目1・3・4・5・7）/ 半分2（項目2・6）/ 無い0。**
 
-**⚠ Issue #284 の表題（「在る3 / 半分3 / 無い1」）とも、この節の初版とも数字が違う。**#284 の後に [#283](https://github.com/takecchi/mnemora/pull/283) / [#286](https://github.com/takecchi/mnemora/pull/286) / [#290](https://github.com/takecchi/mnemora/pull/290) が着地し、項目2 が「無い」→「半分」へ動いたためである。**⟹ この数字を引くときは、必ずどの時点・どの `main` のものかを見ること**（この表は `main = 8ae7750` 時点）。
+**⚠ 05:00 版（在る3 / 半分4）からの差分は、単なる前進ではない。**4項目が半分→在るへ**上がり**（3・4・5 と、項目1・7 の「維持の歯が無い」弱点の解消）、**項目6 が在る→半分へ下がった**。⛔ **下がったほうを消さない**——§7.9 の延びる条件3「再監査で、いまの『在る』が実は半分だったと分かる」は、**この再監査で5回目が起きた**ということである。
+
+**⚠1 項目1 の例外（[#338](https://github.com/takecchi/mnemora/issues/338)）は、コード上妥当である** 【実測】。`interfaces/tenant-settings-store.ts:139` `DEFAULT_HALF_LIFE_RECALLS = 720` × `strategies/decay.ts:138` `activityFloorAt()` の `:143` ⟹ 床は **`baseSeq + 3112`**（`ceil(720 × log2(1/0.05))` を node で評価）。時計を進めるのは **recall 1回につき +1**（`recall-runtime.ts:1508` → `packages/postgres/src/memory-store.ts:1186-1199` が `createRecall` と同一トランザクションで `activity_seq + 1`）。`decayClock === "activity"` のとき `recall-runtime.ts:388` は**壁時計の軸を一切見ない** ⟹ **そのテナントで recall が 3112回起きた時点で、壁時計で何時間しか経っていなくても沈む**（1日3112回 = 約27.8秒に1回）。⛔ **既定は `wall` なので、既定の利用者には影響しない。**到達経路は `cli.ts:1500` / `:1522` → `decay-clock-options.ts:28` `parseDecayClockFlag` → `compare.ts:150` / `archive-sweep-cost.ts:260` `writeDecayClock` のみ。**`3112` を検算する歯はリポジトリ全体で0件**（`grep -rn "3112" --include=*.ts` が0ヒット）。
+
+**⚠2 この再監査で新しく見つけたもの（既存の issue に無い）: 連想枠が忘却ゲートと `validAt` ゲートを両方すり抜ける。** `recall-runtime.ts:1049-1064` の連想用 `vectorStore.search()` の filter は `tenantId` / `status` / `subjectId` / `excludeProvenanceKinds` / `occurredAfter` / `occurredBefore` **だけ**で、`decayFloorAtAfter` / `decayFloorSeqAfter` / `validAt` を渡していない。`:1106-1118` の後置ループも `survivesDecayGate()` を呼ばず、`validAt` も見ない（両ゲートの後置は `:663-683` に在り、そこは段1の候補だけを回る）。⟹ **減衰しきった記憶と、期限切れ／未発効の記憶が、連想枠から黙って返りうる。**⛔ **しかもこれは既定経路である**——[#336](https://github.com/takecchi/mnemora/pull/336) 以降、`examples/chat` は連想枠を既定で有効にしている。⭕ **`status` は渡っているので `superseded` は戻らない**（項目5 は無事）。⟹ 破れるのは項目1 の**緩い側**（沈んだはずのものが出る）と項目6（名乗らずに出る）、および [#280](https://github.com/takecchi/mnemora/issues/280) が [#334](https://github.com/takecchi/mnemora/pull/334) で入れた `validAt` ゲートである。**同じ日に着地した #334 と #336 が噛み合っていない。**
+
+#### ⛔ 項目2 を「在る」と数えなかった理由
+
+**⭕ #284 の規律の*字義*では、項目2 は落ちない。**除外対象は `__tests__/` / `__fixtures__/` / `*.test.ts` であり、`examples/chat/src/mnemora-path.ts` はそのどれでもない。人が実際に走らせ、CI が毎回 `compare` で通す経路である（`ci.yml:361`）。**dead code ではない。**
+
+**⛔ それでも「在る」に数えなかったのは、#284 が*下限*だからである。**#284 を通ることは「機構が空振りしていない」ことしか言わない。§7.2 が要求しているのは **「目指す姿が*外から見て*満たされる」**ことであり、ライブラリの「外」は**それを入れた利用者**である。
+
+1. **出荷物の既定が反対を向いている。**`recall.ts:1104` / `recall-runtime.ts:988` により、`@mnemora/core` を入れた利用者の既定の振る舞いは「聞かれたことしか返さない」。項目2 の文面は「**自分から**思い出す」であり、**呼び手の明示的オプトインは、この項目に限っては充足の否定に近い**（項目7「使う側が決められる」ならオプトインがそのまま充足だが、項目2 は逆向きである）。
+2. **on にしている唯一の呼び手が出荷されない。**`examples/chat/package.json:4` `"private": true`、`scripts/publish-targets.mjs` の `PUBLISH_TARGETS` は core / testkit / openai / postgres / anthropic / local-embedding の6件で、同ファイルが `@mnemora/example-chat` を**publish 非対象として名指ししている**。⟹ この既定 on は利用者に1バイトも届かない。
+3. **他項目を `examples/chat` で数えるのとは、担っている役割が違う。**項目3・5・7 は `packages/core` の既定の振る舞い側で立っており（`recall-runtime.ts:474`/`:550` の `status` 既定、`:238-245` の予算、常に組まれる `explain`）、`examples/chat` は**実演・計測**をしている。**項目2 だけは `examples/chat` が無いと項目が立たない。**⟹ 別扱いは恣意ではない。
+
+**⛔ ただし、これを「実装のバグ」と断じない。**[ADR 0151](./decisions/0151-recall-association-unprompted.md) が既定 on を落としたのは**北極星の問い1**（毎回渡す量を減らす方向に働くか）であり、連想枠は載る量を*増やす*機能である。⟹ **項目2 と問い1 は、正典の内部で衝突している。**AGENTS.md は「正典と実装が食い違ったらバグなのは実装のほう」と定めるが、**ここで食い違っているのは正典どうしである。**
+
+⟹ 🔴 **これはオーナーの判断である。**選択肢は3つ:
+
+| 道 | 何をすることになるか |
+|---|---|
+| **(い)** `packages/core` の既定を on にする | ⛔ **v1.0 では選べない。**[Issue #337](https://github.com/takecchi/mnemora/issues/337) にオーナーの決定が逐語で記録されている——「**10万行級で測ってから既定 on をやるか判断してほしいです。**」⟹ **既定 on の判断は10万行級の測定の後**であり、その測定はまだ無い（いま測れているのは `association-probes` の `haystackSize = 62`。その規模では `EXPLAIN` 上 HNSW 索引が一度も使われない）|
+| **(ろ)** 項目2 の「自分から」を「**呼び手がオプトインしたとき、聞かれていないことも返す**」と読むと確定する | `docs/north-star.md` の書き換えになる ⟹ ⛔ **オーナー専権**（AGENTS.md「方向そのものを変えるときだけ書き換える。その変更はオーナーの判断である」）。⭕ **この確定をすれば、上の表の項目2 はその場で「在る」になる**——機構も呼び手も CI も既に在るからである |
+| **(は)** 半分のまま v1.0 を切る | 「7項目が*外から見て*満たされた」とは言えなくなる ⟹ **§7.2 の v1.0 の定義を、書いてあるとおりには満たさない** |
+
+⟹ ⭐ **(い) が #337 で塞がっている以上、「7項目すべてが在る」で v1.0 を切る道は (ろ) しか残っていない。**⛔ **これは担い手が決められない。**
+
 ### 7.5 ⭐ 依存の鎖と、**いま同時に出せる並び**
+
+⭐ **追記（2026-09-16 の再監査）: この節の鎖は2本とも解けた。**「いま同時に出せる7本」は7本とも 2026-09-16 に着地し（§7.3 の実績欄）、鎖1（項目2、5段）は [#323](https://github.com/takecchi/mnemora/pull/323)→[#327](https://github.com/takecchi/mnemora/pull/327)→[#333](https://github.com/takecchi/mnemora/pull/333)→[#336](https://github.com/takecchi/mnemora/pull/336) で、鎖2（項目5）は [#331](https://github.com/takecchi/mnemora/pull/331) で通り切った。⛔ **だから律速はもう鎖の長さではない**——残っているのは §7.10 の判断2件である。⚠ **ただし「直列化が要る」の規律は生きている**: §7.4 の ⚠2 を塞ぐと `mnemoraShareOfNaiveChars` が動くので、⭐門の基準値を更新する PR が2本同時に open にならないようにすること。
+
 
 ⛔ **日数で割り振らないために、先に依存で分解する。**⭐ **そして「手待ちを作らない順序」を明示する**——担い手が「明日になるまで待つ」形になったら、この節の書き方が失敗している。
 
@@ -612,6 +651,9 @@ Issue #200（北極星「聞かれていないことを、自分から思い出�
 **⟹ §7.5 の鎖3（項目5）と [#303](https://github.com/takecchi/mnemora/issues/303) に ADR は要らない。**残る費用は「`examples/chat` が*どうやって*矛盾だと決めるか（利用者の訂正発話か、LLM か）を選ぶこと」であり、**それはアプリ側の設計選択であって、記録済みの判断の上書きではない。**
 ### 7.6 ⭐ 項目2 の道は2つしかなく、どちらも [#291](https://github.com/takecchi/mnemora/issues/291) を通る
 
+⭐ **追記（2026-09-16 の再監査）: 道は (a) に決まり、実装も着地した。**#291 は [#327](https://github.com/takecchi/mnemora/pull/327) で条件②の破れを直し、[#333](https://github.com/takecchi/mnemora/pull/333) で #316 の非決定性を塞いだ上で測り直され、**`off` 0/12 → `on maxCount=10` 12/12（`memoryChars` +4.32%）**と出た。⟹ (a) を [#336](https://github.com/takecchi/mnemora/pull/336)（ADR 0168）で実装。⚠ **上の表が (a) について予告した「⭐門が赤くなる」は起きなかった**——基準値を #336 の実測で更新して着地させたためであり、**⭐門は現在も緑である**（§7.10）。⛔ **そして (b)（既定を on にする）は [#337](https://github.com/takecchi/mnemora/issues/337) のオーナー決定で v1.0 の外に出た。**⟹ **この節の2択はもう開いていない。**⚠ **それでも項目2 は「在る」に届いていない**——理由は §7.4 の「項目2 を『在る』と数えなかった理由」。
+
+
 **[ADR 0151](./decisions/0151-recall-association-unprompted.md) の「引き受けた負債」1番が、逐語でこう書いている:**
 
 > **既定 off である限り、北極星の物差しは動かない。**（…）進めるには、**既定 on にするか、`examples/chat` が使うか**のどちらかが要る。**どちらも本 ADR の範囲外である。**
@@ -625,6 +667,9 @@ Issue #200（北極星「聞かれていないことを、自分から思い出�
 
 **⚠ そして #291 は、測る器から作らなければならない** 【実測・#291 のコメント】——既存の retrieval probe **4集合・計57件を全件読んだが、連想枠が効く形（クエリに直接当たらない gold が、クエリに当たる別の記憶＝アンカーの近傍に居る）を持つ probe は見当たらなかった。**さらに [ADR 0033](./decisions/0033-what-decided-the-rank-in-the-retrieval-bench.md) の `diet` probe は**原理的に拾えない**（gold が既に4位＝枠内に返っており、ADR 0151 決定2 が「既に返る集合・アンカー自身を除く」と定めているため）。
 ### 7.7 ⭐ 2026-09-20 に入るか —— 入る。⭐ **条件は2つあったが、1つは 2026-09-16 に消えた**
+
+⛔ **追記（2026-09-16 の再監査）: この節の見出しの問いは、答えが変わった。**「残る条件（#291 が『連想枠は想起の質を動かす』と出ること）」は **満たされた**（§7.6 の追記）⟹ **この節が心配していた延伸（2026-09-22〜09-24）は起きない。**⭐ **実際には逆に、5日ぶんの予定が 2026-09-16 の1日で終わった**（§7.3 の実績欄）。⛔ **だが「2026-09-20 に v1.0 を切れる」ではない。**§7.4 の再監査が **在る5 / 半分2** で終わり、残ったのは日数で詰まる作業ではなく**オーナーの判断2件**だからである ⟹ **§7.10 を見ること。**
+
 
 **⭐ 消えた条件（§5.9）**: 「オーナーが『Issue #200 の分岐は**前者**を意図していた』と言ったら、ADR 0151 は分岐ごと覆る」。**⟹ オーナーが「後者でいいです」と回答し、後者で確定した**（承認 id `bdcb196d-02cf-4c88-8af0-0c97fd1e23e4`）。**この条件はもう発火しない。**
 
@@ -653,10 +698,10 @@ Issue #200（北極星「聞かれていないことを、自分から思い出�
 
 **上ほど大きい。**
 
-1. ⭐ **[#291](https://github.com/takecchi/mnemora/issues/291) で「連想枠は想起の質を動かさない」と出る** ⟹ §7.7 の通り、**2026-09-22〜09-24 へ延びる。いちばん大きい。**⚠ **§5.9 でオーナーが後者を選んだことは、この条件を消していない**——選んだのは形であって、効くかどうかではない。⚠ **追記（事実のみ）**: [#291](https://github.com/takecchi/mnemora/issues/291) は 2026-09-15 21:03:45 のコメントで測定結果を報告した（`off` arm は `goldReturned` 2/12、`on maxCount=10` は 11/12、`memoryChars` +4.43%）。同じコメントは「同一 commit の再実行で数字が動く…⟹ 確かめた。門にできない」とも記録し、[#316](https://github.com/takecchi/mnemora/issues/316)（同一 commit を `gh run rerun` で3回引き直すと `goldReturnedCount` が回ごとに変わり、連想枠の構成員が3回とも完全一致した probe は0/12）と [#317](https://github.com/takecchi/mnemora/issues/317)（`off` arm でも gold が2/12返っており、probe 集合の条件②「連想が無ければ届かない」が満たされていない。新 haystack への差し替えで ANN 側の基礎ランキングも変わったため「+9/12」という効果量の一部が連想機構と無関係な要因を含む、という指摘がコメントに在る）を起票している。両 issue は本稿執筆時点（2026-09-16）で OPEN のままである。
-2. ⭐⭐ **減衰の設計見直し（[Issue #305](https://github.com/takecchi/mnemora/issues/305)）が、項目4 の前提を動かす。**⚠ **2026-09-16、オーナーが直接指示した**（逐語）——「**絶対時間のままだと、低頻度の採用者で一律に沈む**」のは問題なので「**場合によっては設計の見直しもお願いします。早速修正改修に取り掛かってください**」／「**どっちもあっていいと思います。時間減衰とそうじゃないもの**」。⟹ **決定: 時間減衰と、時間ベースでない減衰の両方を持つ。**⛔ **これは別の担い手が設計中である。⟹ §7.3 の項目4 の行に、この設計の日付を書いていない**——**担い手が決まっていない予定を、推測で日へ置かないため**である。
-3. **再監査で、いまの「在る3」が実は半分だったと分かる** ⟹ ⚠ **仮定ではない。2026-09-16 中に4回起きている**（§7.1）。⚠ **ただし 05:00 JST の数え直しは、7項目すべてについて本番コードからの呼び出しを `grep` で実測している** ⟹ **同じ形（文書だけを見て数える）での再発の余地は、前の3回より小さい。**（⚠ この項目の数字「4」→「3」は、§7.4 の合計行の誤記訂正に合わせた表記統一であり、内容の変更ではない）
-4. ⭐ **⭐門の基準値更新が3回あり、直列にしか打てない**（§7.3 の 9/17・9/18・9/19）。[#301](https://github.com/takecchi/mnemora/issues/301)（項目4）・[#303](https://github.com/takecchi/mnemora/issues/303)（項目5）・項目2 の配線は**どれも `examples/chat` を変え、`mnemoraShareOfNaiveChars` を動かす。**⟹ **同時に走らせると基準値の更新が競合する。**⚠ **初版の予定はこの制約を数えていなかった。**
+1. ⭐ **[#291](https://github.com/takecchi/mnemora/issues/291) で「連想枠は想起の質を動かさない」と出る** ⟹ §7.7 の通り、**2026-09-22〜09-24 へ延びる。いちばん大きい。**⚠ **§5.9 でオーナーが後者を選んだことは、この条件を消していない**——選んだのは形であって、効くかどうかではない。⚠ **追記（事実のみ）**: [#291](https://github.com/takecchi/mnemora/issues/291) は 2026-09-15 21:03:45 のコメントで測定結果を報告した（`off` arm は `goldReturned` 2/12、`on maxCount=10` は 11/12、`memoryChars` +4.43%）。同じコメントは「同一 commit の再実行で数字が動く…⟹ 確かめた。門にできない」とも記録し、[#316](https://github.com/takecchi/mnemora/issues/316)（同一 commit を `gh run rerun` で3回引き直すと `goldReturnedCount` が回ごとに変わり、連想枠の構成員が3回とも完全一致した probe は0/12）と [#317](https://github.com/takecchi/mnemora/issues/317)（`off` arm でも gold が2/12返っており、probe 集合の条件②「連想が無ければ届かない」が満たされていない。新 haystack への差し替えで ANN 側の基礎ランキングも変わったため「+9/12」という効果量の一部が連想機構と無関係な要因を含む、という指摘がコメントに在る）を起票している。両 issue は本稿執筆時点（2026-09-16）で OPEN のままである。 ⭐ **追記2（2026-09-16 の再監査）: この条件はもう発火しない。**#291 は [#327](https://github.com/takecchi/mnemora/pull/327) で条件②の破れを haystack で直し、[#333](https://github.com/takecchi/mnemora/pull/333) が #316 の非決定性を `getVectors()` の返却順依存として塞いだ上で測り直され、**`off` 0/12 → `on maxCount=10` 12/12（`memoryChars` +4.32%）**と出た。⟹ 「動かさない」ではなかった ⟹ **落とす道（§7.7）は取らず、道 (a) を [#336](https://github.com/takecchi/mnemora/pull/336)（ADR 0168）で実装した。**⛔ **ただしこれは項目2 を「在る」にしていない**——理由は §7.4。
+2. ⭐⭐ **減衰の設計見直し（[Issue #305](https://github.com/takecchi/mnemora/issues/305)）が、項目4 の前提を動かす。**⚠ **2026-09-16、オーナーが直接指示した**（逐語）——「**絶対時間のままだと、低頻度の採用者で一律に沈む**」のは問題なので「**場合によっては設計の見直しもお願いします。早速修正改修に取り掛かってください**」／「**どっちもあっていいと思います。時間減衰とそうじゃないもの**」。⟹ **決定: 時間減衰と、時間ベースでない減衰の両方を持つ。**⛔ **これは別の担い手が設計中である。⟹ §7.3 の項目4 の行に、この設計の日付を書いていない**——**担い手が決まっていない予定を、推測で日へ置かないため**である。 ⭐ **追記（2026-09-16 の再監査）: 着地した。**[#335](https://github.com/takecchi/mnemora/pull/335)（ADR 0165）が壁時計と活動時計の2本を入れ、テナントが `decay_clock` で選ぶ形になった（既定は `wall`——`interfaces/tenant-settings-store.ts:125` `DEFAULT_DECAY_CLOCK`、`packages/postgres/migrations/0015_decay_activity_clock.sql:92` の `DEFAULT 'wall'`）。⟹ **この条件は解消した。**⛔ **ただし新しい穴を1つ開けた**——活動時計を選んだテナントでは項目1 が破れる（§7.4 の ⚠1、[#338](https://github.com/takecchi/mnemora/issues/338)）。
+3. **再監査で、いまの「在る3」が実は半分だったと分かる** ⟹ ⚠ **仮定ではない。2026-09-16 中に4回起きている**（§7.1）。⚠ **ただし 05:00 JST の数え直しは、7項目すべてについて本番コードからの呼び出しを `grep` で実測している** ⟹ **同じ形（文書だけを見て数える）での再発の余地は、前の3回より小さい。**（⚠ この項目の数字「4」→「3」は、§7.4 の合計行の誤記訂正に合わせた表記統一であり、内容の変更ではない） ⭐ **追記（2026-09-16 の再監査）: 5回目が起きた。**今回下がったのは **項目6（在る → 半分）**で、原因は文書を見て数えたことではなく、**`Omission.kind` の11種を数えた時点で止まり、`FilteredOmission.condition` の生成まで下りなかったこと**である（§7.4）。⟹ ⛔ **「本番コードを grep する」だけでは足りない。どの粒度まで下りるかも決めないと、同じ形で再発する。**
+4. ⭐ **⭐門の基準値更新が3回あり、直列にしか打てない**（§7.3 の 9/17・9/18・9/19）。[#301](https://github.com/takecchi/mnemora/issues/301)（項目4）・[#303](https://github.com/takecchi/mnemora/issues/303)（項目5）・項目2 の配線は**どれも `examples/chat` を変え、`mnemoraShareOfNaiveChars` を動かす。**⟹ **同時に走らせると基準値の更新が競合する。**⚠ **初版の予定はこの制約を数えていなかった。** ⭐ **追記（2026-09-16 の再監査）: 3回とも打ち終えた。**#301→[#332](https://github.com/takecchi/mnemora/pull/332)、#303→[#331](https://github.com/takecchi/mnemora/pull/331)、項目2 の配線→[#336](https://github.com/takecchi/mnemora/pull/336) が順に着地し、基準値は最終的に [#336](https://github.com/takecchi/mnemora/pull/336) の CI 成果物（commit `6ca36ae`）を採り、その後 ADR 0170（[Issue #339](https://github.com/takecchi/mnemora/issues/339)）が 322行だけ差し替えた。⟹ **この制約は解消した。**
 5. **オーナーの判断待ちが増える**（§5 に項目が足されたとき）。⚠ **2026-09-16 に §5.9 を足し、同日中に解決した** ⟹ この条件は「足されたまま動かない」ときにだけ効く。
 6. **認証枠が全面的に閉じる。**
 
@@ -673,3 +718,68 @@ Issue #200（北極星「聞かれていないことを、自分から思い出�
 ⛔ **早まっても、目標日 2026-09-20 は動かさない。**動かすのは **#291 の見通しが立ったとき**だけである。⟹ **早く終わったぶんは、9/19 の再監査と 9/20 の仕上げに回る**——§7.1 の通り、**この項目の数え直しは 2026-09-16 中に4回動いている。⟹ 再監査に時間を回すことは、余りではなく本体である。**
 
 ⛔ **そして「予定より早いから黙っていてよい」ではない。**§7.3 の「実績」欄に**実際に着手・着地した日**を書くこと。**予定と実績がずれた向き（早い/遅い）そのものが、次に予定を立てるときの材料である。**
+
+### 7.10 v1.0 を切れるか —— **⛔ まだ切れない。残っているのは日数ではなく判断2件である**
+
+**判定の日: 2026-09-16。`main = 3b1cf27`。コードを読んだのは `9fcd47c` 時点（§7.4 冒頭の通り、以後コードに差分は無い）。**
+
+#### 物差しは緑である
+
+**⭐門（[ADR 0133](./decisions/0133-compare-baseline-and-gate.md) 決定3）は退行ゼロ。** `origin/main` の CI run 35053218224（`9fcd47c`、ジョブ `examples/chat`）の成果物 `compare.json` と `examples/chat/compare-baseline.json` を突き合わせると、**12行すべてで `mnemoraShareOfNaiveChars` が基準値と完全一致し、`factStatementSurvived` は12行とも `true`** 【実測】。判定は `scripts/compare-summary-lib.mjs:246-269` の `computeRegressions` で、①`mnemoraShareOfNaiveChars > 基準値`（**epsilon 無しの厳密比較。許容幅はゼロ**）②`factStatementSurvived` が `true`→`false`、の片側2条件のみ。
+
+⚠ **「緑」の余裕は「一致」であって「下回っている」ではない。**⟹ `examples/chat` の出力を1文字でも増やす変更は、その場で赤くなる。
+
+⚠ **⭐門の基準値には触れていない**（本 PR は `docs/roadmap.md` の1ファイルのみ）。
+
+#### 7項目は **在る5 / 半分2**（§7.4）⟹ **§7.2 の定義を、書いてあるとおりには満たさない**
+
+**§7.2 の v1.0 の定義は「7項目が*外から見て*満たされ、物差しが緑のまま」である。**物差しは緑だが、**項目2 と項目6 が「半分」である。**
+
+⛔ **残っているのは実装の残量ではない。**どちらも「何を作るか」ではなく「**何をもって満たしたと数えるか**」の判断であり、**担い手が決められない。**
+
+| 残っている判断 | 中身 | 決めるのは |
+|---|---|---|
+| **項目2** | 既定 on（道 (い)）は [#337](https://github.com/takecchi/mnemora/issues/337) のオーナー決定（逐語「**10万行級で測ってから既定 on をやるか判断してほしいです。**」）で v1.0 の外に出ている。⟹ 残るのは道 (ろ)＝**北極星 項目2 の「自分から」を「呼び手がオプトインしたとき」と読むと確定する**か、(は)＝半分のまま切るか | ⛔ **オーナー**（`docs/north-star.md` の書き換えはオーナー専権） |
+| **項目6** | [#329](https://github.com/takecchi/mnemora/issues/329) を塞ぐか、「押し下げ分は数えられない」を**仕様として確定する**か。塞ぐなら [ADR 0153](./decisions/0153-recall-decay-floor-gate.md) が索引の効きのために選んだ押し下げを買い直すか往復を増やすことになり、**`recall-decay-cross-day.postgres.test.ts:187-189` の既存の歯を反転させる**ことになる | ⛔ **オーナー**（正典との乖離をどちらへ寄せるかの判断） |
+
+#### 残件1件ごとの判定
+
+⛔ **「止める」は「§7.2 の定義どおりに v1.0 を切ることを妨げるか」で判定した。**「あったほうがよい」では止めない。
+
+| # | 何か | 判定 | 根拠 |
+|---|---|---|---|
+| [#340](https://github.com/takecchi/mnemora/issues/340) | footprint 推定器の検算の余裕（許容 2.5%） | ⭕ **止めない** | **内部の歯だけの話で、利用者に見える挙動は何も変わらない。**破れても赤くなるのは `example-chat` ジョブ（`ci.yml:334` が拾う `examples/chat/src/__tests__/recall-footprint-baseline.test.ts:76` `ACCURACY_TOLERANCE = 0.025`）であり、⭐門とは別の歯である。⚠ **依頼時の「2.304%」は ADR 0170 前の `mnemoraChars = 4558` で計算された値**で、現在の基準値（322行 = 4547）では **約 2.068%**。⛔ **ただしこの 2.068% は担い手が推定器を別実装して出した数字であり、CI が出力した数字ではない**（`pnpm install` をしていないので本物の歯は走らせていない）⟹ **確かめていない。** |
+| [#345](https://github.com/takecchi/mnemora/issues/345) | 語彙チャンネルに、#339 と同族のタイブレーク欠陥 | ⭕ **止めない**（⚠ 既知の問題として出す） | 欠陥の形は現物で確認した——`packages/postgres/src/lexical-store.ts:138` は `ORDER BY coverage DESC, rank DESC` で、**決定的な最終キーが無い**（ANN 側が ADR 0170 で採ったのは「距離 → `recorded_at DESC` → `memory_id`」の3段）。**だが既定の recall は ANN 1本**（`packages/core/src/recall.ts:1130` `DEFAULT_RECALL_CHANNELS = ["ann"]`）⟹ **⭐門もこの経路を踏まない。**影響は語彙チャンネルを明示的に選ぶ呼び手に限られる。⚠ **実際に非決定が起きることを誰も測っていない**（issue 自身が明記。担い手も測っていない）。⚠ **⭐門が緑であることは、この欠陥について何も言っていない。** |
+| [#342](https://github.com/takecchi/mnemora/issues/342) | 破壊的変更2件が、根拠 ADR に破壊性の記載が無いまま着地 | ⭕ **止めない** | **破壊性そのものは現物で確認した**——`packages/core/src/runtime.ts:1205` `getRecall(...)`（`?` 無し＝必須）と `packages/testkit/src/tenant-settings-store-conformance.ts:48` `supportsDecayClock: boolean`（同）。自前実装している側は型エラーになる。⛔ **しかし利用者への告知の穴は [#341](https://github.com/takecchi/mnemora/pull/341) の着地で閉じた**——`CHANGELOG.md:42`（項目5）・`:43`（項目6）が両方を挙げ、**根拠 ADR に破壊性の言及が無いことまで ⚠ 付きで名指ししており**、`docs/migration-v1.md:178`（§5）・`:202`（§6）に移行手順が在る。ADR 0165 の誤記載も #341 で訂正済み。⟹ 残るのは ADR 0161 への追記という**文書の負債**であり、v1.0 を止めない。⚠ **「2件」は v0.1.9→main の18コミットしか見ていない範囲の数字で、総数ではない**（issue 自己申告）。 |
+| [#338](https://github.com/takecchi/mnemora/issues/338) | `activity` 時計で項目1 が破れる | ⭕ **止めない**（⚠ 既知の制約として出す） | **逆算は式の上で正しい**（§7.4 の ⚠1）。⛔ **だが既定は `wall` である**——`packages/core/src/interfaces/tenant-settings-store.ts:125` `DEFAULT_DECAY_CLOCK: DecayClock = "wall"`、`packages/postgres/migrations/0015_decay_activity_clock.sql:92` の `NOT NULL DEFAULT 'wall'`、`readDecayClock`（`:293`）も `getDecayClock` を持たない adapter では `'wall'` へ倒す。⟹ **既定の利用者には今日壊れているものが無い。**到達には `decay_clock` を明示的に `activity`/`either` へ変え、かつ recall 頻度が高いことが要る。⚠ **`3112` は逆算であって実測ではなく、実運用の recall 頻度の数字は1つも無い。**⚠ **守る歯も、採用者が境界に気づく仕組みも無い。** |
+| [#329](https://github.com/takecchi/mnemora/issues/329) | 忘却ゲートで落ちた記憶が `omitted` に出ない | 🔴 **止める**（= **オーナー判断が要る**） | ⛔ **これが項目6 を「在る」から「半分」へ下げている当のものである**（§7.4）。⟹ **§7.2 の定義どおりに数えるなら、塞がるまで7項目は揃わない。**利用者から見て、忘却で消えた記憶は**何の名乗りも無く消える**——北極星 項目6「『見つからなかった』と『探していない』を、同じ顔で返さない」と正面から食い違う。AGENTS.md の規律「正典と実装が食い違ったら、バグなのは実装のほう」に当てると、**これは実装のバグである。**⛔ **ただし塞ぐ費用が小さくない**（ADR 0153 の押し下げの買い直し、または往復の追加、かつ既存の歯の反転）⟹ **「塞ぐ」か「仕様として確定する」かはオーナーの判断。**⚠ 実運用で困った事例の報告は無い。 |
+| [#337](https://github.com/takecchi/mnemora/issues/337) | 10万行級の測定 | ⭕ **止めない** | ⛔ **これは残件ではなく、オーナーの決定の記録である**（逐語「10万行級で測ってから既定 on をやるか判断してほしいです。」）。⟹ **v1.0 は連想枠を既定 off（[ADR 0151](./decisions/0151-recall-association-unprompted.md) の opt-in）のまま出す、ということが既に決まっている。**issue 本文も「門にはしない想定」と書いている。⚠ **ただしこの決定が、項目2 から道 (い) を外している**（§7.4）。 |
+
+#### ⛔ 残件6件に入っていないが、v1.0 を止めるもの —— **この再監査で新しく見つけた**
+
+**§7.4 の ⚠2: 連想枠が忘却ゲートと `validAt` ゲートを両方すり抜ける。** `packages/core/src/recall-runtime.ts:1049-1064` の連想用 `vectorStore.search()` の filter に `decayFloorAtAfter` / `decayFloorSeqAfter` / `validAt` が無く、`:1106-1118` の後置ループも `survivesDecayGate()` を呼ばない（両ゲートの後置は `:663-683` に在り、そこは段1の候補だけを回る）。
+
+🔴 **これを「止める」に数える理由は3つある:**
+
+1. **出荷物の中のバグである。**`@mnemora/core` は `validAt` ゲート（[#280](https://github.com/takecchi/mnemora/issues/280) / [#334](https://github.com/takecchi/mnemora/pull/334)、ADR 0164）と連想枠（ADR 0151）の両方を公開 API として出す。**この2つが合成できていない。**⟹ 利用者が両方を使うと、**期限切れの記憶が黙って返る。**
+2. **既定経路である。**[#336](https://github.com/takecchi/mnemora/pull/336) 以降、`examples/chat` は連想枠を既定で有効にしている（`mnemora-path.ts:22`）⟹ **移行ガイドが「こう使え」と示す形が、そのまま穴を踏む。**
+3. **同じ日に着地した2本の噛み合わせである。**#334（`validAt` ゲート）と #336（連想枠の既定化）はどちらも 2026-09-16 に着地した。⟹ **どちらの PR のレビューでも、相手側が見えていなかった。**
+
+⭕ **`status` は渡っているので `superseded` は連想枠から戻らない**（`recall-runtime.ts:1057`）⟹ **項目5 は無事である。**破れるのは項目1 の*緩い側*（沈んだはずのものが出る）・項目6（名乗らずに出る）・`validAt` ゲートの3つ。
+
+⚠ **修正の見当は小さい**（filter に3欄を足し、後置ループで `survivesDecayGate()` と `validAt` を見る）**が、⭐門の `mnemoraShareOfNaiveChars` を動かしうる**——連想枠から返る件数が減る方向なので**基準値より小さくなる側**であり、`computeRegressions` は片側判定（増加のみ赤）なので**赤にはならない**が、基準値の更新は要る。⟹ §7.5 の「直列化が要る」の対象である。
+
+⚠ **これに対応する issue 番号は確かめていない**（既存の issue に同じ指摘が無いことを `#329`・`#340`・`#342`・`#345`・`#338`・`#337` の本文について確認しただけで、**全 issue を検索していない**）。
+
+#### ⟹ まとめ
+
+| | |
+|---|---|
+| **物差し** | ⭕ **緑**（退行ゼロ。余裕は「一致」） |
+| **7項目** | **在る5 / 半分2**（項目2・項目6） |
+| **§7.2 の定義** | ⛔ **満たしていない** |
+| **止めるもの** | [#329](https://github.com/takecchi/mnemora/issues/329)（＝項目6）／項目2 の読みの確定／§7.4 の ⚠2（連想枠がゲートをすり抜ける） |
+| **止めないもの** | [#340](https://github.com/takecchi/mnemora/issues/340)・[#345](https://github.com/takecchi/mnemora/issues/345)・[#342](https://github.com/takecchi/mnemora/issues/342)・[#338](https://github.com/takecchi/mnemora/issues/338)・[#337](https://github.com/takecchi/mnemora/issues/337) |
+| **残りは日数で詰まるか** | ⛔ **詰まらない。**⚠2 は実装だが、項目2 と項目6 は**オーナーの判断**である |
+
+⛔ **`version` を上げること・publish・Release の作成は、いまもオーナー専権である**（§7.8）。**この節は「切れるか」を判定しただけで、切っていない。**
