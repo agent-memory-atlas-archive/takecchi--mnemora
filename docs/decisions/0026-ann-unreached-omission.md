@@ -170,3 +170,25 @@
 （小さい subject で候補を全部返した場合に鳴らないこと）は、**単体テスト（歯B）でしか
 確かめていない。** 上の表の「`subjectId` 無し」は `ann_truncated` の領域であって、
 「scope を全部見た」場合ではない。**本物の DB での「鳴ってはいけない側」は未実測である。**
+
+---
+
+## 追記（2026-09-17）: **「両者は同時に立たない」（歯C）という決定は、[ADR 0193](./0193-ann-unreached-covers-full-window.md) で覆った**
+
+**この節から上は当時の決定・実測の記録のまま書き換えていない。** 以下は事後の訂正である。
+
+`ann_unreached` の発火条件に `annHits.length < kPrime`（窓が埋まっていない）を含めた
+判断は、「窓が埋まっていれば `ann_truncated` の領域であり、scope の候補は ANN が
+拾いきれている」という前提に立っていた。**この前提は誤りだった**——`ann_truncated`
+の判定式（`packages/core/src/ann-truncation.ts`）の doc コメント自身が、窓が満杯でも
+近似索引が scope の他所へ行っていれば上界が破れうると明記しており、その事象を
+「`ann_unreached` が別に扱う」と名指ししていた。ところが当時の `ann_unreached` の
+条件式は、まさにその場合（窓が満杯）を除外していたため、**窓が満杯かつ近似索引が
+真の近傍を取りこぼした場合、`ann_truncated` も `ann_unreached` も鳴らない**という
+無音の穴が残っていた。ADR 0193 がこの条件から `annHits.length < kPrime` を落とし、
+窓の満杯/未満を問わず `annHits.length < eligible` だけで判定するよう直した。
+**⟹ 今日、`ann_truncated` と `ann_unreached` は同時に立ちうる。** 上表の
+「`subjectId` 無し」（`hits = 40 = kPrime`）を今日の条件で再実測すれば、
+`eligible > 40` である限り `ann_unreached` も出るようになったはずである
+（ADR 0193 側で別途、単体テストの歯として固定した。本追記の時点で本物の DB による
+再実測は行っていない）。詳細と理由は ADR 0193 を見ること。

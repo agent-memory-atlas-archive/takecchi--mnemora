@@ -29,6 +29,15 @@ import { isBoundedScoringStrategy } from "./strategies/scoring.js";
  * ただし `sim_k'` は**索引が返した** k' 番目であって**真の** k' 番目ではない——
  * 近似索引が scope の他の場所へ行っていた場合、上界は破れる。その事象は本判定の対象ではなく
  * `ann_unreached`（ADR 0025 / 0026）が別に扱う。**塞げていない範囲を塞いだことにしない。**
+ *
+ * **🔴 ⚠ この最後の一文は、[ADR 0193](../../../docs/decisions/0193-ann-unreached-covers-full-window.md)
+ * より前は嘘だった。** `ann_unreached`（ADR 0026）の発火条件には `annHits.length < kPrime`
+ * （窓が埋まっていない）という条件があり、**窓が満杯（この判定＝`decideAnnTruncation` が
+ * 実際に動く場合）にはそもそも `ann_unreached` が発火しえなかった**——つまり、まさに
+ * この一文が「別に扱う」と名指ししていた事象（窓が満杯なのに近似索引が scope の他所へ
+ * 行っていた場合）を、`ann_unreached` の条件式自身が除外していた。ADR 0193 が
+ * `ann_unreached` の条件から `annHits.length < kPrime` を落としたことで、この一文は
+ * ようやく実態と一致した。
  */
 
 /** 判定の結果。**3つの状態を潰さない**（ADR 0008 の「無いには種類がある」を判定へ適用する）。 */

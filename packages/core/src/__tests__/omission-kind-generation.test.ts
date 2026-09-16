@@ -339,7 +339,8 @@ const OMISSION_PROBES: Record<Omission["kind"], OmissionProbe> = {
 
   ann_unreached: {
     drivenThrough: "recall()",
-    producedAt: "recall-runtime.ts（`annHits.length < kPrime && annHits.length < eligible`）",
+    // ADR 0193: `annHits.length < kPrime` は落とした（窓が満杯でも鳴りうる）。
+    producedAt: "recall-runtime.ts（`annHits.length < eligible`）",
     situation: "eligible 5件に対し ANN が2件しか返さない（近似索引が scope に届かなかった）",
     run: async () => {
       const { runtime, stores } = buildRuntime({ annCap: 2 });

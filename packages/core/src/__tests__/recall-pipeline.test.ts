@@ -371,7 +371,7 @@ describe("recall() — omitted.kind = 'ann_truncated'（docs/recall.md §3、ADR
   });
 });
 
-describe("recall() — omitted.kind = 'ann_unreached'（ADR 0025 の実測、ADR 0026 の決定）", () => {
+describe("recall() — omitted.kind = 'ann_unreached'（ADR 0025 の実測、ADR 0026 の決定、ADR 0193 が発火条件を拡張）", () => {
   it("歯A（鳴る側）: scope に候補が多くあるのに ANN が eligible 未満しか返さないと ann_unreached が付く", async () => {
     const { runtime, stores } = buildRuntimeWithCappedAnn(2);
     // 5件が scope 内・embeddingStatus='ready'（= eligible = 5）だが、ANN は2件しか返さない
@@ -397,15 +397,40 @@ describe("recall() — omitted.kind = 'ann_unreached'（ADR 0025 の実測、ADR
     expect(result.omitted.some((o) => o.kind === "ann_unreached")).toBe(false);
   });
 
-  it("歯C: ann_truncated が鳴る状況（hits == k'）では ann_unreached は同時に鳴らない", async () => {
+  it("🔴 歯C（ADR 0193、2026-09-17 に挙動が変わった）: 窓が満杯（hits == k'）でも、scope にまだ見えていない候補が残っていれば ann_truncated と ann_unreached は同時に鳴る", async () => {
     const { runtime, stores } = buildRuntime();
     await createEmbeddedMemory(stores, [1, 0]);
     await createEmbeddedMemory(stores, [1, 0.001]);
 
     // limit=1, overFetchFactor=1 -> k'=1。候補2件のうち1件しか返らない（＝窓が埋まる）。
+    // eligible=2 > hits=1 ⟹ scope にまだ見えていない候補（もう1件）が残っている。
     // **ADR 0069 以降、この状況で ann_truncated が鳴るかは「損しえたか」次第**なので、
-    // 鳴る側になる形（どの候補も持たないタグをクエリへ足す）で作る——
-    // **この歯の主題は「ann_unreached が同時に鳴らないこと」であって、ann_truncated の鳴り方ではない。**
+    // 鳴る側になる形（どの候補も持たないタグをクエリへ足す）で作る。
+    // **この歯の主題**: ADR 0193 より前はここで ann_unreached が鳴らなかった
+    // （旧条件 `annHits.length < kPrime` が窓の満杯を理由に除外していた）。
+    // いまは鳴る——`ann_truncated`（窓の外は証明できるか）と `ann_unreached`
+    // （近似索引は scope を拾いきったか）は別の問いに答えるので、同時に立ってよい。
+    const result = await runtime.recall(ctx, {
+      vector: [1, 0],
+      limit: 1,
+      overFetchFactor: 1,
+      tags: ["どの候補も持っていないタグ"],
+    });
+    expect(result.omitted.some((o) => o.kind === "ann_truncated")).toBe(true);
+    expect(result.omitted.some((o) => o.kind === "ann_unreached")).toBe(true);
+    expect(result.omitted).toContainEqual({ kind: "ann_unreached", countKind: "unknown" });
+  });
+
+  it("⭐ 歯D（鳴ってはいけない側）: 窓が満杯でも scope の候補を全部拾いきっていれば ann_unreached は鳴らない（ADR 0193）", async () => {
+    const { runtime, stores } = buildRuntime();
+    await createEmbeddedMemory(stores, [1, 0]);
+
+    // limit=1, overFetchFactor=1 -> k'=1。候補1件だけで hits=1（＝窓が埋まる）。
+    // eligible=1 == hits=1 ⟹ scope にまだ見えていない候補は無い——「窓が満杯なら常に鳴る」
+    // 側へ倒れていないことを確かめる歯（歯Bの「窓が満杯」版）。
+    // ann_truncated は鳴る側になる形（どの候補も持たないタグ）で作り、
+    // **この歯の主題が「ann_truncated の鳴り方」ではなく「ann_unreached が鳴らないこと」**
+    // だと分かるようにする。
     const result = await runtime.recall(ctx, {
       vector: [1, 0],
       limit: 1,

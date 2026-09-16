@@ -1486,8 +1486,9 @@ export async function runRecall(
   }
 
   // -------------------------------------------------------------------
-  // ann_unreached（ADR 0025 の実測、ADR 0026 の決定）: 「近似索引がこの scope に
-  // 届かなかった」ことが `omitted` に一度も出ない、という ADR 0008 の破れを埋める。
+  // ann_unreached（ADR 0025 の実測、ADR 0026 の決定、ADR 0193 が発火条件を拡張）:
+  // 「近似索引がこの scope に届かなかった」ことが `omitted` に一度も出ない、という
+  // ADR 0008 の破れを埋める。
   //
   // **⚠ ここは段5（`aggregate`）に依存する。** `eligible`（= scope 内で埋め込みがあり
   // ANN の候補になり得た件数）は段1の情報だけでは出せない——`aggregate.totalInScope` と
@@ -1500,17 +1501,26 @@ export async function runRecall(
     aggregate.notIndexed.failed.count +
     aggregate.notIndexed.skipped.count;
   const eligible = aggregate.totalInScope - notIndexedTotal;
+  // 🔴 ADR 0193: **かつてここに `annHits.length < kPrime`（窓が埋まっていない）という
+  // 条件があった。** その条件は「窓が埋まっていれば ann_truncated の領域であり、
+  // scope の候補は ANN が拾いきれている」という前提に立っていたが、その前提は
+  // `ann-truncation.ts` の doc コメント自身が否定している——`sim_k'` は**索引が返した**
+  // k' 番目であって**真の** k' 番目ではなく、近似索引が scope の他の場所へ行っていた場合、
+  // 窓が満杯でも scope 内の真により近い候補を取りこぼしうる。**その事象をここが「別に扱う」と
+  // `ann-truncation.ts` が名指ししていたのに、旧条件はまさにその場合（窓が満杯）を除外していた
+  // ——約束が破れていた。** ADR 0193 はこの条件を落とし、窓の満杯/未満を問わず
+  // 「scope 内にまだ見られていない候補が残っているか」だけで判定するよう直した。
+  // ⟹ **`ann_truncated` と同時に立ちうる**（もう排反ではない）。2つは別の問いに答えている
+  // ——`ann_truncated` は「窓の外は k 位を抜けないと証明できるか」、`ann_unreached` は
+  // 「近似索引は scope の候補を拾いきったか」——ので、同時に立っても顔が潰れない。
   if (
     candidateGenerationExecuted &&
     kPrime > 0 &&
-    // k' に達していない。達していれば ann_truncated の領域であり、これと同時には立てない
-    // ——「打ち切り」（もっと在るはずだが LIMIT で切った）と「届かなかった」（scope の他所へ
-    // ANN が行ってしまった）は別の出来事だから、同じ札に相乗りさせない（ADR 0026）。
-    annHits.length < kPrime &&
     // scope 内にまだ見られていない候補が残っている。
     // ⚠ この条件を落とすと、小さい subject で候補が ANN に全部返った場合
     // （例: 候補3件・kPrime 40・hits 3。3 < 40 だが 3 == eligible）にも常に鳴るようになる
-    // ——「鳴ってはいけない側」を守っているのはこの条件である。
+    // ——「鳴ってはいけない側」を守っているのはこの条件である。窓が満杯でも
+    // `annHits.length >= eligible`（scope の候補を全部拾いきった）なら鳴らない。
     annHits.length < eligible
   ) {
     omitted.push({ kind: "ann_unreached", countKind: "unknown" });

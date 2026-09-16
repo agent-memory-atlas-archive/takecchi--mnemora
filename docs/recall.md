@@ -339,14 +339,24 @@ taxonomy + status）に**入っていない**——減衰しきった Memory は
 集合である。DB への未取得候補ではない（`decayed` が ANN の押し下げで原理的に数え
 られない `lower_bound` なのとは対照的）。⟹ `countKind` は常に `'exact'`。
 
-**`ann_truncated` と `ann_unreached` の違い（2026-09 追記、[ADR 0025](./decisions/0025-ann-underfill-is-not-reported-in-omitted.md)・[ADR 0026](./decisions/0026-ann-unreached-omission.md)）**:
-`ann_truncated` は「k' に達した＝もっと在るはずだが LIMIT で打ち切った」という**打ち切り**であり、
-`ann_unreached` は「k' に届く前に、近似索引がこの scope の候補へ**そもそも辿り着かなかった**」
-という**取りこぼし**である。前者は「LIMIT を打った」という確定した事実、後者は
-「scope にまだ見られていない候補が残っているのに、返った件数が k' 未満で止まった」という
-不確実な事実であり、原因も違えば呼び出し側の次の一手も違う（前者は k' を上げる、
-後者は厳密検索へのフォールバックを検討する）。**2つは同時には立たない**
-——`ann_truncated` の条件（hits ≥ k'）と `ann_unreached` の条件（hits < k'）は排反である。
+**`ann_truncated` と `ann_unreached` の違い（2026-09 追記、[ADR 0025](./decisions/0025-ann-underfill-is-not-reported-in-omitted.md)・[ADR 0026](./decisions/0026-ann-unreached-omission.md)。
+2026-09-17 [ADR 0193](./decisions/0193-ann-unreached-covers-full-window.md) が排反の記述を訂正）**:
+`ann_truncated` は「窓の外（k' 位より後ろ）は k 位を抜けないと証明できるか」に答える札で、
+その証明は**窓の中身が scope の真の上位 k' 件である**ことを前提にしている。`ann_unreached` は
+「近似索引は scope の候補を拾いきったか」に答える札で、**窓が満杯でも拾いきれているとは
+限らない**——近似索引が scope の他の場所へ辿ってしまい、窓の中身自体が真の上位 k' 件から
+ズレている（より近い候補を取りこぼしている）ことがありうる。原因も違えば呼び出し側の
+次の一手も違う（前者は k' を上げる、後者は厳密検索へのフォールバックを検討する）。
+
+**🔴 2つは同時に立ちうる（2026-09-17 訂正）。** 以前この節は「2つは同時には立たない
+——`ann_truncated` の条件（hits ≥ k'）と `ann_unreached` の条件（hits < k'）は排反である」
+と書いていた。**この記述は誤りだった**——`ann_unreached` の旧条件は「窓が埋まっていれば
+scope の候補を ANN が拾いきれている」という前提に立っていたが、その前提こそが
+`ann-truncation.ts` の doc コメントが明示的に否定している事象（近似索引が scope の他所へ
+行った場合、窓が満杯でも上界は破れる）だった。ADR 0193 が `ann_unreached` の条件から
+「窓が埋まっていない」を落としたことで、窓が満杯のときも scope 内にまだ見られていない
+候補が残っていれば `ann_unreached` が鳴るようになった——`ann_truncated` と同時に立つことが
+普通に起こる。同時に立っても顔は潰れない——別の問いにそれぞれ答えているだけである。
 
 | kind | 次の一手がどう変わるか |
 |---|---|
@@ -358,7 +368,7 @@ taxonomy + status）に**入っていない**——減衰しきった Memory は
 | `not_indexed` | 記憶は存在するが埋め込みがまだ無いと分かる（`embeddingStatus`、`./memory-model.md` 参照）。記憶が失われたと誤認しない。**`reason` によって次の一手が分かれる**——`pending` は待つ・再試行する、`failed` は埋め込みパイプラインそのものを疑う、`skipped` は意図した除外なので何もしなくてよい。この3つを1つに潰すと、恒久的な失敗と一時的な遅延が同じ顔になる（2026-09 追記。当初案は `reason` を持たなかった）。 |
 | `lexical_truncated` | 語彙チャンネルが窓（k'）を埋めたと分かる（[ADR 0084](./decisions/0084-lexical-recall-channel.md) §7.1）。`ann_truncated` とは別の札——語彙チャンネルは損失可能性を判定する機構を持たないため、`countKind` は常に `'unknown'` である。次の一手は「窓を広げる（`overFetchFactor`/`limit`）」であり、閾値やフィルタの調整では直らない。 |
 | `ann_truncated` | 「見えていない領域があるかもしれない」という不確実性そのものが一手になる——例えば厳密検索へのフォールバックを選べる。 |
-| `ann_unreached` | 近似索引がこの scope に届かなかった可能性がある、と分かる（ADR 0025・0026）。`ann_truncated`（打ち切り）とは別の出来事——こちらは k' に届く前に候補を取りこぼした疑いであり、厳密検索へのフォールバックや subject を絞り直す一手につながる。件数は原理的に分からない（`countKind` は常に `'unknown'`）。 |
+| `ann_unreached` | 近似索引が scope の候補を拾いきれなかった可能性がある、と分かる（ADR 0025・0026。2026-09-17 ADR 0193 が発火条件を拡張）。`ann_truncated`（証明）とは別の問い——こちらは scope 内にまだ見られていない候補が残っている疑いであり、厳密検索へのフォールバックや subject を絞り直す一手につながる。**窓が満杯でも鳴りうる**（ADR 0193）——`ann_truncated` と同時に立つことがある。件数は原理的に分からない（`countKind` は常に `'unknown'`）。 |
 | `score_not_comparable` | **スコアが閾値と比較できなかった**と分かる（[ADR 0044](./decisions/0044-score-not-comparable-omission.md)）。閾値を緩めても直らない——`below_threshold` とは別の出来事である。実際に起きるのは埋め込みがゼロベクトルのとき（コサインが未定義になり距離が `NaN` になる。[ADR 0040](./decisions/0040-zero-vector-never-returned.md)）で、次の一手は「その記憶の埋め込みを作り直す」であって「閾値を下げる」ではない。**件数は数え上げられる**（段2が触った候補の三分割なので）——ただし `countKind` は三分割が網羅であることを確かめた結果から決まる。 |
 | `unit_assembly_dropped` | **段3で単位を組むときに候補が漏れた**と分かる（[ADR 0043](./decisions/0043-unit-assembly-dropped-omission.md)）。原因は `contested_with_id` の一対一が破れていることであり、次の一手は「その対向関係を直す」——閾値にも予算にも索引にも関係がない。**⚠ 口は在るが、今日は `Runtime` 経由では発火しない**（2026-09-16 訂正）——[Issue #197](https://github.com/takecchi/mnemora/issues/197) / [ADR 0134](./decisions/0134-mark-contested-explicit-operation.md) で `Runtime.markContested` が入り、**`contested` を書く主体そのものは存在するようになった。**ただし `markContested` は両側 `status='active'` の CAS を課したうえで相互参照を1トランザクションで書くため、**`Runtime` 経由で作られた `contested` ペアが一対一を破ることは無い**——⟹ **今日この分岐が通るとすれば、`MemoryStore` を `Runtime` を経由せず直接叩いた場合に限る**（`packages/core/src/recall-runtime.ts` の同じ分岐のコメントが、同じことを書いている）。**さらに、`markContested` を呼ぶ本番コードは今日ひとつも無い**（【実測】2026-09-16、`main` が `5f11291` の時点で `rg "markContested" --glob '!**/__tests__/**' packages examples` が返すのは定義と適合テストだけである）——追跡は [Issue #284](https://github.com/takecchi/mnemora/issues/284)。`countKind` は `'lower_bound'`——二重計上が同時に起きていると消失が隠れるため、下限しか言えない。 |
 

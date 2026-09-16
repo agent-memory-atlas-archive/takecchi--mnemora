@@ -316,14 +316,29 @@ export interface AnnTruncatedOmission {
 }
 
 /**
- * ANR 索引が、scope 内にまだ見られていない候補を残したまま k' に届かなかったことの報告
+ * 近似索引（ANN）が、scope 内にまだ見られていない候補を残したことの報告
  * （[ADR 0025](../../../docs/decisions/0025-ann-underfill-is-not-reported-in-omitted.md) の
- * 実測、[ADR 0026](../../../docs/decisions/0026-ann-unreached-omission.md) の決定）。
+ * 実測、[ADR 0026](../../../docs/decisions/0026-ann-unreached-omission.md) の決定、
+ * [ADR 0193](../../../docs/decisions/0193-ann-unreached-covers-full-window.md) が
+ * 発火条件を拡張）。
  *
- * **`ann_truncated` に相乗りさせない。** over-fetch の打ち切り（k' に達した＝もっと在るはず
- * だが LIMIT で切った）と、この事象（k' に届く前に ANN が scope の他の場所へ行ってしまい、
- * この scope の候補に届かなかった）は**別の出来事**である。同じ札に潰すと、
- * ADR 0008 が禁じている「別の理由を同じ顔にする」を自分でやることになる。
+ * **`ann_truncated` とは別の問いに答える。** `ann_truncated`
+ * （[ADR 0069](../../../docs/decisions/0069-ann-truncated-says-nothing-about-loss.md)）は
+ * 「窓の外（k' 位より後ろ）は k 位を抜けないと証明できるか」に答える札であり、その証明は
+ * **窓の中身（`annHits`）が scope の真の上位 k' 件である**ことを前提にしている。
+ * `ann_unreached` は逆に「近似索引は scope の候補を拾いきったか」に答える札であり、
+ * **窓が満杯でも拾いきれているとは限らない**——近似索引は scope の他の場所へ辿って
+ * しまい、窓の中身自体が真の上位 k' 件からズレている（＝より近い候補を取りこぼしている）
+ * ことがありうる（`ann-truncation.ts` の doc コメント参照）。
+ *
+ * **🔴 ADR 0193 より前は `annHits.length < kPrime`（窓が埋まっていない）という条件が
+ * 付いており、`ann_truncated` と排反だった。** その条件は「窓が埋まっていれば scope の
+ * 候補を ANN が拾いきれている」という前提に立っていたが、その前提こそが
+ * `ann-truncation.ts` の doc コメントが明示的に否定している事象（近似索引が scope の
+ * 他所へ行った場合、窓が満杯でも上界は破れる）だった。ADR 0193 はこの条件を落とし、
+ * **窓の満杯/未満を問わず、scope 内にまだ見られていない候補が残っているかだけ**で
+ * 判定するよう直した。**⟹ 今日 `ann_truncated` と `ann_unreached` は同時に立ちうる**
+ * ——同じ事象の重複ではなく、別の問いにそれぞれ答えているだけである。
  *
  * **🔴 件数を持たせない。`countKind` は常に `'unknown'` である。**
  * 理由: この系は「何件取りこぼしたか」を原理的に知りようがない——ANN が触れなかった
