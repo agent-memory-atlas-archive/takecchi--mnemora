@@ -564,13 +564,13 @@ Issue #200（北極星「聞かれていないことを、自分から思い出�
 
 #### ⛔ 項目2 を「在る」と数えなかった理由
 
-**⭕ #284 の規律の*字義*では、項目2 は落ちない。**除外対象は `__tests__/` / `__fixtures__/` / `*.test.ts` であり、`examples/chat/src/mnemora-path.ts` はそのどれでもない。人が実際に走らせ、CI が毎回 `compare` で通す経路である（`ci.yml` の「**北極星の物差し（会話ログを全部積むのをやめても答えが残るか）を compare で実測しログに残す**」ステップ）。**dead code ではない。**
+**⭕ #284 の規律の*字義*では、項目2 は落ちない。**除外対象は `__tests__/` / `__fixtures__/` / `*.test.ts` であり、`examples/chat/src/mnemora-path.ts` はそのどれでもない。人が実際に走らせ、CI が毎回 `compare` で通す経路である（`ci.yml:361`）。**dead code ではない。**
 
 **⛔ それでも「在る」に数えなかったのは、#284 が*下限*だからである。**#284 を通ることは「機構が空振りしていない」ことしか言わない。§7.2 が要求しているのは **「目指す姿が*外から見て*満たされる」**ことであり、ライブラリの「外」は**それを入れた利用者**である。
 
-1. **出荷物の既定が反対を向いている。**`recall.ts` の `RecallQuery.association` の doc（「**省略時は連想を一切走らせない**（既定 off）」）と、`recall-runtime.ts` の `const associationQuery = validatedQuery.association;` 以降の分岐により、`@mnemora/core` を入れた利用者の既定の振る舞いは「聞かれたことしか返さない」。項目2 の文面は「**自分から**思い出す」であり、**呼び手の明示的オプトインは、この項目に限っては充足の否定に近い**（項目7「使う側が決められる」ならオプトインがそのまま充足だが、項目2 は逆向きである）。
+1. **出荷物の既定が反対を向いている。**`recall.ts:1104` / `recall-runtime.ts:988` により、`@mnemora/core` を入れた利用者の既定の振る舞いは「聞かれたことしか返さない」。項目2 の文面は「**自分から**思い出す」であり、**呼び手の明示的オプトインは、この項目に限っては充足の否定に近い**（項目7「使う側が決められる」ならオプトインがそのまま充足だが、項目2 は逆向きである）。
 2. **on にしている唯一の呼び手が出荷されない。**`examples/chat/package.json:4` `"private": true`、`scripts/publish-targets.mjs` の `PUBLISH_TARGETS` は core / testkit / openai / postgres / anthropic / local-embedding の6件で、同ファイルが `@mnemora/example-chat` を**publish 非対象として名指ししている**。⟹ この既定 on は利用者に1バイトも届かない。
-3. **他項目を `examples/chat` で数えるのとは、担っている役割が違う。**項目3・5・7 は `packages/core` の既定の振る舞い側で立っており（`recall-runtime.ts` が ANN と字句検索の `filter` に置く `status: ["active", "contested"]` の既定、`effectiveTokenBudget` の予算、常に組まれる `explain`）、`examples/chat` は**実演・計測**をしている。**項目2 だけは `examples/chat` が無いと項目が立たない。**⟹ 別扱いは恣意ではない。
+3. **他項目を `examples/chat` で数えるのとは、担っている役割が違う。**項目3・5・7 は `packages/core` の既定の振る舞い側で立っており（`recall-runtime.ts:474`/`:550` の `status` 既定、`:238-245` の予算、常に組まれる `explain`）、`examples/chat` は**実演・計測**をしている。**項目2 だけは `examples/chat` が無いと項目が立たない。**⟹ 別扱いは恣意ではない。
 
 **⛔ ただし、これを「実装のバグ」と断じない。**[ADR 0151](./decisions/0151-recall-association-unprompted.md) が既定 on を落としたのは**北極星の問い1**（毎回渡す量を減らす方向に働くか）であり、連想枠は載る量を*増やす*機能である。⟹ **項目2 と問い1 は、正典の内部で衝突している。**AGENTS.md は「正典と実装が食い違ったらバグなのは実装のほう」と定めるが、**ここで食い違っているのは正典どうしである。**
 
