@@ -119,7 +119,7 @@ describe("live: cacheDir が warm なとき、実際に何回・何にネット�
         };
         const coldPipeline = await createLocalEmbeddingPipeline(spec);
         // 実際に1回埋め込んで、cold の読み込みが本当に動くものであることも確認する。
-        const coldVectors = await coldPipeline(["温め用の文"]);
+        const coldVectors = await coldPipeline.embed(["温め用の文"]);
         expect(coldVectors).toHaveLength(1);
         expect(coldVectors[0]).toHaveLength(256);
 

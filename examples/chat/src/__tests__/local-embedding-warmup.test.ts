@@ -29,8 +29,14 @@ describe("warmupLocalEmbedding", () => {
 
   it("createPipeline が成功すれば ok:true になる(メトリクスの前段が通ることの確認)", async () => {
     const provider = new LocalEmbeddingProvider({
-      createPipeline: async () => async (texts: string[]) =>
-        texts.map(() => new Array(256).fill(0)),
+      // ⚠ `LocalEmbeddingPipeline`（ADR 0090 §3.1）は maxInputTokens / countTokens を
+      // 必須で持つ interface である。ここでは上限の検査そのものは測らないので、
+      // ダミーの値で埋める——⛔ 実モデルの上限値を書かない。
+      createPipeline: async () => ({
+        maxInputTokens: Number.MAX_SAFE_INTEGER,
+        countTokens: (texts: string[]) => texts.map(() => 0),
+        embed: async (texts: string[]) => texts.map(() => new Array(256).fill(0)),
+      }),
     });
     const outcome = await warmupLocalEmbedding(provider);
     expect(outcome.ok).toBe(true);

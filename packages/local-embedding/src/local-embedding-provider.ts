@@ -264,7 +264,7 @@ export class LocalEmbeddingProvider implements EmbeddingProvider {
     // 分岐を消して、経路を1本にしてある。`"" + text` は元の文字列そのものなので、
     // 増えるのは配列1本の確保だけで、その費用は推論の前では見えない。
     const prefixed = texts.map((text) => this.#prefix + text);
-    const vectors = await pipeline(prefixed);
+    const vectors = await pipeline.embed(prefixed);
 
     // ⭐ 件数の一致だけは確かめる。
     //

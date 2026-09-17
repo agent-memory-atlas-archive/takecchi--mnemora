@@ -28,6 +28,22 @@ import { LocalEmbeddingProviderError, isLocalEmbeddingProviderError } from "../e
 
 const ctx: Ctx = { tenantId: "test-tenant" };
 
+/**
+ * このファイルの偽 pipeline を `LocalEmbeddingPipeline`（ADR 0090 §3.1 の必須 interface）の
+ * 形に組み立てる。**このファイルは上限の検査そのものは測らない**（それは
+ * `input-token-limit.test.ts` の役目）ので、`maxInputTokens` / `countTokens` は
+ * ダミーの値で埋める——⛔ ここに実モデルの上限値を書かない。
+ */
+function fakeLocalEmbeddingPipeline(
+  embed: (texts: string[]) => Promise<number[][]>,
+): LocalEmbeddingPipeline {
+  return {
+    maxInputTokens: Number.MAX_SAFE_INTEGER,
+    countTokens: (texts) => texts.map(() => 0),
+    embed,
+  };
+}
+
 /** 呼ばれた回数と、渡された `spec` / テキストを記録する偽 pipeline。 */
 function createRecordingPipeline(
   options: {
@@ -45,13 +61,13 @@ function createRecordingPipeline(
     embeddedBatches: [] as string[][],
   };
 
-  const pipeline: LocalEmbeddingPipeline = async (texts) => {
+  const pipeline: LocalEmbeddingPipeline = fakeLocalEmbeddingPipeline(async (texts) => {
     state.embeddedBatches.push([...texts]);
     const count = texts.length + (options.countDelta ?? 0);
     return Array.from({ length: Math.max(count, 0) }, (_, row) =>
       Array.from({ length: dimensions }, (_, column) => (row + column) / 1000),
     );
-  };
+  });
 
   const createPipeline: CreateLocalEmbeddingPipeline = async (spec) => {
     state.createCalls += 1;
@@ -179,7 +195,9 @@ describe("遅延ロード", () => {
     const createPipeline: CreateLocalEmbeddingPipeline = async () => {
       attempts += 1;
       if (attempts === 1) throw new Error("ネットワークが落ちていた");
-      return async (texts) => texts.map(() => Array.from({ length: 256 }, () => 0.1));
+      return fakeLocalEmbeddingPipeline(async (texts) =>
+        texts.map(() => Array.from({ length: 256 }, () => 0.1)),
+      );
     };
     const provider = new LocalEmbeddingProvider({ createPipeline, retry: { attempts: 1 } });
 
@@ -213,7 +231,9 @@ describe("遅延ロード", () => {
       attempts += 1;
       await Promise.resolve();
       if (attempts === 1) throw new Error("落ちた");
-      return async (texts) => texts.map(() => Array.from({ length: 256 }, () => 0.1));
+      return fakeLocalEmbeddingPipeline(async (texts) =>
+        texts.map(() => Array.from({ length: 256 }, () => 0.1)),
+      );
     };
     const provider = new LocalEmbeddingProvider({ createPipeline, retry: { attempts: 1 } });
 
@@ -243,7 +263,9 @@ describe("読み込みの再試行 (Issue #261 / ADR 0141)", () => {
     const createPipeline: CreateLocalEmbeddingPipeline = async () => {
       calls += 1;
       if (calls < 2) throw new Error("cause: fetch failed");
-      return async (texts) => texts.map(() => Array.from({ length: 256 }, () => 0.1));
+      return fakeLocalEmbeddingPipeline(async (texts) =>
+        texts.map(() => Array.from({ length: 256 }, () => 0.1)),
+      );
     };
     // ⭐ retry オプション自体は既定値（DEFAULT_LOCAL_EMBEDDING_RETRY_ATTEMPTS）のまま——
     // 「CI が何も指定しなくても直る」ことを確かめるのが、この歯の主眼である。
@@ -465,7 +487,9 @@ describe("読み込み失敗のメッセージ", () => {
     const createPipeline: CreateLocalEmbeddingPipeline = async () => {
       attempts += 1;
       if (attempts === 1) throw new Error("HTTP 404: model not found");
-      return async (texts) => texts.map(() => Array.from({ length: 256 }, () => 0.1));
+      return fakeLocalEmbeddingPipeline(async (texts) =>
+        texts.map(() => Array.from({ length: 256 }, () => 0.1)),
+      );
     };
     const provider = new LocalEmbeddingProvider({ createPipeline, retry: { attempts: 1 } });
 
@@ -613,10 +637,11 @@ describe("prefix", () => {
     ["既定（prefix が空）", undefined],
     ["prefix を設定したとき", "検索文書: "],
   ])("%s、下流が書き換えても呼び出し側の配列は壊れない", async (_label, prefix) => {
-    const createPipeline = async (): Promise<LocalEmbeddingPipeline> => async (texts) => {
-      texts[0] = "下流が書き換えた";
-      return texts.map(() => [0, 0]);
-    };
+    const createPipeline = async (): Promise<LocalEmbeddingPipeline> =>
+      fakeLocalEmbeddingPipeline(async (texts) => {
+        texts[0] = "下流が書き換えた";
+        return texts.map(() => [0, 0]);
+      });
     const provider = new LocalEmbeddingProvider({ dimensions: 2, prefix, createPipeline });
 
     const mine = ["紅茶が好き", "コーヒーが好き"];

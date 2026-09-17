@@ -102,7 +102,7 @@ describe("buildLocalEmbeddingPipeline: 上限の境界", () => {
   it("上限ちょうど（10トークン / 上限10）は通る", async () => {
     const handle = fakeExtractor(10);
     const pipeline = buildLocalEmbeddingPipeline(handle.extractor);
-    const vectors = await pipeline(["あ".repeat(10)]);
+    const vectors = await pipeline.embed(["あ".repeat(10)]);
     expect(vectors).toHaveLength(1);
     expect(handle.calls()).toBe(1);
   });
@@ -110,7 +110,7 @@ describe("buildLocalEmbeddingPipeline: 上限の境界", () => {
   it("上限を1トークン超える（11トークン / 上限10）と落ちる", async () => {
     const handle = fakeExtractor(10);
     const pipeline = buildLocalEmbeddingPipeline(handle.extractor);
-    await expect(pipeline(["あ".repeat(11)])).rejects.toThrow(/上限を超えている/);
+    await expect(pipeline.embed(["あ".repeat(11)])).rejects.toThrow(/上限を超えている/);
   });
 
   /**
@@ -122,7 +122,7 @@ describe("buildLocalEmbeddingPipeline: 上限の境界", () => {
   it("落ちるとき、extractor（推論）は一度も呼ばれない", async () => {
     const handle = fakeExtractor(10);
     const pipeline = buildLocalEmbeddingPipeline(handle.extractor);
-    await expect(pipeline(["あ".repeat(11)])).rejects.toThrow();
+    await expect(pipeline.embed(["あ".repeat(11)])).rejects.toThrow();
     expect(handle.calls()).toBe(0);
   });
 });
@@ -131,7 +131,7 @@ describe("buildLocalEmbeddingPipeline: 超過の名乗り方", () => {
   it("kind: 'input_too_long' と、原因を追える欄を持つ", async () => {
     const handle = fakeExtractor(10);
     const pipeline = buildLocalEmbeddingPipeline(handle.extractor);
-    const error = await pipeline(["あ".repeat(25)]).then(
+    const error = await pipeline.embed(["あ".repeat(25)]).then(
       () => null,
       (reason: unknown) => reason,
     );
@@ -155,7 +155,7 @@ describe("buildLocalEmbeddingPipeline: 超過の名乗り方", () => {
   it("複数件のうち何番目が長すぎたのかを名乗る", async () => {
     const handle = fakeExtractor(10);
     const pipeline = buildLocalEmbeddingPipeline(handle.extractor);
-    const error = await pipeline(["短い", "あ".repeat(30), "これも短い"]).then(
+    const error = await pipeline.embed(["短い", "あ".repeat(30), "これも短い"]).then(
       () => null,
       (reason: unknown) => reason,
     );
@@ -171,7 +171,7 @@ describe("buildLocalEmbeddingPipeline: 超過の名乗り方", () => {
   it("トークン数と文字数を、別の欄として残す", async () => {
     const handle = fakeExtractor(10);
     const pipeline = buildLocalEmbeddingPipeline(handle.extractor);
-    const error = await pipeline(["x".repeat(12)]).then(
+    const error = await pipeline.embed(["x".repeat(12)]).then(
       () => null,
       (reason: unknown) => reason,
     );

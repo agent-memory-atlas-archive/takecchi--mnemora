@@ -62,25 +62,31 @@ const [a, b, c] = real.entries.map((e) => e.text) as [string, string, string];
  *
  * ⛔ 記録に無い入力にも投げる（黙って作りもののベクトルへ倒れない。ADR 0051 と同じ規律）。
  */
+// ⚠ この足場は上限の検査そのものは測らない（それは input-token-limit.test.ts の役目）ので、
+// `maxInputTokens` / `countTokens` はダミーの値で埋める——⛔ 実モデルの上限値を書かない。
 const createReplayPipeline: CreateLocalEmbeddingPipeline = async () => {
-  return async (texts) => {
-    if (texts.length === 0) {
-      throw new Error(
-        "再生 pipeline: 空配列で呼ばれた。LocalEmbeddingProvider は embed(ctx, []) で" +
-          "モデルを起こさずに返す契約であり（early return）、ここへ到達してはならない",
-      );
-    }
-    return texts.map((text) => {
-      const vector = byText.get(text);
-      if (vector === undefined) {
+  return {
+    maxInputTokens: Number.MAX_SAFE_INTEGER,
+    countTokens: (texts) => texts.map(() => 0),
+    async embed(texts) {
+      if (texts.length === 0) {
         throw new Error(
-          "再生 pipeline: この入力は記録に無い（黙って作りもののベクトルへ倒れない）。" +
-            `入力: ${JSON.stringify(text)}。記録に在るのは ${real.entries.length} 件だけである` +
-            "（fixtures/real-ruri-embeddings.json）",
+          "再生 pipeline: 空配列で呼ばれた。LocalEmbeddingProvider は embed(ctx, []) で" +
+            "モデルを起こさずに返す契約であり（early return）、ここへ到達してはならない",
         );
       }
-      return vector;
-    });
+      return texts.map((text) => {
+        const vector = byText.get(text);
+        if (vector === undefined) {
+          throw new Error(
+            "再生 pipeline: この入力は記録に無い（黙って作りもののベクトルへ倒れない）。" +
+              `入力: ${JSON.stringify(text)}。記録に在るのは ${real.entries.length} 件だけである` +
+              "（fixtures/real-ruri-embeddings.json）",
+          );
+        }
+        return vector;
+      });
+    },
   };
 };
 

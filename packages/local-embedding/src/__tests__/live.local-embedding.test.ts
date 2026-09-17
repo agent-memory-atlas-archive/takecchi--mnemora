@@ -243,7 +243,7 @@ describe("live: 8192トークンの壁 (MNEMORA_LIVE_LOCAL_EMBEDDING が無け�
       // 二分探索は要らない——ここは「確実に超えている」ことだけが要る（歯2が「ちょうど」を測る）。
       // かな巡回 20,000 文字は実測比 (~1000字/782トークン) で 15,000 トークン超になり、
       // 8192 を確実に超える。
-      const error = await pipeline([kanaText(20_000)]).then(
+      const error = await pipeline.embed([kanaText(20_000)]).then(
         () => null,
         (reason: unknown) => reason,
       );
@@ -279,12 +279,12 @@ describe("live: 8192トークンの壁 (MNEMORA_LIVE_LOCAL_EMBEDDING が無け�
       );
 
       // 上限ちょうどは通る（推論まで走り、256次元のベクトルが返る）。
-      const vectors = await pipeline([exact8192.text]);
+      const vectors = await pipeline.embed([exact8192.text]);
       expect(vectors).toHaveLength(1);
       expect(vectors[0]).toHaveLength(256);
 
       // 1トークン超えると落ちる（境界が `>` であることの固定。`>=` なら8192ちょうども落ちるはず）。
-      const error = await pipeline([exact8193.text]).then(
+      const error = await pipeline.embed([exact8193.text]).then(
         () => null,
         (reason: unknown) => reason,
       );
@@ -321,8 +321,8 @@ describe("live: 8192トークンの壁 (MNEMORA_LIVE_LOCAL_EMBEDDING が無け�
       //    ⟹ 黙って推論まで進み、8192を超えた後ろは transformers.js 内部の
       //    truncation: true によって黙って切り捨てられる。
       const brokenPipeline = buildLocalEmbeddingPipeline(withHugeDeclaredLimit(extractor));
-      const [vectorA] = await brokenPipeline([variantA]);
-      const [vectorB] = await brokenPipeline([variantB]);
+      const [vectorA] = await brokenPipeline.embed([variantA]);
+      const [vectorB] = await brokenPipeline.embed([variantB]);
       const cos = cosine(vectorA ?? [], vectorB ?? []);
       // ⚠ 有効桁を落とさずに出力する（報告に数字を持ち帰るため）。
       console.error(
@@ -334,7 +334,7 @@ describe("live: 8192トークンの壁 (MNEMORA_LIVE_LOCAL_EMBEDDING が無け�
 
       // 2. 差し替えていない本物の pipeline: 対になる証拠として、同じ2本が input_too_long で落ちる。
       const realPipeline = buildLocalEmbeddingPipeline(extractor);
-      const error = await realPipeline([variantA, variantB]).then(
+      const error = await realPipeline.embed([variantA, variantB]).then(
         () => null,
         (reason: unknown) => reason,
       );

@@ -63,7 +63,11 @@ export interface LocalEmbeddingModelSpec {
     readonly cacheDir: string | undefined;
     readonly numThreads: number;
 }
-export type LocalEmbeddingPipeline = (texts: string[]) => Promise<number[][]>;
+export interface LocalEmbeddingPipeline {
+    readonly maxInputTokens: number;
+    countTokens(texts: string[]): number[];
+    embed(texts: string[]): Promise<number[][]>;
+}
 export type CreateLocalEmbeddingPipeline = (spec: LocalEmbeddingModelSpec) => Promise<LocalEmbeddingPipeline>;
 export interface LocalEmbeddingTokenizer {
     readonly model_max_length: number;

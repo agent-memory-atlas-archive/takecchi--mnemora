@@ -33,12 +33,50 @@ export interface LocalEmbeddingModelSpec {
 }
 
 /**
- * テキストの配列を、そのままベクトルの配列にする関数。
+ * テキストの配列を、そのままベクトルの配列にする**必須 interface**
+ * （ADR 0090 §3.1 の決定4「負債1」を実装したもの。Issue #137 案 (a)）。
  *
  * **prefix の付与は呼ぶ側（`LocalEmbeddingProvider`）の仕事であり、ここには無い。**
- * ここが受け取るのは既に prefix の付いた文字列である。
+ * `embed()` が受け取るのは既に prefix の付いた文字列である。
+ *
+ * 🔴 **なぜ「テキスト→ベクトル」の関数1本ではなく、この形にしたか。**
+ *
+ * 以前はここが `(texts: string[]) => Promise<number[][]>` という**関数型**だった。
+ * `LocalEmbeddingProvider` の `createPipeline` 注入点（`CreateLocalEmbeddingPipeline`）は
+ * 外から差し替えられるため、**上限を宣言しない pipeline を注入できてしまっていた**
+ * （ADR 0090 決定4・引き受けた負債1）。宣言が無いまま黙って切り捨てられると、
+ * 切られたベクトルと切られていないベクトルが**同じ顔**で返る——
+ * `docs/north-star.md` が挙げる「知らないことを、知らないと言える」の裏側、
+ * 「見つからなかった」と「探していない」を同じ顔で返す壊れ方そのものである。
+ *
+ * ⟹ `maxInputTokens` / `countTokens` を**必須のプロパティ**にすることで、
+ * `(texts) => Promise<number[][]>` という関数だけを渡す形は型検査で弾かれる。
+ * **注入する側は、上限を宣言しないと `LocalEmbeddingPipeline` を作れない。**
+ *
+ * ⚠ **この interface が構造的に強制するのは「宣言すること」までである。**
+ * 宣言した `maxInputTokens` を `embed()` の実装が実際に守っているか
+ * （自前の実装が黙って切り詰めていないか）までは、型では検査できない。
+ * それでも、「宣言を忘れる」という一番安易な壊れ方は塞がれる。
+ *
+ * ⛔ **ここに具体的な上限の値を書かないこと。**値はモデルごとに違い、
+ * 宣言するのは pipeline を組み立てる側（{@link buildLocalEmbeddingPipeline} や、
+ * 独自に実装する側）である。
  */
-export type LocalEmbeddingPipeline = (texts: string[]) => Promise<number[][]>;
+export interface LocalEmbeddingPipeline {
+  /**
+   * このモデルが受け付ける最大トークン数。**宣言できないなら pipeline を作れない**
+   * （{@link buildLocalEmbeddingPipeline} は `Infinity` / `NaN` / 0以下 / 非整数を
+   * 「宣言されていない」として組み立て自体を失敗させる）。
+   */
+  readonly maxInputTokens: number;
+  /**
+   * 各テキストのトークン数を、**切り詰めずに**数えて返す
+   * （`texts` と同じ順・同じ長さの配列）。推論の前に上限超過を検出するために使う。
+   */
+  countTokens(texts: string[]): number[];
+  /** 実際にベクトルへ変換する。 */
+  embed(texts: string[]): Promise<number[][]>;
+}
 
 /** モデルを読み込んで `LocalEmbeddingPipeline` を返す関数。**ここが注入点である。** */
 export type CreateLocalEmbeddingPipeline = (
@@ -110,23 +148,30 @@ export function buildLocalEmbeddingPipeline(
     );
   }
 
-  return async (texts) => {
-    for (const [index, text] of texts.entries()) {
-      const tokens = extractor.tokenizer.encode(text).length;
-      if (tokens > maxInputTokens) {
-        throw new LocalEmbeddingProviderError(
-          "input_too_long",
-          `LocalEmbeddingProvider: ${index} 番目の入力が上限を超えている` +
-            `（${tokens} トークン > 上限 ${maxInputTokens} トークン、${text.length} 文字）。` +
-            `このまま埋め込むと、上限より後ろは黙って捨てられ、` +
-            `切り捨てられたことが分からないベクトルが返る` +
-            `（transformers.js は truncation: true で呼ぶため、例外もログも出ない）。` +
-            `入力を分割するか短くすること——同じ入力で再試行しても永久に失敗する`,
-          { index, tokens, maxInputTokens, characters: text.length },
-        );
+  const countTokens = (texts: string[]): number[] =>
+    texts.map((text) => extractor.tokenizer.encode(text).length);
+
+  return {
+    maxInputTokens,
+    countTokens,
+    async embed(texts) {
+      for (const [index, text] of texts.entries()) {
+        const tokens = extractor.tokenizer.encode(text).length;
+        if (tokens > maxInputTokens) {
+          throw new LocalEmbeddingProviderError(
+            "input_too_long",
+            `LocalEmbeddingProvider: ${index} 番目の入力が上限を超えている` +
+              `（${tokens} トークン > 上限 ${maxInputTokens} トークン、${text.length} 文字）。` +
+              `このまま埋め込むと、上限より後ろは黙って捨てられ、` +
+              `切り捨てられたことが分からないベクトルが返る` +
+              `（transformers.js は truncation: true で呼ぶため、例外もログも出ない）。` +
+              `入力を分割するか短くすること——同じ入力で再試行しても永久に失敗する`,
+            { index, tokens, maxInputTokens, characters: text.length },
+          );
+        }
       }
-    }
-    return toVectors(await extractor(texts, { pooling: "mean", normalize: true }));
+      return toVectors(await extractor(texts, { pooling: "mean", normalize: true }));
+    },
   };
 }
 

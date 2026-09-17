@@ -15,13 +15,13 @@ API キーは要らない。ネットワークが要るのは**初回のモデ�
 
 ### 良くなること
 
-| | |
-|---|---|
-| **外部へテキストが出ない** | 埋め込むテキストがプロセスの外に出ない。API キーも要らない |
-| **課金が無い・レート制限が無い** | 件数が増えても料金は増えない。429 で止まらない |
-| **日本語** | 日本語で学習されたモデルである（`text-embedding-3-small` は多言語だが日本語特化ではない） |
-| **ベクトルが小さい** | 256次元。`text-embedding-3-small` の 1536 次元に対して 1/6 で、索引も小さい |
-| **軽い** | 重み 36MB（q8）/ peak RSS 362MB / 4スレッドで **985 文/秒**（32コア機での実測） |
+|                                  |                                                                                           |
+| -------------------------------- | ----------------------------------------------------------------------------------------- |
+| **外部へテキストが出ない**       | 埋め込むテキストがプロセスの外に出ない。API キーも要らない                                |
+| **課金が無い・レート制限が無い** | 件数が増えても料金は増えない。429 で止まらない                                            |
+| **日本語**                       | 日本語で学習されたモデルである（`text-embedding-3-small` は多言語だが日本語特化ではない） |
+| **ベクトルが小さい**             | 256次元。`text-embedding-3-small` の 1536 次元に対して 1/6 で、索引も小さい               |
+| **軽い**                         | 重み 36MB（q8）/ peak RSS 362MB / 4スレッドで **985 文/秒**（32コア機での実測）           |
 
 ### 🔴 良くならないこと（このモデルでも解けないもの）
 
@@ -131,10 +131,10 @@ npm i @mnemora/local-embedding @mnemora/core
 **プラットフォームによっては CUDA execution provider を追加ダウンロードする。**
 `onnxruntime-node@1.24.3` の `script/install-metadata.js` を読んで測った既定値:
 
-| プラットフォーム | postinstall が落とすもの |
-|---|---|
-| **`linux/x64`** | 🔴 **`cuda12`**（このリポジトリの実測で **302MB**） |
-| `linux/arm64` / `darwin/x64` / `darwin/arm64` / `win32/x64` / `win32/arm64` | **無し**（`[]`） |
+| プラットフォーム                                                            | postinstall が落とすもの                            |
+| --------------------------------------------------------------------------- | --------------------------------------------------- |
+| **`linux/x64`**                                                             | 🔴 **`cuda12`**（このリポジトリの実測で **302MB**） |
+| `linux/arm64` / `darwin/x64` / `darwin/arm64` / `win32/x64` / `win32/arm64` | **無し**（`[]`）                                    |
 
 ⚠ **効くのは linux/x64 ——つまり大半の CI runner・Docker image・サーバである。**
 手元の mac では起きないので、**気づくのは本番の image を焼くときになる。**
@@ -143,9 +143,9 @@ npm i @mnemora/local-embedding @mnemora/core
 
 #### 止め方
 
-| 使っている物 | 既定 | やること |
-|---|---|---|
-| **npm / yarn** | 🔴 **postinstall が走る** | `ONNXRUNTIME_NODE_INSTALL=skip npm i`、または `.npmrc` に `onnxruntime-node-install=skip` |
+| 使っている物     | 既定                                        | やること                                                                                                 |
+| ---------------- | ------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| **npm / yarn**   | 🔴 **postinstall が走る**                   | `ONNXRUNTIME_NODE_INSTALL=skip npm i`、または `.npmrc` に `onnxruntime-node-install=skip`                |
 | **pnpm 10 以降** | ✅ 走らない（ビルドスクリプトは既定で拒否） | 何もしなくてよい。**明示したいなら** `pnpm-workspace.yaml` に `allowBuilds: { onnxruntime-node: false }` |
 
 ⚠ **このリポジトリ自身の `pnpm-workspace.yaml` の `allowBuilds` は、公開物には付いていかない。**
@@ -166,10 +166,10 @@ postinstall を拒否しており、その状態で動いていることは測�
 素の consumer で `@mnemora/local-embedding@0.1.4` を install して測った結果
 （`high: 5` / `critical: 0`）:
 
-| package | 経路 | 中身 |
-|---|---|---|
-| `adm-zip` | `onnxruntime-node` → | 細工した ZIP で 4GB 確保 / **展開時に destination symlink を辿り任意ファイルを上書き** |
-| `sharp` | `@huggingface/transformers` → | libvips（CVE-2026-33327 / -33328 / -35590 / -35591）と libheif（GHSA-g89c-p67h-r497 / GHSA-2jg2-4ch7-h545）の継承 |
+| package   | 経路                          | 中身                                                                                                              |
+| --------- | ----------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `adm-zip` | `onnxruntime-node` →          | 細工した ZIP で 4GB 確保 / **展開時に destination symlink を辿り任意ファイルを上書き**                            |
+| `sharp`   | `@huggingface/transformers` → | libvips（CVE-2026-33327 / -33328 / -35590 / -35591）と libheif（GHSA-g89c-p67h-r497 / GHSA-2jg2-4ch7-h545）の継承 |
 
 ⭐ **脆弱な経路は、どちらもこのパッケージが通らない経路である**:
 
@@ -260,18 +260,18 @@ await embeddingProvider.warmup(); // 最初のリクエストにロード時間�
 
 ### オプション
 
-| オプション | 既定 | |
-|---|---|---|
-| `repo` | `"sirasagi62/ruri-v3-30m-ONNX"` | Hugging Face の repo id |
-| `dtype` | `"q8"` | 量子化の別 |
-| `dimensions` | `256` | **宣言する**次元数。実物と食い違えば初回 `embed()` で例外になる |
-| `modelId` | `"ruri-v3-30m/sym"` | `space.model` に載る文字列 |
-| `prefix` | `""` | 全テキストの先頭に付ける文字列 |
-| `cacheDir` | 未指定（`~/.cache/huggingface`） | モデルの置き場所 |
-| `numThreads` | `4` | onnxruntime の intra-op スレッド数 |
-| `createPipeline` | transformers.js | モデルを読み込む関数（**テスト用の注入点**） |
-| `retry` | `{ attempts: 3 }` | 読み込みが「種類の分かっていない」失敗（多くはネットワーク）をリトライする回数・間隔（Issue #261 / ADR 0141） |
-| `sleep` | `setTimeout` を使う本物の待ち | リトライの待ち時間を実際に待つ関数（**テスト用の注入点**） |
+| オプション       | 既定                             |                                                                                                               |
+| ---------------- | -------------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| `repo`           | `"sirasagi62/ruri-v3-30m-ONNX"`  | Hugging Face の repo id                                                                                       |
+| `dtype`          | `"q8"`                           | 量子化の別                                                                                                    |
+| `dimensions`     | `256`                            | **宣言する**次元数。実物と食い違えば初回 `embed()` で例外になる                                               |
+| `modelId`        | `"ruri-v3-30m/sym"`              | `space.model` に載る文字列                                                                                    |
+| `prefix`         | `""`                             | 全テキストの先頭に付ける文字列                                                                                |
+| `cacheDir`       | 未指定（`~/.cache/huggingface`） | モデルの置き場所                                                                                              |
+| `numThreads`     | `4`                              | onnxruntime の intra-op スレッド数                                                                            |
+| `createPipeline` | transformers.js                  | モデルを読み込む関数（**テスト用の注入点**）                                                                  |
+| `retry`          | `{ attempts: 3 }`                | 読み込みが「種類の分かっていない」失敗（多くはネットワーク）をリトライする回数・間隔（Issue #261 / ADR 0141） |
+| `sleep`          | `setTimeout` を使う本物の待ち    | リトライの待ち時間を実際に待つ関数（**テスト用の注入点**）                                                    |
 
 **`numThreads` の既定が 4 なのは実測による**——32コア機で、既定（コア数まかせ）の
 819 文/秒 に対し 4スレッドで **985 文/秒**だった。**増やすほど速くなるわけではない。**
@@ -300,10 +300,10 @@ await embeddingProvider.warmup(); // 最初のリクエストにロード時間�
 消える可能性は承知のうえで選んでいる。**成り立っている前提は、
 「元モデルが公式で、変換を自分でやり直せる」ことである。**
 
-| | |
-|---|---|
-| 元モデル | **`cl-nagoya/ruri-v3-30m`**（ライセンス **apache-2.0**） |
-| 揃えるべき条件 | **dtype `q8` / mean pooling / L2 normalize / 256次元** |
+|                |                                                          |
+| -------------- | -------------------------------------------------------- |
+| 元モデル       | **`cl-nagoya/ruri-v3-30m`**（ライセンス **apache-2.0**） |
+| 揃えるべき条件 | **dtype `q8` / mean pooling / L2 normalize / 256次元**   |
 
 pooling は ruri v3 の `1_Pooling/config.json` が mean pooling であることを確認した値である。
 **pooling や正規化を変えると、出てくるベクトルは別物になる**——
@@ -358,10 +358,16 @@ new LocalEmbeddingProvider({ cacheDir: "/var/lib/mnemora/models" });
 それは `createPipeline` を差す仕事になる**（このパッケージが `env` を
 勝手に書き換えないのは、`env` がプロセス全体で共有される大域だからである）。
 
-**この形が実際に動くことは確かめた**（2026-09-10T00:37Z にこの器で実行）:
+**この形が実際に動くことは確かめた**（2026-09-10T00:37Z にこの器で実行。
+以下は `LocalEmbeddingPipeline` が**必須 interface**になった後の形——
+[ADR 0090](../../docs/decisions/0090-embedding-input-token-limit.md) 決定4の負債1を
+[ADR 0205](../../docs/decisions/0205-local-embedding-pipeline-required-interface.md) で塞いだことに伴い、
+`createPipeline` が返すものは `(texts) => Promise<number[][]>` という関数**ではなく**、
+`{ maxInputTokens, countTokens, embed }` を持つオブジェクトでなければならない。
+`buildLocalEmbeddingPipeline(extractor)` に渡せば、この組み立ては自動でやってくれる）:
 
 ```ts
-import { LocalEmbeddingProvider, toVectors } from "@mnemora/local-embedding";
+import { LocalEmbeddingProvider, buildLocalEmbeddingPipeline } from "@mnemora/local-embedding";
 
 // 再変換した重みを /var/lib/mnemora/models/my-ruri へ置いた、という想定。
 // （config.json / tokenizer.json / tokenizer_config.json / onnx/model_quantized.onnx）
@@ -373,14 +379,21 @@ const createPipeline = async (spec) => {
     dtype: spec.dtype,
     session_options: { intraOpNumThreads: spec.numThreads, interOpNumThreads: 1 },
   });
-  return async (texts) => toVectors(await extractor(texts, { pooling: "mean", normalize: true }));
+  // ⚠ `extractor.tokenizer.model_max_length` が宣言されていない（`Infinity`）モデルは、
+  // ここで `kind: "unknown_input_limit"` を投げて組み立て自体が失敗する——
+  // 上限を知らないまま pipeline を作れないようにするための歯である。
+  return buildLocalEmbeddingPipeline(extractor);
 };
 
 const provider = new LocalEmbeddingProvider({ repo: "my-ruri", createPipeline });
 ```
 
 **確かめたこと**: この形で 256 次元のベクトルが返り、
-「今日は雨が降っている」と「本日は雨天である」の cos が **0.9482** になった。
+「今日は雨が降っている」と「本日は雨天である」の cos が **0.9482** になった
+（この実測は `LocalEmbeddingPipeline` を必須 interface にする前のものであり、
+`toVectors` を手で呼ぶ形だった。**インターフェースの形が変わっただけで、
+`buildLocalEmbeddingPipeline` の中身は同じ `toVectors` を呼んでいるので、
+出るベクトルは変わらないはずである——ただしこの器では再実行して検算していない**）。
 `dimensions: 999` を宣言すると**この経路でも次元検査が発火する**ことも確認した
 （＝ `createPipeline` を差しても、このパッケージの歯は素通しにならない）。
 
