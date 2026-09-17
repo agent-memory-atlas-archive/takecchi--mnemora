@@ -9,7 +9,10 @@ import { PostgresMemoryStore } from "../memory-store.js";
 import { PostgresVectorStore } from "../vector-store.js";
 import { registerEmbeddingSpace } from "../vector-space.js";
 import { embeddingSpaceTableName } from "../embedding-space-table.js";
-import { INITIAL_ANALYZE_THRESHOLD } from "../memories-statistics.js";
+import {
+  INITIAL_ANALYZE_THRESHOLD,
+  resetMemoriesWriteCounterForTesting,
+} from "../memories-statistics.js";
 import { requireDatabaseUrl, seededRandom } from "./test-db.js";
 import { dropTempDatabase } from "./temp-database.js";
 
@@ -239,4 +242,110 @@ describe("PostgresMemoryStore.createMemory と memories の ANALYZE 自動発火
     expect(afterStat.rows[0]?.last_autoanalyze).toBeNull();
     expect(afterStat.rows[0]?.last_analyze).toEqual(lastAnalyzeBefore);
   }, 120_000);
+});
+
+/**
+ * Issue #269 の 2026-09-17T09:11:04Z コメント: `supersedeWithNewMemories` も
+ * `memories` へ `INSERT` するが、ADR 0221 が入れたフック
+ * (`maybeAnalyzeMemoriesAfterWrite`)を呼んでいなかった——`createMemory` /
+ * `createMemoryWithOutbox` の2箇所しか呼んでいなかった残りの1経路。
+ *
+ * この歯は上の (甲) と同じ検査(JOIN を含む本物の search() の EXPLAIN)を、
+ * 書き込み経路だけ `createMemory` から `supersedeWithNewMemories` に替えて行う——
+ * 「呼ばれたか」ではなく「実際に効いたか」(プランが Seq Scan から Index Scan へ
+ * 変わったか)を見る、上の2本と同じ形。
+ *
+ * `resetMemoriesWriteCounterForTesting()` でプロセスローカルの累計カウンタを
+ * 0へ戻してから始める——このカウンタは `memories-statistics.ts` のモジュール
+ * スコープに persist するため、同一ファイル内で先に走る (甲)/(乙) の書き込みが
+ * 残した累計に依存すると、この歯が本当に閾値を跨いだのか、それとも
+ * たまたま前段の残りで跨いだだけなのかが分からなくなる。専用の使い捨て
+ * データベースも (甲) と同じ理由(他のテストの行や ANALYZE のノイズからの隔離)で使う。
+ */
+describe("PostgresMemoryStore.supersedeWithNewMemories と memories の ANALYZE 自動発火(Issue #269 残経路)", () => {
+  const TEST_DATABASE_SUPERSEDE = "mnemora_memories_statistics_supersede_test";
+  let client: PostgresClient | undefined;
+
+  beforeAll(async () => {
+    resetMemoriesWriteCounterForTesting();
+    await dropTempDatabase(admin(), TEST_DATABASE_SUPERSEDE);
+    await admin().query(`CREATE DATABASE ${TEST_DATABASE_SUPERSEDE}`);
+    client = createPostgresClient(connectionStringFor(TEST_DATABASE_SUPERSEDE));
+    await runMigrations(client.pool);
+  }, 60_000);
+
+  afterAll(async () => {
+    if (client) {
+      await closePostgresClient(client);
+    }
+    await dropTempDatabase(admin(), TEST_DATABASE_SUPERSEDE);
+    if (adminPool) {
+      await adminPool.end();
+      adminPool = undefined;
+    }
+  }, 30_000);
+
+  it("(丙) supersedeWithNewMemories 経由で新規インストール相当の行数を書くだけで、JOIN を含む本物の search() が HNSW 索引を選ぶ", async () => {
+    const { db, pool } = client!;
+    const memoryStore = new PostgresMemoryStore(db);
+    const vectorStore = new PostgresVectorStore(db);
+    const ctx: Ctx = { tenantId: TENANT };
+
+    await disableAutovacuum(pool, "memories");
+
+    const space = uniqueSpace("crossing-supersede");
+    await registerEmbeddingSpace(pool, space);
+    const table = embeddingSpaceTableName(space);
+
+    // 4,000 = 4 * INITIAL_ANALYZE_THRESHOLD(等比の閾値ちょうど)。(甲) と同じ行数だが、
+    // 書き込み経路だけ supersedeWithNewMemories にする——`supersede` は空配列にして
+    // news の作成だけを起こす(この歯が検査したいのは news 側の INSERT が
+    // ANALYZE フックを起動するかどうかだけである)。
+    const rowCount = 4 * INITIAL_ANALYZE_THRESHOLD;
+    const rand = seededRandom(20260917270);
+    for (let i = 0; i < rowCount; i += 1) {
+      const { created } = await memoryStore.supersedeWithNewMemories(
+        ctx,
+        [
+          {
+            input: buildNewMemoryFixture({ tenantId: ctx.tenantId }),
+            jobKinds: [],
+          },
+        ],
+        [],
+      );
+      const memory = created[0]!.memory;
+      const vector = [rand(), rand(), rand()];
+      await vectorStore.upsert(ctx, space, memory.id, vector);
+    }
+
+    // 事前条件の確認: autovacuum を切ってあるので、ここまでに走った memories の
+    // ANALYZE は本 PR のコードが撃ったもの以外にありえない((甲) と同じ検査)。
+    const statResult = await pool.query(
+      `SELECT last_analyze, last_autoanalyze FROM pg_stat_user_tables WHERE relname = 'memories'`,
+    );
+    expect(statResult.rows[0]?.last_analyze).not.toBeNull();
+    expect(statResult.rows[0]?.last_autoanalyze).toBeNull();
+
+    // JOIN を含む本物の search() SQL を捕まえて EXPLAIN する((甲) と同じ検査)。
+    const queryVector = [0.5, 0.5, 0.5];
+    const captured = await captureQuery(
+      pool,
+      (text) => text.includes(table) && /order by/i.test(text),
+      () =>
+        vectorStore.search(ctx, space, queryVector, {
+          limit: 10,
+          filter: { tenantId: TENANT },
+        }),
+    );
+    const explainResult = await pool.query(
+      `EXPLAIN (FORMAT TEXT) ${captured.text}`,
+      captured.params,
+    );
+    const plan = explainResult.rows
+      .map((row: { "QUERY PLAN": string }) => row["QUERY PLAN"])
+      .join("\n");
+    expect(plan).toMatch(/Index Scan.*using idx_memory_embeddings_hnsw/);
+    expect(plan).not.toMatch(/Seq Scan/);
+  }, 180_000);
 });
