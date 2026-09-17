@@ -1337,6 +1337,9 @@ publish を打った瞬間に初めて分かる）。
 
 ## 5. リリース後の確認
 
+⭐ **当日打つのは §5.4 だけでよい。**§5.1〜5.3 は、§5.4 で `✗` が出た箇所を
+個別に掘るときに読む（と、そのときの【実測】の記録）。
+
 ### 5.1 6パッケージが同じ版で上がったか
 
 ```bash
@@ -1464,12 +1467,155 @@ npm audit signatures
 一般化できる値だとは書かれていない）。**焦らず、Actions のログの `npm publish` の
 出力を先に確認すること。**
 
+### 5.4 ⭐ 6パッケージをまとめて検算する（**当日の正規経路**）
+
+**当日はここ（§5.4）だけ打てばよい。**§5.1〜5.3 は、ここで `✗` が出た箇所を
+**個別に掘るときに**読む。
+
+**なぜ publish の実行後に、改めて registry を引き直すのか。**この repo の Actions の
+run ログに、実例が2つ在る（【実測】。どちらも過去の run であり、これから変わらない）:
+
+- **run が赤でも、5本は上がっていることがある。**tag `v0.1.4` の run
+  [`34452890407`](https://github.com/takecchi/mnemora/actions/runs/34452890407) は
+  6本目 `@mnemora/local-embedding@0.1.4` の publish が
+  `404 Not Found - PUT https://registry.npmjs.org/@mnemora%2flocal-embedding` で落ちて
+  **赤**になった。だが**その手前の5本は `✔ … を publish した` で完了していた**
+  （`core` / `testkit` / `openai` / `postgres` / `anthropic`）。
+  ⟹ **赤い run を「1本も上がらなかった」と読まない。**
+- **run 一覧の `conclusion` は最終 attempt のものなので、赤い attempt が隠れる。**
+  tag `v0.1.1` の run
+  [`34254090760`](https://github.com/takecchi/mnemora/actions/runs/34254090760) は
+  一覧では **success** だが、それは **attempt 2** である。attempt 1 は publish 順の先頭
+  `@mnemora/core@0.1.1` で
+  `403 Forbidden - PUT … OIDC permission denied for this action` で落ちている
+  （この attempt では1本も上がっていない）。
+  ⟹ **一覧の緑は「1度で通った」を意味しない。**
+
+#### 打つもの
+
+⚠ **§5.3 のとおり、publish 直後の数分は読み取り側が遅れる。数分置いてから打つこと。**
+
+```bash
+# 版は「いま切った Release の tag」から取る（手で書かない）
+TAG="$(gh release view --repo takecchi/mnemora --json tagName -q .tagName)"
+VERSION="${TAG#v}"
+echo "検算する版: ${VERSION}（tag ${TAG}）"
+
+fail=0
+for p in $(node -e 'import("./scripts/publish-targets.mjs").then(m=>{for(const t of m.PUBLISH_TARGETS)console.log(t.name)})'); do
+  # ⚠ npm view --json は、存在しない版でも stdout に {"error":…} を出して exit 1 する。
+  #    「出力が空か」ではなく**終了コード**で判定すること（これを空判定にすると、
+  #    上がっていない版が「版=在り」に化ける。【実測】で踏んだ）。
+  meta="$(npm view "${p}@${VERSION}" --json 2>/dev/null)"; rc=$?
+  if [ "${rc}" -ne 0 ]; then
+    echo "✗ ${p}@${VERSION}  版=無い（registry に上がっていない）"; fail=1; continue
+  fi
+  prov="$(printf '%s' "${meta}" | node -pe 'JSON.parse(require("fs").readFileSync(0,"utf8")).dist?.attestations?.provenance?.predicateType ?? "なし"')"
+  pub="$(printf '%s' "${meta}" | node -pe 'JSON.parse(require("fs").readFileSync(0,"utf8"))._npmUser?.trustedPublisher?.id ?? "なし"')"
+  latest="$(npm view "${p}" dist-tags.latest 2>/dev/null)"
+  mark="✔"
+  if [ "${prov}" = "なし" ] || [ "${pub}" != "github" ] || [ "${latest}" != "${VERSION}" ]; then mark="✗"; fail=1; fi
+  echo "${mark} ${p}  版=在り  latest=${latest}  provenance=${prov}  publisher=${pub}"
+done
+if [ "${fail}" -eq 0 ]; then echo "=== OK: 6本とも ${VERSION} で揃っている ==="; else echo "=== ⛔ ずれが在る（下の表へ） ==="; fi
+```
+
+**パッケージ名は `PUBLISH_TARGETS` から取っている**（§1.6・§3.1 の追記と同じ理由——
+7つ目が増えたときに手書きの列挙は黙って見落とす）。**この1本で、6本それぞれについて
+次の4つを同時に見ている**: 版が在るか / `latest` がその版を指しているか /
+provenance が付いているか / 押したのが OIDC（`publish.yml`）か。
+
+#### 期待される出力
+
+**6行すべてが `✔` で始まり、最後に `=== OK: …` が出ること。**
+
+【実測】2026-09-17、`origin/main` = `884902a` の作業ツリーで実際に打った。
+⚠ **測ったのは `v1.0.0` がまだ無い時点なので、下の値は `0.2.0` である**——
+**当日は `0.2.0` の位置に `1.0.0` が出る**（`VERSION=0.2.0` を与えて走らせた出力）:
+
+```
+✔ @mnemora/core  版=在り  latest=0.2.0  provenance=https://slsa.dev/provenance/v1  publisher=github
+✔ @mnemora/testkit  版=在り  latest=0.2.0  provenance=https://slsa.dev/provenance/v1  publisher=github
+✔ @mnemora/openai  版=在り  latest=0.2.0  provenance=https://slsa.dev/provenance/v1  publisher=github
+✔ @mnemora/postgres  版=在り  latest=0.2.0  provenance=https://slsa.dev/provenance/v1  publisher=github
+✔ @mnemora/anthropic  版=在り  latest=0.2.0  provenance=https://slsa.dev/provenance/v1  publisher=github
+✔ @mnemora/local-embedding  版=在り  latest=0.2.0  provenance=https://slsa.dev/provenance/v1  publisher=github
+=== OK: 6本とも 0.2.0 で揃っている ===
+```
+
+**ずれた側の見た目も実際に出させた**【実測。同じ日・同じ作業ツリー】。
+`VERSION=0.1.4` を与えると、**provenance を欠く1本がこう名指しされる**（末尾2行）:
+
+```
+✗ @mnemora/anthropic  版=在り  latest=0.2.0  provenance=https://slsa.dev/provenance/v1  publisher=github
+✗ @mnemora/local-embedding  版=在り  latest=0.2.0  provenance=なし  publisher=なし
+=== ⛔ ずれが在る（下の表へ） ===
+```
+
+（`anthropic` の行が `✗` なのは `latest` が `0.1.4` ではないためで、provenance は付いている。
+**`local-embedding` の `provenance=なし  publisher=なし` が、人手 publish の指紋である**
+——§3.4 の追記と §5.2 の ⚠ が言っているものが、この形で出る。）
+
+`VERSION` に存在しない版を与えた場合はこうなる【実測。同じ日・同じ作業ツリー。
+`VERSION=99.0.0`】:
+
+```
+✗ @mnemora/core@99.0.0  版=無い（registry に上がっていない）
+```
+
+#### `✗` が出たときに何をするか
+
+⛔ **1本でも `✗` が残っているうちは「v1.0.0 が出た」と announce しない。**
+
+| `✗` の形 | 意味 | すること |
+|---|---|---|
+| `版=無い` が1本以上 | その本がまだ上がっていない（partial publish の可能性） | 下の (A) |
+| `latest=` が `VERSION` と違う | publish は通ったが dist-tag が `latest` に付いていない | 下の (B) |
+| `provenance=なし` / `publisher=なし` | その本は OIDC 経路（`publish.yml`）を通っていない | 下の (C) |
+
+**(A) `版=無い` が出たとき**
+
+1. **先に Actions のログを見る。**段12（`npm publish`）の `::group::` を**1本ずつ**開く
+   （§1.2 の表）。⛔ **判断材料は `npm publish` 自身の出力が優先で、`npm view` は後である**
+   （§3.1 の戒め）。
+2. ログの末尾が `✗ … の publish が失敗した` なら、**partial publish が再発している。**
+   ⟹ **同じ tag のまま Actions で Re-run する。**既に上がった分は `E403` を
+   「上がっていた」として飲み込んで飛ばされ、残りだけが同じ版で publish される
+   （仕組みは §3.2、条件は §3.3）。Re-run が終わったら**この §5.4 をもう一度打つ。**
+3. ログでは6本とも `✔ … を publish した` なのに `版=無い` が出るなら、**読み取り側の遅延**
+   （§5.3）をまず疑う。**数分置いて §5.4 を打ち直す。**
+   ⛔ **ここで publish を打ち直さない。**
+4. ⛔ **人手で `npm publish` して埋めないこと。**それが
+   `@mnemora/local-embedding@0.1.4` を作った経路であり、**その版はいまも provenance を
+   持たないまま registry に残っている**（(C) と §3.4 の追記）。そもそも publish の実行は
+   オーナー専権である（`docs/autonomy.md` §3）。⟹ **止まって、オーナーに判断を仰ぐ。**
+
+**(B) `latest` がずれているとき**
+
+publish そのものは通っている。dist-tag は Release が pre-release かどうかで決まる
+（§1.5）——**pre-release チェックを入れて Release を作ると `next` に付き、`latest` は
+動かない**（§0.6 の通過条件がこれを見ている）。⟹ Release の設定を確認すること。
+**版そのものは上がっているので、publish を打ち直す話ではない。**
+
+**(C) `provenance=なし` / `publisher=なし` が出たとき**
+
+その本は `publish.yml` を通っていない。⛔ **これは publish し直して直せない**
+——同じ版は上書きできず（§3.5）、attestation は版ごとに後から付けられない。
+⟹ **止まって、オーナーに判断を仰ぐ。**（`1.0.0` の6本が揃って `✔` で出ていれば、
+過去の版に provenance を欠くものが在ること自体は `1.0.0` を妨げない。）
+
 ---
 
 ## この手順書を書いていて「現物を読んでも分からなかった」点（当日の穴になりうるもの）
 
 1. **provenance の確認方法の具体的なコマンド・画面**（§5.2）。過去の ADR は
    「付いた」という結果だけを記録しており、確認手順そのものは記録されていない。
+
+   **⭐ 追記（2026-09-17）— 埋まった。⛔ もう一度書き起こさないこと。**§5.2 の追記が
+   `npm view <spec> --json` の `dist.attestations.provenance.predicateType` と
+   `_npmUser.trustedPublisher.id`、および `npm audit signatures` の両方を【実測】で
+   記録している。**さらに §5.4 が、それを6本ぶんまとめて打って判定する形にしている**
+   （当日の正規経路）。⟹ **この項目はもう「分からなかった点」ではない。**
 2. **信頼発行元（Trusted Publisher）の現在の設定状態。**この作業者は npmjs.com の
    画面を一度も見ていない。6パッケージ全部で「org/repo/workflow filename/直接publish許可」
    が正しく設定されているかは、**オーナーが当日 npm の画面で確認する必要がある**
