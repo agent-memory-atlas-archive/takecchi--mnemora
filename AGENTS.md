@@ -41,7 +41,8 @@
 | `packages/testkit` | adapter の適合テスト一式（conformance suite）とインメモリのプレースホルダ実装 |
 | `packages/postgres` | `MemoryStore` / `VectorStore` / `LexicalStore` / `EventStore` / `OutboxStore` / `TenantSettingsStore`。手書きマイグレーション |
 | `packages/openai` | `EmbeddingProvider` / `LLMProvider` |
-| `packages/local-embedding` | **外部サービスに繋がない `EmbeddingProvider`**。ONNX のモデルをプロセス内・CPU で推論する（[ADR 0085](./docs/decisions/0085-local-embedding-provider.md)）。⚠ **鍵は要らないが、モデルの重み42MBを実行時に落とす** |
+| `packages/anthropic` | `LLMProvider` の Anthropic 実装。**`EmbeddingProvider` は実装しない**（Anthropic は埋め込み API を提供していないため。[ADR 0072](./docs/decisions/0072-anthropic-llm-provider.md)） |
+| `packages/local-embedding` | **外部サービスに繋がない `EmbeddingProvider`**。ONNX のモデルをプロセス内・CPU で推論する（[ADR 0085](./docs/decisions/0085-local-embedding-provider.md)）。⚠ **鍵は要らないが、モデルの重み36MBを実行時に落とす** |
 | `examples/chat` | サンプル CLI と、**naive（会話ログ全部）と mnemora を実測比較する `compare`** |
 
 **Phase 1 に入っていないもの**は `docs/roadmap.md` §1.3 の通り（関係グラフ本体・reranking・
