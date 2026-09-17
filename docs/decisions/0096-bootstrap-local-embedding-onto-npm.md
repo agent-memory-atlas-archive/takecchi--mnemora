@@ -2,6 +2,34 @@
 
 - **状態**: 採用 (2026-09)
 
+> **⭐ 2026-09-17 追記（「測ったこと10」の識別子に一次情報を当てた。本文は書き換えていない）。**
+> ⭐ **「測ったこと10」の表に並ぶ6つの識別子は、すべて実在する一次情報へ辿れる。** **【実測 2026-09-17】**
+> - **libvips の4件**（`CVE-2026-33327` / `-33328` / `-35590` / `-35591`）は **MITRE CVE Services で4件とも
+>   `state: PUBLISHED`**（`vendor: libvips`、影響は `<= 8.18.0` / `<= 8.18.1`）。sharp 側の名乗りは
+>   [`GHSA-f88m-g3jw-g9cj`](https://github.com/advisories/GHSA-f88m-g3jw-g9cj)（`sharp < 0.35.0`）で、
+>   **4件の CVE 番号がその summary に逐語で並んでいる。**
+> - **libheif の2件**（`GHSA-g89c-p67h-r497` / `GHSA-2jg2-4ch7-h545`）は ⚠ **当てた3箇所すべてで引けなかった**
+>   （`gh api /advisories/<id>` → 404、`https://github.com/advisories/<id>` → 404、`api.osv.dev/v1/vulns/<id>` → 404）。
+>   ⛔ **「存在しない」ではない**——**`strukturag/libheif` のリポジトリ配下の advisory** であり、
+>   グローバルの advisory database と OSV には載っていない。sharp 側の名乗り
+>   [`GHSA-rgj7-g3m4-5g8c`](https://github.com/advisories/GHSA-rgj7-g3m4-5g8c)（`sharp < 0.35.4`、2026-09-08）の
+>   `references` がその URL を指しており、**`GHSA-g89c-p67h-r497` には `CVE-2026-84383` も付いている。**
+>   ⟹ ⭐ **識別子は正しい。引く先が違うだけである。**
+>
+> ⚠ **1点だけ、本文の言い回しが実測より強い。** 本文は **「`fixAvailable: false`——上流に修正版が無いので」** と書くが、
+> **`npm audit` の `fixAvailable: false` は「いまの依存木の制約の中では上げられない」であって「上流に修正版が無い」ではない。**
+> **【実測 2026-09-17】** 上流 `sharp` には修正版が在る（libvips 側 **`0.35.0`**、libheif 側 **`0.35.4`**）。
+> この repo の `pnpm-lock.yaml` が解決しているのは **`sharp@0.34.5`**（`@huggingface/transformers@4.2.0` 経由）である。
+> ⟹ **上げられないのは上流の側ではなく、依存木の制約の側である。**
+> ⛔ **「だから `@huggingface/transformers` を捨てろ」とは書かない**（本文がそれを範囲外としているのは妥当である）。
+> ⭐ **測っていない、ではなく「測ったら言い回しが1つ強すぎた」と書くだけである。**
+>
+> ⚠ **確かめていないこと**: 当てたのは **この repo の `pnpm-lock.yaml`** であって、公開された
+> `@mnemora/local-embedding` を素の consumer が install した木ではない。**本文の `npm audit` の実行は再現していない**
+> （⟹ `high: 5` / `critical: 0` という件数そのものは、この追記では裏を取っていない）。
+> ⭐ **同じ追記を [`packages/local-embedding/README.md`](../../packages/local-embedding/README.md) にも置いた**
+> （出荷物の側にも同じ表が在るため）。
+
 - **⚠ この ADR が決めたこと・決めていないこと（先に書く）**:
 
   | | |

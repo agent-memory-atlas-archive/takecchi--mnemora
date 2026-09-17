@@ -617,6 +617,55 @@ NOT NULL とし、全ての一意制約・索引の先頭列に置く**（[ADR 0
   >   `0.8.3 (2026-06-17)` が **`Fixed possible index corruption with HNSW vacuuming`** を直している。
   >   ⛔ **この追記では下限の数字を書き換えない**（数字を直してもまた腐る）。**引くときに上流の
   >   `CHANGELOG.md` を見ること。**
+  >
+  > **⭐ 2026-09-17 追記2（一次情報を当て直した。本文も上の追記1も書き換えていない）。**
+  > ⭐ **`CVE-2026-3172` は実在し、内容も本文の記述と一致する。** 追記1 の「未確認」は**解消した。**
+  > **【実測 2026-09-17】当てた先と、返ってきたもの:**
+  >
+  > | 当てた先 | 返ってきたもの |
+  > |---|---|
+  > | MITRE CVE Services `https://cveawg.mitre.org/api/cve/CVE-2026-3172` | **HTTP 200 / `state: PUBLISHED`**。採番者は **PostgreSQL**（`assignerShortName`）。`datePublished` `2026-02-25T20:59:10Z` |
+  > | NVD `https://services.nvd.nist.gov/rest/json/cves/2.0?cveId=CVE-2026-3172` | **HTTP 200 / `totalResults: 1`**。`vulnStatus: Deferred`、CVSS v3.1 **8.1 HIGH**（`AV:N/AC:L/PR:L/UI:N/S:U/C:H/I:N/A:H`）、CWE-191 / CWE-787 |
+  > | GitHub advisory database `gh api "/advisories?cve_id=CVE-2026-3172"` | **該当1件** — [`GHSA-789c-mgqf-5hwx`](https://github.com/advisories/GHSA-789c-mgqf-5hwx) |
+  > | 上流 issue | [pgvector#959](https://github.com/pgvector/pgvector/issues/959) *"Buffer overflow with parallel HNSW index build"*（closed、`2026-02-25T18:58:14Z`） |
+  >
+  > - ⭐ **表題も影響範囲も本文と一致する。** MITRE の `title` は
+  >   **"pgvector buffer overflow in parallel HNSW index build"**、`affected` は
+  >   **`0.6.0` 以上 `0.8.2` 未満**（`lessThan: "0.8.2"`）。NVD の説明文は逐語で
+  >   *"Buffer overflow in parallel HNSW index build in pgvector 0.6.0 through 0.8.1 allows a database
+  >   user to leak sensitive data from other relations or crash the database server."*
+  >   ⟹ ⭐ **「0.8.2 が `CVE-2026-3172` を直した」も「だから `>= 0.8.2`」も、この CVE に関する限り正しい。**
+  > - ⚠ **追記1 が「該当0件」になったのは、番号が無いからではなく引き方である。**
+  >   `GHSA-789c-mgqf-5hwx` は **`type: unreviewed` かつ `vulnerabilities: []`**
+  >   （＝ ecosystem / package への対応付けを持たない）。⟹ **`affects=` や `ecosystem=` で絞る引き方では
+  >   届かない。`cve_id=` で引けば出る。**
+  >   ⭐ **「引けなかった」を「存在しない」と書かなかった追記1 の線は、正しかった。**
+  >
+  > **⚠ 下限 `>= 0.8.2` を動かすかどうかの判断材料**（⛔ **この追記でも数字は書き換えていない**。ADR 0217 決定3）。
+  > **【実測 2026-09-17、上流 `CHANGELOG.md` と NVD `keywordSearch=pgvector`（`totalResults: 6`、うち pgvector 本体は2件）】**
+  >
+  > | 版 | 直したもの | セキュリティ採番 |
+  > |---|---|---|
+  > | `0.8.2` (2026-02-25) | buffer overflow with parallel HNSW index build（[#959](https://github.com/pgvector/pgvector/issues/959)） | **`CVE-2026-3172`** CVSS 8.1 HIGH。**システムを問わない** |
+  > | `0.8.3` (2026-06-17) | possible index corruption with HNSW vacuuming ／ PG18 での Hamming・Jaccard 距離の性能退行 | **無し**（＝正しさの修正であって、採番された脆弱性ではない） |
+  > | `0.8.4` (2026-06-30) | `hnsw graph not repaired` ／ vacuuming 中の insert ／ IVFFlat 構築の `maintenance_work_mem` 超過 | **無し** |
+  > | `0.8.5` (2026-07-08) | 小さいテーブルの IVFFlat 構築のメモリ使用量 | **無し** |
+  > | `0.8.6` (2026-07-29) | buffer overflow with IVFFlat index build on 32-bit systems（[#1006](https://github.com/pgvector/pgvector/issues/1006)）ほか2件 | **`CVE-2026-18022`** CVSS 8.8 HIGH。⚠ **32bit システムのみ** |
+  >
+  > - 🔴 **`>= 0.8.2` は「既知の CVE が1つも残らない下限」ではない。** `CVE-2026-18022` の
+  >   MITRE `affected` は **`lessThan: "0.8.6"` / `version: "0"`** ＝ **`0.8.6` 未満のすべて**である。
+  > - ⭐ **ただし `CVE-2026-18022` は 32bit システムにしか効かない。** MITRE 逐語:
+  >   *"Integer wraparound in IVFFlat index build in pgvector before 0.8.6 allows a database user to
+  >   write data out-of-bounds, which could lead to arbitrary code execution. **Only 32-bit systems are
+  >   affected.**"* ⟹ **64bit だけを対象に置くなら、`>= 0.8.2` のままでも既知の CVE は残らない。**
+  > - ⛔ **mnemora が 32bit を対象に含めるかは製品判断であり、ここでは決めない。**
+  >   ⭐ **決めるのに要る材料を並べただけである。**
+  > - ⚠ **`0.8.3` が直した index corruption は、脆弱性としては採番されていない**（＝追記1 が
+  >   「下限が古い」の根拠に挙げた項目は、**セキュリティ上の根拠ではない**）。下限を動かす理由になるとすれば
+  >   正しさの側である。
+  > - ⚠ **上流の最新リリースは `v0.8.6`**（`CHANGELOG.md` 上 `0.8.7` は unreleased）。
+  > - ⭐ **この表が腐ったかは、上流の `CHANGELOG.md` と
+  >   `https://services.nvd.nist.gov/rest/json/cves/2.0?keywordSearch=pgvector` で引き直せる。**
 - **確かめていないこと**: マネージド Postgres 各社（RDS / Cloud SQL / Supabase 等）が
   実際に提供している pgvector のバージョンは確認していない。導入環境ごとに
   `SELECT * FROM pg_available_extensions WHERE name = 'vector';` で確認すること。

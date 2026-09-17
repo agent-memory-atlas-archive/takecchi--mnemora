@@ -171,6 +171,39 @@ postinstall を拒否しており、その状態で動いていることは測�
 | `adm-zip` | `onnxruntime-node` →          | 細工した ZIP で 4GB 確保 / **展開時に destination symlink を辿り任意ファイルを上書き**                            |
 | `sharp`   | `@huggingface/transformers` → | libvips（CVE-2026-33327 / -33328 / -35590 / -35591）と libheif（GHSA-g89c-p67h-r497 / GHSA-2jg2-4ch7-h545）の継承 |
 
+
+> **⭐ 2026-09-17 追記（一次情報を当て直した。上の表も本文も書き換えていない）。**
+> ⭐ **表に並ぶ6つの識別子は、すべて実在する一次情報へ辿れる。** **【実測 2026-09-17】** 当てた先と結果:
+>
+> | 識別子 | 当てた先 | 結果 |
+> | --- | --- | --- |
+> | `CVE-2026-33327` / `-33328` / `-35590` / `-35591` | MITRE CVE Services（`cveawg.mitre.org/api/cve/…`） | **4件とも HTTP 200 / `state: PUBLISHED`**。`vendor: libvips`。影響は `<= 8.18.0`（33327 / 33328）・`<= 8.18.1`（35590 / 35591） |
+> | 同上（sharp 側の名乗り） | GitHub advisory database | [`GHSA-f88m-g3jw-g9cj`](https://github.com/advisories/GHSA-f88m-g3jw-g9cj) *"sharp inherited vulnerabilities in libvips: CVE-2026-33327, CVE-2026-33328, CVE-2026-35590, CVE-2026-35591"*（`sharp < 0.35.0`、2026-07-21） |
+> | `GHSA-g89c-p67h-r497` / `GHSA-2jg2-4ch7-h545` | GitHub advisory database / OSV | ⚠ **単独では引けない**（下記） |
+> | 同上（sharp 側の名乗り） | GitHub advisory database | [`GHSA-rgj7-g3m4-5g8c`](https://github.com/advisories/GHSA-rgj7-g3m4-5g8c) *"sharp: Vulnerabilities in libheif: GHSA-g89c-p67h-r497 and GHSA-2jg2-4ch7-h545"*（`sharp < 0.35.4`、2026-09-08） |
+>
+> - ⚠ **`GHSA-g89c-p67h-r497` と `GHSA-2jg2-4ch7-h545` は、当てた3箇所すべてで引けなかった**
+>   （`gh api /advisories/<id>` → **404**、`https://github.com/advisories/<id>` → **404**、
+>   `https://api.osv.dev/v1/vulns/<id>` → **404**）。
+>   ⛔ **「存在しない」ということではない。** **`strukturag/libheif` のリポジトリ配下の advisory**
+>   （`https://github.com/strukturag/libheif/security/advisories/…`）であり、
+>   **グローバルの advisory database と OSV には載っていない**——`GHSA-rgj7-g3m4-5g8c` の
+>   `references` がその URL を指している。⟹ **識別子は正しい。引く先が違うだけである。**
+> - ⭐ **`GHSA-g89c-p67h-r497` には CVE も付いている**——`GHSA-rgj7-g3m4-5g8c` の本文が
+>   **`CVE-2026-84383`** として引いている。
+> - ⚠ **上の「上流に修正版が無い」は、`fixAvailable: false` からは出てこない。**
+>   `npm audit` の `fixAvailable: false` は「**いまの依存木の制約の中では修正版へ上げられない**」であって、
+>   「上流に修正版が無い」ではない。**【実測 2026-09-17】** 上流 `sharp` には修正版が在る——
+>   libvips 側は **`0.35.0`**、libheif 側は **`0.35.4`** で патched と advisory に書かれている。
+>   この repo の `pnpm-lock.yaml` が解決しているのは **`sharp@0.34.5`**（`@huggingface/transformers@4.2.0` 経由）であり、
+>   **上げられないのは上流ではなく、依存木の制約の側である。**
+>   ⛔ **だからどうしろ、とはここでは書かない。** ⭐ **測った結果を書いただけである。**
+>   ⚠ **確かめていないこと**: 当てたのは**この repo の `pnpm-lock.yaml`** であって、
+>   公開された `@mnemora/local-embedding` を素の consumer が install した木ではない。
+>   **上の表を作った `npm audit` の実行を再現してはいない。**
+> - ⭐ **この追記が腐ったかは、`gh api /advisories/GHSA-rgj7-g3m4-5g8c` と
+>   `gh api "/advisories?ecosystem=npm&affects=sharp"` で引き直せる。**
+
 ⭐ **脆弱な経路は、どちらもこのパッケージが通らない経路である**:
 
 - **`sharp` は画像入力用。**テキスト埋め込みでは通らない

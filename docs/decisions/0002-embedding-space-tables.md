@@ -12,6 +12,19 @@
 > ⚠ **「存在しない」ではなく「未確認」である**）。
 > ⭐ **詳細と逐語は `docs/memory-model.md` の同日の追記にまとめてある。そちらを正規の置き場とする。**
 
+> **⭐ 2026-09-17 追記2（一次情報を当て直した。本文も上の追記1も書き換えていない）。**
+> ⭐ **`CVE-2026-3172` は実在し、内容も本文の記述と一致する。上の追記1 の「未確認」は解消した。**
+> **【実測 2026-09-17】** MITRE CVE Services（`state: PUBLISHED`、採番者 PostgreSQL）と
+> NVD（`totalResults: 1`、CVSS v3.1 **8.1 HIGH**）に在り、GitHub advisory database も
+> `cve_id=` で引けば [`GHSA-789c-mgqf-5hwx`](https://github.com/advisories/GHSA-789c-mgqf-5hwx) が1件返る。
+> MITRE の `affected` は **`0.6.0` 以上 `0.8.2` 未満**であり、**「0.8.2 が直した」も「だから `>= 0.8.2`」も正しい。**
+> ⚠ **追記1 で advisory database が「0件」になったのは、番号が無いからではなく引き方である**
+> （当該 advisory は `type: unreviewed` / `vulnerabilities: []` で、`affects=` や `ecosystem=` からは届かない）。
+> ⚠ **ただし `>= 0.8.2` は「既知の CVE が1つも残らない下限」ではない**——`CVE-2026-18022`（CVSS 8.8 HIGH、
+> **32bit システムのみ**）が `0.8.6` 未満のすべてに効く。⛔ **下限の数字はここでも書き換えない**（製品判断である）。
+> ⭐ **逐語・当てた先の一覧・下限を動かすかの判断材料は、[`docs/memory-model.md`](../memory-model.md)「前提: pgvector のバージョン」の
+> 同日の追記2 にある。そちらが正規の置き場である**（ADR 0217 決定2）。
+
 - **文脈**:
   mnemora は埋め込みモデルを固定しない。モデルを変える・多言語対応で複数モデルを併用する・将来の
   再 embed 移行を行う、といった事態を core が知らずに扱えることが `docs/decisions/0003-memorystore-vs-vectorstore.md`
