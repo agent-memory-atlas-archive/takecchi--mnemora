@@ -66,6 +66,18 @@ DATABASE_URL=postgresql://user:pass@localhost:5432/mydb npx mnemora-postgres-mig
 **37.4 / 33.2 / 32.9 ms**——`ANALYZE` 未実行の場合と統計的に同じ遅さ。対して
 `ANALYZE` 実行後は **4.6 / 4.5 / 5.6 ms**）。
 
+> **⚠ 追記（2026-09-17、[Issue #425](https://github.com/takecchi/mnemora/issues/425)）— 上の数字は、当時・当条件の記録として読むこと**:
+>
+> 上の実測には行数（100,000）以外の測定条件（`shared_buffers`・次元数・データ分布など）が
+> 記録されておらず、**他の環境では再現できない。**⛔ **そのため数字は書き換えない**
+> （[ADR 0213](../../docs/decisions/0213-live-docs-cite-adrs-by-anchor-not-line-number.md) 決定5。
+> ここは宛先ではなく主張であり、追記で訂正する対象である）。
+>
+> 【受】別条件（自分専用の PostgreSQL、100,000行、当日の既定 WHERE 述語）で
+> 再測した結果は、絶対値が大きく違った——旧来相当の述語で `ANALYZE` 前 median 261.0ms →
+> 後 2.09ms、述語を足した当日の既定形で 167.8ms → 2.25ms。**それでも
+> 「`ANALYZE` 前後で桁が違う」という定性的な結論は崩れていない。**
+
 **⟹ 初回のデータ投入（シード・移行元からの一括インポート等）が終わったタイミングで、
 一度だけ次を実行すること**（`mnemora-postgres-migrate` と同じバイナリの1オプション、
 [ADR 0143](../../docs/decisions/0143-analyze-memories-after-seed.md)）:
