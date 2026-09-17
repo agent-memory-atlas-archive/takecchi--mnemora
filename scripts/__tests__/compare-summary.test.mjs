@@ -23,6 +23,10 @@ import { afterEach, describe, expect, it } from "vitest";
  *    できない(門として機能しない)。
  * 4. **入力そのものが壊れていれば非0**(JSON が読めない・parse できない・rows が
  *    欠ける・`--baseline` が壊れている)。
+ * 5. **🔴 実測と基準値の `turnCount` 集合が一致しなければ exit 2(判定不能)**
+ *    (Issue #477)。⛔ **判定不能を 0 に倒さない**——「比較していない」を
+ *    「退行が無い」と同じ顔で出さないため。終了コードの語彙
+ *    (pass=0 / fail=1 / 判定不能=2)は `check-publish-run-coverage.mjs` に揃えてある。
  *
  * DB もネットワークも要求しない——このスクリプトは JSON ファイルを最大2つ読むだけである。
  */
@@ -161,6 +165,86 @@ describe("compare-summary.mjs（子プロセスで起動）", () => {
     ]);
     expect(result.status, result.stderr).toBe(0);
     expect(result.stdout).toContain("naiveChars");
+  });
+
+  /**
+   * ⭐ **Issue #477 の陽性対照を、CLI の終了コードとして固定する。**
+   *
+   * `main`（`dd9ec8e` 時点）では、基準値を1行だけ／空配列にすると、**同じ実測が
+   * 退行していても** `computeRegressions` が0件を返し、この CLI は **exit 0（緑）**
+   * を出していた（探り棒で逐語に記録した）。いまは exit 2（判定不能）である。
+   *
+   * ⛔ **判定不能を 0 に倒さない**（`check-publish-run-coverage.mjs` と同じ語彙:
+   * pass=0 / fail=1 / 判定不能=2）。
+   */
+  it("🔴【本題】基準値が1行だけなら exit 2（判定不能。緑にしない）", () => {
+    const measured = makeMeasured();
+    measured.rows[1].mnemoraShareOfNaiveChars = 5; // turnCount=10 が退行している
+    const baseline = { rows: [structuredClone(makeRow({ turnCount: 2, fillerPairs: 0 }))] };
+    const result = run([
+      "--measured",
+      writeJson("measured.json", measured),
+      "--baseline",
+      writeJson("baseline.json", baseline),
+    ]);
+    expect(result.status).toBe(2);
+    expect(result.stderr).toContain("判定不能");
+    expect(result.stderr).toContain("turnCount=10");
+    expect(result.stdout).toContain("この会話長は比較していない");
+  });
+
+  it("🔴【本題2】基準値が空配列なら exit 2（validateBaseline は通したままで落ちる）", () => {
+    const measured = makeMeasured();
+    measured.rows[0].factStatementSurvived = false;
+    const result = run([
+      "--measured",
+      writeJson("measured.json", measured),
+      "--baseline",
+      writeJson("baseline.json", { rows: [] }),
+    ]);
+    expect(result.status).toBe(2);
+    expect(result.stderr).toContain("1会話長も比較していない");
+    expect(result.stderr).toContain("turnCount=2, 10");
+  });
+
+  it("🔴【測る点が減った側】基準値に在って実測に無い会話長が在れば exit 2", () => {
+    const baseline = baselineFrom(makeMeasured());
+    const measured = makeMeasured({ rows: [makeRow({ turnCount: 2, fillerPairs: 0 })] });
+    const result = run([
+      "--measured",
+      writeJson("measured.json", measured),
+      "--baseline",
+      writeJson("baseline.json", baseline),
+    ]);
+    expect(result.status).toBe(2);
+    expect(result.stderr).toContain("基準値に在って実測に無い");
+    expect(result.stderr).toContain("turnCount=10");
+  });
+
+  it("🔴【退行の門は壊れていない】集合が一致して退行が在れば exit 1（exit 2 に混ぜない）", () => {
+    const baseline = baselineFrom(makeMeasured());
+    const measured = makeMeasured();
+    measured.rows[0].mnemoraShareOfNaiveChars = 5;
+    const result = run([
+      "--measured",
+      writeJson("measured.json", measured),
+      "--baseline",
+      writeJson("baseline.json", baseline),
+    ]);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("退行した");
+  });
+
+  it("【通したい側】集合が一致して退行が無ければ exit 0", () => {
+    const measured = makeMeasured();
+    const result = run([
+      "--measured",
+      writeJson("measured.json", measured),
+      "--baseline",
+      writeJson("baseline.json", baselineFrom(measured)),
+    ]);
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stderr).not.toContain("判定不能");
   });
 
   it("--measured を渡さないと非0", () => {

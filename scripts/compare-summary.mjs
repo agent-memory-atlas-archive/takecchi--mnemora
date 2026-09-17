@@ -11,7 +11,7 @@
  * 2. ファイルを読んで JSON.parse する(壊れていたら理由を stderr に出して非0で終わる)
  * 3. 形を検査する(`validateMeasured`/`validateBaseline`。壊れていたら同様に非0)
  * 4. Markdown を stdout に出す
- * 5. `--baseline` が在れば `computeRegressions` で退行を判定し、退行が在れば非0で終わる
+ * 5. `--baseline` が在れば `evaluateCompare` に判定させ、その `verdict` を終了コードへ写す
  *
  * だけを行う。
  *
@@ -20,11 +20,18 @@
  *
  * ⭐ **`compare` は他5本(retrieval-quality/identifier-probes/consolidation-cost/
  * archive-sweep-cost/time-term)と違い、門である(ADR 0133)。**
- * `--baseline` を渡し、かつ `mnemoraShareOfNaiveChars` の悪化 または
- * `factStatementSurvived` の true→false 退行を検知したら、非0で終わる
- * (`compare-summary-lib.mjs` の `computeRegressions`)。
  *
- * それ以外で非0になるのは、入力そのものが壊れているとき
+ * 終了コード(`check-publish-run-coverage.mjs` と同じ語彙。Issue #477):
+ * - `0` = pass —— 実測と基準値の `turnCount` 集合が一致し、そのすべてで退行が無い。
+ * - `1` = fail —— 集合は一致しているが、`mnemoraShareOfNaiveChars` の悪化 または
+ *   `factStatementSurvived` の true→false 退行を検知した。
+ * - `2` = 判定不能 —— **実測と基準値の `turnCount` 集合が一致しない**
+ *   (実測に在って基準値に無い会話長は1度も比較されておらず、基準値に在って実測に
+ *   無い会話長は測る点が黙って減っている)。⛔ **判定不能を pass に倒さない**
+ *   ——「比較していない」を「退行が無い」と同じ顔で出さないためである。
+ *   stderr に、比較できなかった `turnCount` を名指しで出す。
+ *
+ * それ以外で非0(`1`)になるのは、入力そのものが壊れているとき
  * (measured の JSON が読めない・parse できない・rows が欠ける・必須項目が無い。
  * `--baseline` を指定していて、それが読めない/壊れている場合も含む)である。
  *
@@ -34,7 +41,7 @@
 import { readFileSync } from "node:fs";
 import {
   buildSummaryMarkdown,
-  computeRegressions,
+  evaluateCompare,
   validateBaseline,
   validateMeasured,
 } from "./compare-summary-lib.mjs";
@@ -112,17 +119,49 @@ console.log(
 );
 
 if (baselineValidated) {
-  const regressions = computeRegressions(measuredValidated.value, baselineValidated.value);
-  if (regressions.length > 0) {
+  const evaluation = evaluateCompare(measuredValidated.value, baselineValidated.value);
+
+  if (evaluation.verdict === "indeterminate") {
+    // ⛔ **判定不能を pass に倒さない**(`check-publish-run-coverage.mjs` と同じ規律)。
+    console.error("[compare-summary] 判定不能: 比較していない会話長が在る(Issue #477)。");
+    console.error(`[compare-summary] 理由: ${evaluation.reason}`);
     console.error(
-      `[compare-summary] ⭐ 北極星の物差しが ${regressions.length} 会話長で退行した(ADR 0133 により門):`,
+      `[compare-summary] 比較した会話長: ${evaluation.comparedTurnCounts.length} 件` +
+        (evaluation.comparedTurnCounts.length > 0
+          ? `(turnCount=${evaluation.comparedTurnCounts.join(", ")})`
+          : ""),
     );
-    for (const regression of regressions) {
+    if (evaluation.measuredOnlyTurnCounts.length > 0) {
+      console.error(
+        `[compare-summary] 🔴 比較していない会話長(実測に在って基準値に無い) ${evaluation.measuredOnlyTurnCounts.length} 件: ` +
+          `turnCount=${evaluation.measuredOnlyTurnCounts.join(", ")}`,
+      );
+    }
+    if (evaluation.baselineOnlyTurnCounts.length > 0) {
+      console.error(
+        `[compare-summary] 🔴 比較していない会話長(基準値に在って実測に無い) ${evaluation.baselineOnlyTurnCounts.length} 件: ` +
+          `turnCount=${evaluation.baselineOnlyTurnCounts.join(", ")}`,
+      );
+    }
+    for (const regression of evaluation.regressions) {
+      console.error(
+        `[compare-summary] ⚠ 比較できた範囲での退行 turnCount=${regression.turnCount}: ${regression.reasons.join(" / ")}`,
+      );
+    }
+    process.exit(2);
+  }
+
+  if (evaluation.verdict === "fail") {
+    console.error(
+      `[compare-summary] ⭐ 北極星の物差しが ${evaluation.regressions.length} 会話長で退行した(ADR 0133 により門):`,
+    );
+    for (const regression of evaluation.regressions) {
       console.error(`  - turnCount=${regression.turnCount}: ${regression.reasons.join(" / ")}`);
     }
     process.exit(1);
   }
 }
 
-// **明示的に 0 を宣言する**——ここまで来たら、入力は壊れておらず退行も無い。
+// **明示的に 0 を宣言する**——ここまで来たら、入力は壊れておらず、実測と基準値の
+// turnCount 集合が一致し、そのすべてで退行が無い。
 process.exit(0);

@@ -288,6 +288,17 @@ describe("ci.yml の example-chat ジョブの compare 配線", () => {
     expect(result.summary).toContain("mnemoraShareOfNaiveChars");
   });
 
+  it("🔴 実測から会話長が1つ消えたら、この段は exit 2（判定不能）で非0になる（Issue #477）", () => {
+    // ⭐ この歯だけが `ci.yml` を入力に取る——「比較していない」が、実際の CI の段で
+    // 緑にならないことを、本物のコマンド行で測る。
+    const measured = measuredFromBaseline();
+    const dropped = measured.rows.pop();
+    const result = runSummaryStepFromWorkflow(measured);
+    expect(result.status).toBe(2);
+    expect(result.summary).toContain("判定不能(比較していない会話長が在る)");
+    expect(result.stderr).toContain(`turnCount=${dropped.turnCount}`);
+  });
+
   it("mnemoraShareOfNaiveChars が改善(減少)しただけなら緑のまま", () => {
     const measured = measuredFromBaseline();
     const first = measured.rows[0];

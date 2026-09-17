@@ -42,7 +42,7 @@
  * ## 何を悪化とみなすか
  *
  * `turnCount` をキーに基準値と突き合わせ、次のどちらかが起きた行を「退行」とする
- * (`computeRegressions`):
+ * (`computeComparison`。旧 `computeRegressions`——Issue #477 で戻り値の形を変え、名前も変えた):
  *
  * 1. **`mnemoraShareOfNaiveChars` が基準値より大きい**(= mnemora が焼く量が
  *    naive に対して相対的に増えた。北極星の物差しそのものの悪化)。
@@ -57,13 +57,32 @@
  * ような北極星と無関係な欄が変わるたびに赤くなり、`AGENTS.md`
  * 「機能を足すかどうかは北極星に当てて決める」の運用を阻害するため却下した)。
  *
- * ## 新しい会話長・消えた会話長
+ * ## 新しい会話長・消えた会話長 —— 退行ではないが、判定不能である(Issue #477)
  *
- * 基準値に無い `turnCount`(新しい会話長)は退行として扱わない——測る点が増えた
- * だけである。基準値にあって実測に無い `turnCount`(消えた会話長、たとえば
- * `DEFAULT_COMPARE_SEQUENCE` を変更した)も、この関数は退行としては扱わない
- * (Job Summary には「基準値にのみ存在する会話長」として出す)——会話長の構成を
- * 変える判断はこの bench の門の役目ではない。
+ * **どちらも「退行」ではない。しかし「退行が無い」でもない——比較していないだけである。**
+ * 🔴 2026-09-17 以前、この2つは黙って読み飛ばされ、門は緑を出していた
+ * (Issue #477 の実測: 基準値を `turnCount=2` の1行だけにすると、退行11件の実測が
+ * `computeRegressions` で0件になり exit 0 で通った。`rows: []` でも同じ)。
+ * ⟹ **「失敗が0件」と「N件を比較して失敗が0件」が同じ顔で出ていた。**
+ *
+ * いまは `evaluateCompare` が、**実測側の `turnCount` 集合と基準値側の `turnCount`
+ * 集合が一致したときだけ**判定する:
+ *
+ * - 実測に在って基準値に無い `turnCount`(新しい会話長) ⟹ **その行は1度も比較されて
+ *   いない** ⟹ `indeterminate`。
+ * - 基準値に在って実測に無い `turnCount`(消えた会話長、たとえば
+ *   `DEFAULT_COMPARE_SEQUENCE` を変更した) ⟹ **測る点が黙って減った**
+ *   ⟹ `indeterminate`(`ci-green-check` の「部分登録」と同じ窓。ADR 0215)。
+ *
+ * **会話長の構成を変える判断は、いまもこの bench の門の役目ではない**——門は
+ * 「変えたこと」を赤にするのではなく、**「変わったので比較できていない」と名乗って
+ * 止まる**。基準値を更新すれば(意図した変更なら、それが正しい手当てである)通る。
+ *
+ * ⚠ **「本来いくつの会話長が在るべきか」は、この lib からは引けない。**
+ * 母集合の正体は `examples/chat/src/compare.ts` の `DEFAULT_COMPARE_SEQUENCE`(12点)
+ * だが、それは TypeScript であり `scripts/*.mjs` から素直に import できない。
+ * ⟹ **引かない。** 下限は上の2集合から取る(件数をこのファイルに書かない。
+ * ADR 0215 決定4 と同じ「下限を実測側の集合から取る」形)。
  */
 
 const REQUIRED_TOP_STRING_FIELDS = ["llmMode", "embeddingMode"];
@@ -235,23 +254,46 @@ export function diffRow(turnCount, measuredRow, baselineRow) {
 }
 
 /**
- * ⭐ 門の判定そのもの(冒頭 docstring「何を悪化とみなすか」)。
+ * ⭐ **何を比較し、何を比較できなかったか**を返す(Issue #477)。
  *
- * 基準値に対応する行が無い(新しい会話長)場合は退行として扱わない。
+ * 🔴 **退行の配列だけを返す関数を、意図的に残していない。** 以前の
+ * `computeRegressions()` は「基準値に対応する行が無ければ `continue`」していたため、
+ * 呼び手には「比較して退行が無かった」と「そもそも比較していない」が**同じ空配列**
+ * として届いていた。⟹ **呼び手が比較漏れを直視せざるを得ない形にする**ため、
+ * 戻り値をオブジェクトにし、比較できなかった `turnCount` を必ず同梱する。
+ *
+ * ⚠ **この関数は合否を決めない。** 合否は `evaluateCompare()`、終了コードは
+ * `compare-summary.mjs` が持つ(`publish-run-coverage-lib.mjs` の
+ * `evaluatePublishRunCoverage` / `check-publish-run-coverage.mjs` と同じ分担)。
  *
  * @param {Record<string, any>} measured
  * @param {{ rows: Record<string, unknown>[] }} baseline
- * @returns {{ turnCount: number, reasons: string[] }[]} 退行した行だけを返す(空配列なら退行なし)。
+ * @returns {{
+ *   comparedTurnCounts: number[],
+ *   regressions: { turnCount: number, reasons: string[] }[],
+ *   measuredOnlyTurnCounts: number[],
+ *   baselineOnlyTurnCounts: number[],
+ * }} `comparedTurnCounts` は両側に在って実際に突き合わせた会話長、
+ * `measuredOnlyTurnCounts` は実測に在って基準値に無い(1度も比較していない)会話長、
+ * `baselineOnlyTurnCounts` は基準値に在って実測に無い(測る点が黙って減った)会話長。
  */
-export function computeRegressions(measured, baseline) {
+export function computeComparison(measured, baseline) {
   const baselineByTurn = new Map(baseline.rows.map((r) => [/** @type {any} */ (r).turnCount, r]));
+  const measuredTurnCounts = new Set(measured.rows.map((r) => r.turnCount));
+  /** @type {number[]} */
+  const comparedTurnCounts = [];
+  /** @type {number[]} */
+  const measuredOnlyTurnCounts = [];
   /** @type {{ turnCount: number, reasons: string[] }[]} */
   const regressions = [];
   for (const row of measured.rows) {
     const base = /** @type {Record<string, any> | undefined} */ (baselineByTurn.get(row.turnCount));
     if (!base) {
+      // ⛔ ここで黙って読み飛ばさない(Issue #477)——「比較していない」として数える。
+      measuredOnlyTurnCounts.push(row.turnCount);
       continue;
     }
+    comparedTurnCounts.push(row.turnCount);
     const reasons = [];
     if (row.mnemoraShareOfNaiveChars > base.mnemoraShareOfNaiveChars) {
       reasons.push(
@@ -265,7 +307,95 @@ export function computeRegressions(measured, baseline) {
       regressions.push({ turnCount: row.turnCount, reasons });
     }
   }
-  return regressions;
+  const baselineOnlyTurnCounts = [...baselineByTurn.keys()].filter(
+    (turnCount) => !measuredTurnCounts.has(turnCount),
+  );
+  const ascending = (/** @type {number} */ a, /** @type {number} */ b) => a - b;
+  return {
+    comparedTurnCounts: [...comparedTurnCounts].sort(ascending),
+    regressions,
+    measuredOnlyTurnCounts: [...measuredOnlyTurnCounts].sort(ascending),
+    baselineOnlyTurnCounts: [...baselineOnlyTurnCounts].sort(ascending),
+  };
+}
+
+/**
+ * ⭐ **門の判定そのもの**(Issue #477)。`evaluatePublishRunCoverage`
+ * (`publish-run-coverage-lib.mjs`、ADR 0207)と同じ形——lib が
+ * `verdict: "pass" | "fail" | "indeterminate"` と `reason` を返し、**終了コードへの
+ * 写し取り(0/1/2)は CLI(`compare-summary.mjs`)が持つ。**
+ *
+ * ## ⭐ いつ判定してよいか
+ *
+ * **実測側の `turnCount` 集合と基準値側の `turnCount` 集合が一致したときだけ判定する。**
+ * 一致しなければ `indeterminate` ——「比較していない」を「退行が無い」と同じ顔で
+ * 出さないためである(冒頭 docstring「新しい会話長・消えた会話長」)。
+ *
+ * ⚠ **`pending` という語は使わない。** `ci-green-check-lib.mjs` の `pending` は
+ * 「後でもう一度見ろ」という再試行含みの意味を持つが、基準値の取りこぼしは
+ * 再試行では直らない(基準値を更新するか、実測側を戻すかの判断が要る)。
+ *
+ * @param {Record<string, any>} measured
+ * @param {{ rows: Record<string, unknown>[] }} baseline
+ * @returns {{
+ *   verdict: "pass" | "fail" | "indeterminate",
+ *   reason: string,
+ *   comparedTurnCounts: number[],
+ *   regressions: { turnCount: number, reasons: string[] }[],
+ *   measuredOnlyTurnCounts: number[],
+ *   baselineOnlyTurnCounts: number[],
+ * }}
+ */
+export function evaluateCompare(measured, baseline) {
+  const comparison = computeComparison(measured, baseline);
+  const { comparedTurnCounts, regressions, measuredOnlyTurnCounts, baselineOnlyTurnCounts } =
+    comparison;
+
+  /** @type {"pass" | "fail" | "indeterminate"} */
+  let verdict;
+  let reason;
+
+  const notComparedParts = [];
+  if (measuredOnlyTurnCounts.length > 0) {
+    notComparedParts.push(
+      `実測に在って基準値に無い会話長(1度も比較していない): turnCount=${measuredOnlyTurnCounts.join(", ")}`,
+    );
+  }
+  if (baselineOnlyTurnCounts.length > 0) {
+    notComparedParts.push(
+      `基準値に在って実測に無い会話長(測る点が黙って減った): turnCount=${baselineOnlyTurnCounts.join(", ")}`,
+    );
+  }
+
+  if (comparedTurnCounts.length === 0) {
+    verdict = "indeterminate";
+    reason =
+      "1会話長も比較していない(実測と基準値で共通する turnCount が1つも無い)。" +
+      (notComparedParts.length > 0 ? `${notComparedParts.join("; ")}。` : "") +
+      "⟹ 退行の有無について何も言えない——「退行0件」ではない(Issue #477)。";
+  } else if (notComparedParts.length > 0) {
+    verdict = "indeterminate";
+    reason =
+      `実測と基準値の turnCount 集合が一致しない——比較できたのは ${comparedTurnCounts.length} 会話長だけである。` +
+      `${notComparedParts.join("; ")}。` +
+      (regressions.length > 0
+        ? `⚠ 比較できた範囲だけでも ${regressions.length} 会話長が退行している。`
+        : "") +
+      "⟹ 比較していない会話長について退行の有無を言えないので、判定不能にする(Issue #477)。" +
+      "意図して会話長の構成を変えたのなら、`examples/chat/compare-baseline.json` を更新すること。";
+  } else if (regressions.length > 0) {
+    verdict = "fail";
+    reason =
+      `${comparedTurnCounts.length} 会話長すべてを比較し、うち ${regressions.length} 会話長で` +
+      "北極星の物差しが退行した(ADR 0133 の判定基準)。";
+  } else {
+    verdict = "pass";
+    reason =
+      `実測と基準値の turnCount 集合が一致し(${comparedTurnCounts.length} 会話長)、` +
+      "そのすべてで退行が無かった。";
+  }
+
+  return { verdict, reason, ...comparison };
 }
 
 /**
@@ -281,16 +411,23 @@ function buildDiffSection(measured, baseline) {
     diffRow(turnCount, measuredByTurn.get(turnCount), baselineByTurn.get(turnCount)),
   );
   const extraBaselineRows = [...baselineByTurn.keys()].filter((t) => !measuredByTurn.has(t));
-  const regressions = computeRegressions(measured, baseline);
+  const evaluation = evaluateCompare(measured, baseline);
+  const { regressions } = evaluation;
   const regressedTurnCounts = new Set(regressions.map((r) => r.turnCount));
 
   const lines = ["## 基準値との差分", ""];
-  if (diffs.every((diff) => diff.matches) && extraBaselineRows.length === 0) {
+  if (evaluation.verdict === "pass" && diffs.every((diff) => diff.matches)) {
     lines.push(
-      "✅ 一致(差分なし)。全会話長で北極星の物差し(mnemoraShareOfNaiveChars 他)が" +
+      `✅ 一致(差分なし)。${evaluation.comparedTurnCounts.length} 会話長すべてを基準値と` +
+        "突き合わせ、北極星の物差し(mnemoraShareOfNaiveChars 他)が" +
         " `examples/chat/compare-baseline.json` と同じだった。",
     );
     return lines.join("\n");
+  }
+
+  if (evaluation.verdict === "indeterminate") {
+    // 🔴 「比較していない」を、緑とも赤とも別の名前で出す(Issue #477)。
+    lines.push(`🔴 **判定不能(比較していない会話長が在る)**: ${evaluation.reason}`, "");
   }
 
   const mismatched = diffs.filter((diff) => !diff.matches);
@@ -300,14 +437,21 @@ function buildDiffSection(measured, baseline) {
         ? `(🔴 うち ${regressions.length} 件は退行——ADR 0133 の判定基準` +
           "(mnemoraShareOfNaiveChars の悪化 / factStatementSurvived の true→false)" +
           "に当たる。このベンチは⭐門である——このステップは非0で終わる)。"
-        : "(ただし退行の判定基準には当たらない相違のみ。このベンチは⭐門だが、" +
-          "この相違だけでは exit 0 のまま——下の内訳を読み、意図した変化かを確認すること)。"),
+        : evaluation.verdict === "indeterminate"
+          ? "(退行の判定基準に当たる相違は無いが、上のとおり判定不能である" +
+            "——このベンチは⭐門であり、このステップは非0(exit 2)で終わる)。"
+          : "(ただし退行の判定基準には当たらない相違のみ。このベンチは⭐門だが、" +
+            "この相違だけでは exit 0 のまま——下の内訳を読み、意図した変化かを確認すること)。"),
   );
   for (const diff of mismatched) {
     const regressed = regressedTurnCounts.has(diff.turnCount);
     lines.push("", `### turnCount = ${diff.turnCount}${regressed ? " 🔴 退行" : ""}`);
     if (diff.missingBaseline) {
-      lines.push("", "この会話長には基準値が無い(新しい会話長か、基準値がまだ追随していない)。");
+      lines.push(
+        "",
+        "🔴 **この会話長は比較していない**——基準値にこの turnCount が無い。" +
+          "⟹ 退行したかどうかについて、この行は何も言っていない(Issue #477)。",
+      );
       continue;
     }
     lines.push("", "| 項目 | 基準値 | 実測 |", "|---|---|---|");
@@ -320,7 +464,10 @@ function buildDiffSection(measured, baseline) {
   if (extraBaselineRows.length > 0) {
     lines.push(
       "",
-      "### 基準値にのみ存在する会話長(今回の実測には無い)",
+      "### 🔴 基準値にのみ存在する会話長(今回の実測に無い——比較していない)",
+      "",
+      "測る点が黙って減っている。**この会話長について、退行したかどうかは何も言っていない**" +
+        "(Issue #477)。",
       "",
       ...extraBaselineRows.map((t) => `- turnCount = ${t}`),
     );
@@ -372,7 +519,11 @@ export function buildSummaryMarkdown({ measured, baseline }) {
     "⭐ ADR 0133: このベンチは他5本と異なり門である——同一commitでのCI再実行が" +
       "measuredAtを除いて完全一致したことを実測で確認したため、" +
       "`mnemoraShareOfNaiveChars` の悪化と `factStatementSurvived` の退行(true→false)を" +
-      "検知すると exit 非0 になる。それ以外の相違(`naiveChars` 等)は報告のみ。",
+      "検知すると exit 1 になる。それ以外の相違(`naiveChars` 等)は報告のみ。",
+    "",
+    "⭐ Issue #477: **判定は、実測と基準値の turnCount 集合が一致したときだけ行う。**" +
+      "一致しなければ緑を出さず、判定不能(exit 2)にする" +
+      "——「比較していない」を「退行が無い」と同じ顔で出さないため。",
   );
   return lines.join("\n");
 }

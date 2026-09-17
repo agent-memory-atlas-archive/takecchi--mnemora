@@ -438,8 +438,12 @@ jobs:
         # `measuredAt` を除いて完全一致した（ADR 0133「測ったこと」）ことを踏まえ、
         # `mnemoraShareOfNaiveChars` の悪化・`factStatementSurvived` の
         # true→false 退行を検知すると非0で終わる（`compare-summary-lib.mjs` の
-        # `computeRegressions`）。それ以外の入力異常（JSON が読めない/parse
-        # できない/形が想定と違う）でも非0になる。このステップは常に走る
+        # `evaluateCompare`）。それ以外の入力異常（JSON が読めない/parse
+        # できない/形が想定と違う）でも非0になる。
+        # 🔴 さらに Issue #477 から、**実測と基準値の turnCount 集合が一致しない**
+        # （比較していない会話長が在る）ときは exit 2（判定不能）で非0になる
+        # ——「比較していない」を「退行が無い」と同じ顔で緑にしないためである。
+        # このステップは常に走る
         # （`if: always()`）——`compare` 自体が壊れて JSON を書けなかった場合も、
         # その理由を Job Summary に残す。
         if: always()
