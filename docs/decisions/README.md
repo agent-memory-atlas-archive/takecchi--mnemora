@@ -221,5 +221,6 @@ alteroid (github.com/takecchi/alteroid) を根拠として引く箇所は、確�
 | [0211](./0211-check-pr-adr-reference-catches-abandoned-numbers-in-title-and-body.md) | PR タイトル/本文が付け替え後の古い ADR 番号を名指ししていないかを CI が検査する — 本文は誰も警告していなかった | 採用 (2026-09) |
 | [0212](./0212-local-embedding-size-noun-correspondence-tooth.md) | local-embedding のサイズ表記(36MB/42MB)が名詞と正しく対応していることを歯で縛る — 「値の一致」だけでなく「向き」を見る | 採用 (2026-09) |
 | [0213](./0213-live-docs-cite-adrs-by-anchor-not-line-number.md) | 行番号での引用は、この repo 自身の「ADR は書き換えず追記する」作法によって腐る — 生きた文書はアンカーで指し、歯で止める | 採用 (2026-09) |
+| [0214](./0214-release-candidates-lists-not-judges.md) | リリース当日に「載せるべき候補」をその場で出す道具 — ⛔ 判定ではなく一覧である | 採用 (2026-09) |
 
 <!-- ADR-INDEX:GENERATED:END -->
