@@ -43,6 +43,40 @@ import { createUsageMeter } from "./usage-meter.js";
  * 他の未知の値と同じく例外になる（`parseModeOverride` 参照）。`MNEMORA_EMBEDDING=local`
  * だけが有効。
  */
+/**
+ * ⚠ **`anthropic` が無いのは書き忘れではない。** `packages/anthropic` は
+ * `LLMProvider` を実装しているが（ADR 0072）、**`examples/chat` には一度も配線されて
+ * いない**——`examples/chat/package.json` の依存に `@mnemora/anthropic` は無く、
+ * このファイルもそれを一度も import していない。`git log -S 'anthropic' --
+ * examples/chat/` は1件もヒットしない（配線してから外したのではなく、そもそも
+ * 触られたことが無い）。
+ *
+ * **理由は ADR 0072「引き受けた負債」3・4 に逐語で書かれている**
+ * （`docs/decisions/0072-anthropic-llm-provider.md`）:
+ *
+ * > 3. `packages/anthropic` は Phase 1 の完了条件に入っていない。
+ * >    `docs/roadmap.md` 段階6 は4パッケージを名指ししており、本 PR ではそこを
+ * >    直していない。Phase 1 の定義を動かすかはオーナーの判断である。
+ * > 4. 北極星の物差し（`examples/chat` の `retrieval` / `compare`）は、
+ * >    Anthropic では一度も走っていない。カセットも無い。
+ * >    ⟹ この PR は「Anthropic で想起の質がどうなるか」について何も言っていない。
+ * >    言えるのは「契約が揃っている」ことだけである。
+ *
+ * ⚠ **ADR 0072 決定1（`@mnemora/anthropic` が `EmbeddingProvider` を実装しない理由）
+ * と混同しないこと。**あちらは「Anthropic に埋め込み API が無い」というパッケージ内部
+ * の話であり、こちらは「`examples/chat` へまだ配線していない」という別の理由の
+ * スコープ外である。
+ *
+ * ⚠ **層が1つ足りない、という話でもない。**この repo の provider は4層
+ * （`deterministic`/`recorded`/`openai`/`local`。AGENTS.md）に分かれているが、
+ * その軸は実装の性質（意味を持たない stub／記録の再生／実 API／プロセス内 ONNX 推論）
+ * であってベンダーではない。`anthropic` を足すとしても5層目にはならない——`openai`
+ * と同じ「実 API」層の別ベンダーである。
+ *
+ * `MNEMORA_LLM=anthropic` / `MNEMORA_EMBEDDING=anthropic` は他の未知の値と同じく
+ * 例外になる（`parseModeOverride` 参照。`LLM_MODES`/`EMBEDDING_MODES` のどちらにも
+ * `"anthropic"` は無い）。
+ */
 export type ProviderMode = "openai" | "deterministic" | "recorded" | "local";
 
 export interface Providers {

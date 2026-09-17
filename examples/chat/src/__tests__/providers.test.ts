@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { LocalEmbeddingProvider } from "@mnemora/local-embedding";
 import { OpenAIEmbeddingProvider, OpenAILLMProvider } from "@mnemora/openai";
@@ -439,5 +441,62 @@ describe("formatNoApiCallsNotice — local モードを「本物の OpenAI」と
     const notice = formatNoApiCallsNotice({ llmMode: "deterministic", embeddingMode: "local" });
     expect(notice).toContain("ローカル推論");
     expect(notice).not.toContain("本物の OpenAI");
+  });
+});
+
+/**
+ * `ProviderMode` に `anthropic` が無い理由が、ファイルから読み取れることを検査する
+ * 歯（Issue #458）。`correction-scenario-compare-isolation.test.ts` と同じ手法
+ * ——自分のソーステキストを文字列として読み、部分文字列の有無を機械的に見る。
+ *
+ * **これが無いと何が起きるか**: Issue #458 が見つけた非対称——`"local"` の除外理由は
+ * `ProviderMode` の直前 docstring に書いてあるのに、`"anthropic"` の除外理由は
+ * どこにも無い——が、docstring の書き換えで再び起きても誰も気づけない
+ * （`grep -ic anthropic examples/chat/src/providers.ts` が黙って0に戻る）。
+ *
+ * **この歯が見ているもの**: 最後の import から `export type ProviderMode` 宣言までの
+ * 範囲（＝3つの docstring ブロックがまとまっている領域）に `"anthropic"` という
+ * 文字列が含まれているかどうか、という**機械的に数え直せる事実**だけである。
+ * ⛔ **書かれている理由の中身（ADR 0072 の引用が正しいか）は検証しない**——
+ * それは prose の逐語一致であり、`identifier-probes-readme-freshness` のような
+ * 「数値を基準値 JSON と突き合わせる」形の歯にできる対象ではない
+ * （PR 本文「歯について」参照）。
+ */
+function readProvidersSource(): string {
+  const url = new URL("../providers.ts", import.meta.url);
+  return readFileSync(fileURLToPath(url), "utf-8");
+}
+
+function extractDocRegionAboveProviderMode(source: string): string {
+  const declMarker = "\nexport type ProviderMode";
+  const declIndex = source.indexOf(declMarker);
+  if (declIndex === -1) {
+    throw new Error("`export type ProviderMode` が providers.ts に見つからない");
+  }
+  const before = source.slice(0, declIndex);
+  const lastImportMarker = "\nimport ";
+  const lastImportIndex = before.lastIndexOf(lastImportMarker);
+  const importStatementEnd = before.indexOf(";", lastImportIndex);
+  return before.slice(importStatementEnd + 1, declIndex);
+}
+
+describe("ProviderMode の docstring 領域が anthropic の除外理由を持っている（Issue #458）", () => {
+  it("最後の import から ProviderMode 宣言までの docstring 領域に anthropic への言及がある", () => {
+    const region = extractDocRegionAboveProviderMode(readProvidersSource());
+    expect(region.toLowerCase()).toContain("anthropic");
+  });
+
+  it("同じ領域が、除外理由の出典として ADR 0072 を名指ししている", () => {
+    const region = extractDocRegionAboveProviderMode(readProvidersSource());
+    expect(region).toContain("0072");
+  });
+
+  it("ProviderMode の宣言そのものには anthropic を含めない（Issue #458 は配線しろという ISSUE ではない）", () => {
+    const source = readProvidersSource();
+    const declLine = source
+      .split("\n")
+      .find((line) => line.trimStart().startsWith("export type ProviderMode ="));
+    expect(declLine).toBeDefined();
+    expect(declLine?.toLowerCase()).not.toContain("anthropic");
   });
 });
