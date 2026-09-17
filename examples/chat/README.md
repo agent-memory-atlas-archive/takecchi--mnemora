@@ -1137,8 +1137,8 @@ probe を増やす・haystack を変える判断をするときは、必ずこ�
 
 ### 「重みを取得できなかった」と「測ったが値が悪かった」を区別する
 
-`@mnemora/local-embedding` はモデルの重み（初回のみ、約42MB）を Hugging Face から
-取得する。取得に失敗した状態と、取得できて測った値が悪い状態を同じ顔で返すと、
+`@mnemora/local-embedding` はモデル一式（初回のみ、4ファイル計約42MB。うち重み本体約36MB）を
+Hugging Face から取得する。取得に失敗した状態と、取得できて測った値が悪い状態を同じ顔で返すと、
 「HF から取れなかった」が「想起の質が下がった」に見えてしまう。
 
 `identifier-probes` は arm を走らせる前に必ず `embeddingProvider.warmup()` を呼ぶ

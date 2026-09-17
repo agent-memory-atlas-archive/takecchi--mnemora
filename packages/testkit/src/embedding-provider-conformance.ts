@@ -43,7 +43,7 @@ export interface EmbeddingProviderConformanceOptions {
    * 各 `it` のタイムアウト（ミリ秒）。**省略時は vitest の既定（5秒）。**
    *
    * **なぜ要るか**: この suite は本物の実装にも当たる（Issue #116 の残債）。
-   * ネットワーク往復や、42MB の ONNX モデルのプロセス内ロードは 5 秒に収まらない。
+   * ネットワーク往復や、36MB の ONNX モデルのプロセス内ロードは 5 秒に収まらない。
    * しかも `createProvider` は**毎回新しいインスタンスを作る**契約なので、
    * その費用は `it` の本数だけ繰り返し掛かる。
    *

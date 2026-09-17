@@ -286,7 +286,8 @@ jobs:
       # 🔴 Issue #164 (1): `test:db`(= `vitest run`)は `root-gate-db-stage`
       # ジョブが `run-db-tests.mjs` 経由で走らせるのと**同じ**
       # `consolidation-cost.postgres.test.ts` を実行する——`warmupLocalEmbedding` が
-      # `@mnemora/local-embedding` のモデル重み(42MB)を Hugging Face から取得する。
+      # `@mnemora/local-embedding` のモデル一式(4ファイル計42MB、うち重み36MB)を
+      # Hugging Face から取得する。
       # 2026-09-12 の run 34699094705(14:25 UTC)では、このジョブ自身は
       # `✓ src/__tests__/consolidation-cost.postgres.test.ts (3 tests) 43228ms`
       # で成功していたが、同 run の `root-gate-db-stage` は重み取得が 429 になって
@@ -472,8 +473,8 @@ jobs:
       # 🔴 Issue #164 (1): このジョブは `node scripts/run-db-tests.mjs` 経由で
       # `examples/chat` の `test:db`(= `vitest run`)を呼ぶ。その中の
       # `consolidation-cost.postgres.test.ts` が `warmupLocalEmbedding` を通じて
-      # `@mnemora/local-embedding` のモデル重み(42MB)を実際に Hugging Face から
-      # 取得する——`identifier-probes`/`consolidation-cost` ジョブと同じ理由で、
+      # `@mnemora/local-embedding` のモデル一式(4ファイル計42MB、うち重み36MB)を
+      # 実際に Hugging Face から取得する——`identifier-probes`/`consolidation-cost` ジョブと同じ理由で、
       # このジョブも「毎 run 素で重みを取りに行く」側だった。2026-09-12 の
       # run 34699094705(14:25 UTC)では、この重み取得が 429 になって1本の PR を
       # 止めた実測がある。

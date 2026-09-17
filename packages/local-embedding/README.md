@@ -423,8 +423,8 @@ const provider = new LocalEmbeddingProvider({ repo: "my-ruri", createPipeline })
   ```
 
   ⚠ opt-in を要求する理由は課金ではない（外部サービスへ繋がないので料金は発生しない）。
-  **36MB のダウンロードと peak RSS 362MB の推論が、`pnpm run test` を1回打っただけで
-  走ってしまう**からである。
+  **4ファイル計42MB（うち重み36MB）のダウンロードと peak RSS 362MB の推論が、
+  `pnpm run test` を1回打っただけで走ってしまう**からである。
 
 ## もっと詳しく
 

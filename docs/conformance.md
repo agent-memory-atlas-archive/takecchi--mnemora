@@ -205,7 +205,7 @@ ADR 0095 §7 が逐語でこう書いている:
 
 - `packages/local-embedding` の live 14本と cache-warm 1本は、**鍵を必要としない。**
   `MNEMORA_LIVE_LOCAL_EMBEDDING` を立てるだけで走る。**課金は発生しない。**
-- 要るのは**モデルの重み42MBのダウンロード**だけである。
+- 要るのは**モデル一式4ファイル計42MB（うち重み本体36MB）のダウンロード**だけである。
 - **CI は既に、その重みを落としている**——`identifier-probes` / `consolidation-cost` /
   `archive-sweep-cost` の3ジョブが `MNEMORA_EMBEDDING=local` を固定で使う
   （[AGENTS.md](../AGENTS.md) の4層の表）。
@@ -249,7 +249,7 @@ OPENAI_API_KEY=sk-... MNEMORA_LIVE_OPENAI=1 pnpm --filter @mnemora/openai test
 # Anthropic（live 2本）
 ANTHROPIC_API_KEY=sk-... MNEMORA_LIVE_ANTHROPIC=1 pnpm --filter @mnemora/anthropic test
 
-# local-embedding（live 14本＋1本。鍵は要らない。重み42MBを落とす）
+# local-embedding（live 14本＋1本。鍵は要らない。4ファイル計42MB（うち重み36MB）を落とす）
 MNEMORA_LIVE_LOCAL_EMBEDDING=1 pnpm --filter @mnemora/local-embedding test
 ```
 
