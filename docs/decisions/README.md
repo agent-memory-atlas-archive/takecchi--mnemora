@@ -230,5 +230,6 @@ alteroid (github.com/takecchi/alteroid) を根拠として引く箇所は、確�
 | [0220](./0220-issue-comment-author-does-not-distinguish-owner-from-agent.md) | OPEN な ISSUE のコメント投稿者名は、オーナーと担い手（エージェント）を見分けない — 見分けられるのは本文中の逐語の名乗りだけである | 採用 (2026-09) |
 | [0221](./0221-memories-analyze-on-write.md) | `PostgresMemoryStore` の書き込み経路が閾値越えのときだけ `memories` を `ANALYZE` する — ADR 0194 と同じ設計を、JOIN の相手側にも入れる（Issue #269） | 採用 (2026-09) |
 | [0222](./0222-compare-gate-judges-only-when-turncount-sets-match.md) | ⭐門 `compare` は、実測と基準値の `turnCount` 集合が一致したときだけ判定する（Issue #477） | 採用 (2026-09) |
+| [0223](./0223-cross-cutting-disciplines-extracted-from-the-adr-corpus.md) | 繰り返し採られているのに入口の文書に書かれていない判断の規律を、ADR 211本の母集合から抽出した — 残ったのは10。最頻出は「採用済み ADR の本文を書き換えない」で 46/211 | 採用 (2026-09) |
 
 <!-- ADR-INDEX:GENERATED:END -->
