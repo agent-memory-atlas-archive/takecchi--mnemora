@@ -226,5 +226,6 @@ alteroid (github.com/takecchi/alteroid) を根拠として引く箇所は、確�
 | [0216](./0216-north-star-shipped-only-measurement.md) | 北極星の7項目を「出荷物だけ」でどう測るか — ⛔ 物差しは1本では作れない。文面の向きで3類に割り、1類は機械に載せない | 採用 (2026-09) |
 | [0217](./0217-provenance-naming-lost-in-duplication-swept-from-the-population.md) | 「確かめていない主張が、名乗りを落としたまま複製されていないか」を `docs/` 220本の母集合から測った — 複製で名乗りが落ちた例は2件、うち1件は3文書に跨っていた | 採用 (2026-09) |
 | [0218](./0218-shipping-security-claims-checked-against-primary-sources.md) | 出荷文書の「セキュリティの主張」に一次情報を当てた — CVE 番号は実在した（引く先が違っただけ）。ただし推奨下限は「既知の CVE が残らない下限」ではない | 採用 (2026-09) |
+| [0219](./0219-adr-corpus-swept-for-unsourced-assertions.md) | ADR 208本を逆向きに掃いた — 母集合 59,554行から候補171件、残った未裏づけの断定は17件。その3/4は「外部の挙動」だった | 採用 (2026-09) |
 
 <!-- ADR-INDEX:GENERATED:END -->

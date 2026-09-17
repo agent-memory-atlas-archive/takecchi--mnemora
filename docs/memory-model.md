@@ -355,6 +355,10 @@ relaxed_order`）は、**「WHERE フィルタ下での recall（再現率）改
 ### partial index についての注意
 
 partial index は**離散値・低カーディナリティ**のフィルタに向く（PostgreSQL 公式の推奨）。
+
+> ⚠ **2026-09-17 訂正。**「PostgreSQL 公式の推奨」の主体・出典は未検証。
+> 逐語・判定・他文書との突き合わせは [ADR 0004](./decisions/0004-decay-at-query-time.md) の
+> 同日の追記が正規の置き場である。そちらを見ること。
 `decay_floor_at > now()` のような連続値・高カーディナリティの範囲条件を partial index の
 **述語**に使うのは向かない（`now()` は immutable ではなく、固定した時刻を述語にしても
 すぐ陳腐化する）。実際に使うのは次の形——**離散値（`status`）を partial 述語にし、

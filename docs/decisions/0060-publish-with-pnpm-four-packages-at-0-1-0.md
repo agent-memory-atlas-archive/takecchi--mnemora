@@ -2,6 +2,19 @@
 
 - **状態**: 採用 (2026-09)
 
+> **⚠ 2026-09-17 追記（名乗りの復元。本文は書き換えていない）。**
+> 本文には2つの断定が在るが、**この repo に裏づける実測は無い。**
+> - 「**`workspace:` が残った tarball を素の consumer が install すると、npm error code
+>   EUNSUPPORTEDPROTOCOL / Unsupported URL Type "workspace:" で落ちる。**」
+>   **【受・未検証】** 🔴 直前の実測は「`npm pack` と `pnpm pack` の tarball 内 `package/package.json` の
+>   逐語比較」であって、**その tarball を実際に install した記録はこの ADR のどこにも無い。**
+>   install エラーの再現ではなく、`dependencies` 欄の文字列比較から導いた推論である。
+> - 「**0.0.x は semver 上「どの変更も破壊的でありうる」帯であり、caret 範囲（`^0.0.1`）が patch すら
+>   拾わない。**」（semver 仕様の断定。出典無し）
+>   **【受・未検証】** 広く知られた公開仕様ではあるが、この repo に裏づけは無い。
+> ⛔ **これは「主張が誤っている」ではない。**どちらも公開されている挙動として妥当である可能性が高い。
+> ⭐ **測っていない、と書くだけである。**（ADR 0219 の掃きで残ったもの）
+
 - **⚠ この ADR が決めていないこと（先に書く）**:
 
   この ADR は**梱包（packaging）についての決定だけ**を記録する。
