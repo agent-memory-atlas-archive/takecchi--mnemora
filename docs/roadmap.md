@@ -678,7 +678,7 @@ Issue #200（北極星「聞かれていないことを、自分から思い出�
 
 **北極星の問い2 に (乙) を当てても落ちない。**⛔ **これは本節の判定ではなく、[ADR 0134](./decisions/0134-mark-contested-explicit-operation.md) が既に実施済みである**——逐語「**成立する。**`markContested` は明示的な呼び出しでしか動かない。…**呼ばなければ、今日と全く同じ挙動が続く**」。
 
-**⭐ そして (乙) は既に実践されている。**`examples/chat/src/archive-sweep-cost.ts:290` が `runtime.sweepArchive()` を実際に呼んでおり、**ADR の上書きを一度も必要としていない。**
+**⭐ そして (乙) は既に実践されている。**`examples/chat/src/archive-sweep-cost.ts` の `const sweepResult = await options.runtime.sweepArchive(ctx, {` が実際に呼んでおり、**ADR の上書きを一度も必要としていない。**
 
 **⚠ ただし (甲) を採るなら、話は別である。**その場合は **ADR の上書きという費用が要り、本 §7 の予定はそれを数え落としている**——§7.9 の延びる条件にも入っていない。⛔ **この警告は、いま (乙) を採るからといって消さないこと。**将来 (甲) を検討する人が、同じ調査をゼロからやり直さずに済むようにするためである。
 
@@ -834,6 +834,20 @@ Issue #200（北極星「聞かれていないことを、自分から思い出�
 ### 7.11 [#349](https://github.com/takecchi/mnemora/issues/349)（段1の tie-break の費用）の材料 —— ⭕ **判定: v1.0 を止めない**
 
 **この節は数字を置くだけの節だった。**⭐ **2026-09-16、オーナーがこの数字を読んで「v1.0 を止めない」と判定した**（根拠は §7.10 の #349 の行）。⛔ **新しい測定はしていない**——[#329](https://github.com/takecchi/mnemora/issues/329) のコスト実測の中で、比較対象として `ORDER BY` を振ったときに出た数字である。⛔ **「問題ではない」と判定されたのではない。**2.3 ms も `Incremental Sort` の挟まりも実在する。**直すかどうかは別の判断として開いている。**
+
+⚠ **追記（2026-09-17）: この節は、行番号をいつの木で読んだものか名乗っていない。**
+⛔ **本文と表は書き換えない**——**上の数字は 2026-09-16 の測定の記録である。**
+🔴 **【現物】`main = 53e7d57` の木で引き直すと、この節が引く3つはすべて動いている**:
+
+| この節の引用 | 何を指していたか | `main = 53e7d57` での位置【現物】 |
+|---|---|---|
+| `packages/postgres/src/vector-store.ts:172` | 現物の3段の `ORDER BY` | **176行** `ORDER BY e.embedding <=> ${queryLiteral}::vector, m.recorded_at DESC, e.memory_id` |
+| `vector-store.ts:150-175`（手で書き写した SQL の窓） | `PostgresVectorStore.search()` の SQL 文 | SQL 文はいま **171–178行**（`this.db.execute(sql` で始まる template literal の全体）。⚠ **いまの木で 150-175 を開くと、この節の主題である `ORDER BY`（176行）が窓の外に落ちる** |
+| `packages/core/src/recall-runtime.ts:1335` | `aggregateScope` を分岐なしで呼ぶ経路 | **1411行** `const aggregate = await deps.memoryStore.aggregateScope(ctx, scope, {`（`memoryStore.aggregateScope(` の実呼び出しはこの1箇所だけ） |
+
+⭐ **測定そのものは動いていない**（median 3.002 ms → 0.700 ms、段5 の 150.6 ms）。**動いたのは位置だけである。**
+⛔ **行番号は直さない。**⟹ §7.4 冒頭（「**コードを読んだのは `main = 9fcd47c` 時点である**」）と §7.13 が採っているのと同じ形にした
+——**本文の行番号は当時の記録として残し、いまどこに在るかを追記で足す**（[ADR 0213](./decisions/0213-live-docs-cite-adrs-by-anchor-not-line-number.md) 決定5 の適用条件、[#484](https://github.com/takecchi/mnemora/pull/484)）。
 
 | 問い | 答え |
 |---|---|
