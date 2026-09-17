@@ -53,7 +53,10 @@
  * に現れた順序を保つ。
  *
  * @param {Iterable<string>} claimedNumbers このブランチのコミット履歴が
- *   `docs/decisions/` 配下で touch した ADR ファイルの番号（重複可・順不同可）
+ *   `docs/decisions/` 配下で**削除した**ADR ファイルの番号（重複可・順不同可）。
+ *   🔴 **「触った」ではない**——既存の ADR に追記するだけの PR は何も手放していないので、
+ *   ここには1件も入らない（2026-09-17 の訂正。ADR 0211 の追記。集め方は
+ *   `scripts/check-pr-adr-reference.mjs` の `loadRelinquishedNumbers()`）。
  * @param {Iterable<string>} addedNumbers いま `origin/main` に対してこのブランチが
  *   追加している ADR ファイルの番号
  * @returns {string[]}

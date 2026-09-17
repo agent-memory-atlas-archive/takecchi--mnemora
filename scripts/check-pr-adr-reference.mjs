@@ -84,14 +84,23 @@ function adrNumbersFromPaths(paths) {
   return numbers;
 }
 
-function loadClaimedNumbers() {
-  // ブランチ上の全コミットが docs/decisions/ に対して touch したパスを集める
-  // （追加・変更・rename・削除のどれかを問わない——`git mv` によるリネームも、
-  // 元の追加コミットと git-mv コミットが別コミットである限り、両方のパスが
-  // それぞれのコミットの diff に現れる。1コミットに add と rename を圧縮した
-  // 場合は旧番号が履歴に残らず検出できない——「確かめていないこと」参照）。
+function loadRelinquishedNumbers() {
+  // 🔴 **「触った」ではなく「手放した」を集める**（2026-09-17 の訂正。ADR 0211 の追記）。
+  //
+  // 直す前はここが `git log --name-only`（touch したパス全部）だった。⟹ **既存の ADR に
+  // 訂正の追記を入れるだけの PR**（この repo が規律として推奨している形——本文を書き換えず
+  // 追記する）でも、その ADR の番号が「名乗った」に入り、何も追加していないので
+  // 「捨てた」に落ちて、**PR 本文がその ADR を正しく名指ししているだけで赤くなっていた。**
+  // 実例: PR #472（ADR 0213 に34行の追記を入れるだけ・0削除）。
+  //
+  // **付け替え（`git mv`）と、既存 ADR の編集を分ける判別子は「削除されたか」である。**
+  // 付け替えは旧パスを消す。編集は何も消さない。⟹ `--diff-filter=D` で削除だけを見る。
+  // `--no-renames` が要る——既定では git が rename を1件として畳み、旧パスが出てこない
+  // （【実測】2026-09-17、擬似リポジトリで両方の形を作って確かめた）。
   const out = run("git", [
     "log",
+    "--diff-filter=D",
+    "--no-renames",
     "--name-only",
     "--format=",
     "origin/main..HEAD",
@@ -119,7 +128,7 @@ function main() {
   const prTitle = process.env.PR_TITLE ?? "";
   const prBody = process.env.PR_BODY ?? "";
 
-  const claimedNumbers = loadClaimedNumbers();
+  const claimedNumbers = loadRelinquishedNumbers();
   const addedNumbers = loadAddedNumbers();
 
   const { abandonedNumbers, violations } = decidePrAdrReferenceCheck({
@@ -131,7 +140,7 @@ function main() {
 
   if (violations.length === 0) {
     console.log(
-      "OK: このブランチが docs/decisions/ 配下で名乗った ADR 番号は " +
+      "OK: このブランチが docs/decisions/ 配下で手放した（削除した）ADR 番号は " +
         `${new Set(claimedNumbers).size} 件、いま追加している番号は ` +
         `[${addedNumbers.join(", ") || "無し"}]、捨てた番号は [${abandonedNumbers.join(", ") || "無し"}]。` +
         "PR タイトル・本文のどちらにも捨てた番号への参照は見つかりませんでした。",
