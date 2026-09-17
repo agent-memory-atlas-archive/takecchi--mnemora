@@ -251,7 +251,31 @@ ADR 0202 の「引き受けた負債1」を解消した）。
 
 ⚠ **引数シグネチャ（`(text)` 等）までは検査していない。**`CREATE OR REPLACE FUNCTION`
 で同名を別シグネチャに置き換えても、この歯は気づかない
-（[ADR 0204](../../docs/decisions/0204-postgres-object-names-cover-functions.md)「引き受けた負債」）。
+（[ADR 0204](../../docs/decisions/0204-postgres-object-names-cover-functions.md)「引き受けた負債」1番）。
+
+**なぜこれを埋めずに据え置くのか。**「起きうるから塞ぐ」ではなく、履歴を引いて決めた
+（`main` = `d0ce4b3a497ab7218495683ba2f343b4cf22701e` 時点の【実測】）:
+
+- `mnemora_lexical_*` の5関数はすべて `CREATE FUNCTION`（`OR REPLACE` ではない）で、
+  それぞれ1回しか定義されていない。
+- 定義元の2ファイル（`migrations/0008_memories_lexical_index.sql` /
+  `migrations/0009_memories_lexical_or_coverage.sql`）は、それぞれ追加した commit
+  （`0a71a57` / `251e4d7`）以降**一度も変更されていない**。
+- `git log --all -S'CREATE OR REPLACE FUNCTION' -- packages/postgres/migrations/` は
+  **0件**——`CREATE OR REPLACE FUNCTION` はこのリポジトリの履歴に一度も現れていない。
+- `packages/postgres/migrations/`（17本）のうち、追加後に変更されたファイルは
+  `0011_memory_events_kind_restored.sql` の1本だけで、その変更（commit `f15130b`、
+  Issue #227 / PR #236）は**説明コメントの修正**であり、関数定義にもシグネチャにも
+  無関係だった。
+
+⟹ **シグネチャが変わった実績は0件。**名前だけを見る形を、今回は据え置く。
+
+⚠ **それでも正直に書いておくこと**: 共有 DB での衝突検査という目的に照らすと、
+PostgreSQL は**同名・別シグネチャの多重定義（オーバーロード）を許す**ため、
+名前だけの一致では衝突を厳密には判定しきれない。**それでも名前が一致すること自体は
+「調べるべき合図」としては十分**であり、この歯が拾った一致をレビューで見る、という
+運用でその限界を補っている。これが覆るとしたら、mnemora が実際にオーバーロードを
+使い始めたときである（ADR 0204「これが覆るとしたら」）。
 
 ### 実行時に増える系列（埋め込み空間ごと）
 
@@ -265,9 +289,42 @@ ADR 0202 の「引き受けた負債1」を解消した）。
 `<space>` は `provider` / `model` / `dimensions` を小文字化・非英数字を `_` に置換して
 連結したスラグ（例: `openai_text_embedding_3_small_1536`）。**PostgreSQL の識別子は
 63バイトまで**のため、これを超える場合は末尾を切り詰め、内容から導いたハッシュ片
-（8桁の16進）を足して衝突を避ける——⚠ **この歯は接頭辞の一致しか検査していない。
-実際に切り詰め・ハッシュ付与が起きたときの具体的な名前は確かめていない**
-（ADR 0202「引き受けた負債」2番）。
+（8桁の16進）を足して衝突を避ける（[`src/embedding-space-table.ts`](./src/embedding-space-table.ts)、
+検査は
+[`src/__tests__/embedding-space-table.test.ts`](./src/__tests__/embedding-space-table.test.ts)）。
+
+🔴 **索引のほうがテーブルより先に頭打ちになる。**接頭辞の長さが違うため
+（【実測】）:
+
+- テーブルの接頭辞 `memory_embeddings_` = **18バイト** ⟹ スラグに使える余地は63−18=**45バイト**
+- 索引の接頭辞 `idx_memory_embeddings_hnsw_` = **27バイト** ⟹ スラグに使える余地は63−27=**36バイト**
+
+⟹ **索引のほうが9バイト早く上限に達する。**同じ `<space>` でも、テーブルはまだ
+切り詰められていないのに索引だけ切り詰められる、という組み合わせが起こりうる。
+
+**いま使われている中で最長の空間**（`openai` / `text-embedding-3-small` / `1536`。
+`docs/memory-model.md` §10・この README の「動く最小の例」・`packages/openai/README.md`
+が挙げている組）は、索引名が
+`idx_memory_embeddings_hnsw_openai_text_embedding_3_small_1536`（**61バイト**）
+——**上限まであと2バイト**しかない。
+
+🔴 **実際に切り詰めが起きる具体例**（`provider`/`model` は
+[`packages/core/src/embedding.ts`](../core/src/embedding.ts) の
+`EmbeddingSpaceId`（`z.string().min(1)`）で長さの上限を設けていないため、
+採用者が普通に踏みうる長さ）: `azure-openai` / `text-embedding-3-large` / `3072` では
+
+- テーブル = `memory_embeddings_azure_openai_text_embedding_3_large_3072`
+  （**58バイト、切り詰めなし**）
+- 索引 = `idx_memory_embeddings_hnsw_azure_openai_text_embedding_eb32c67b`
+  （**63バイト、末尾を切り詰めてハッシュ片を付与済み**）
+
+**⟹ この README がここまで書いていた「索引（HNSW）: `idx_memory_embeddings_hnsw_<space>`」
+という規則（＝テーブルと同じ `<space>` が付く）は、この場合には成立しない**
+——索引名の末尾はテーブル名の `<space>` とは異なる、独自に切り詰められた文字列になる。
+⚠ **この歯は接頭辞の一致と63バイト以内であることまでは検査しているが、
+「切り詰め・ハッシュ付与が実際に起きたときの具体名がテーブルと索引で食い違いうる」
+ことをここに明記するのが今回の変更である**（ADR 0202「引き受けた負債」2番を、
+実測に基づいて埋めた）。
 
 ### advisory lock のキー
 
