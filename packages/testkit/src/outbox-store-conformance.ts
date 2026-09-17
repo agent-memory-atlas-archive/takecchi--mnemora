@@ -23,6 +23,21 @@ export interface OutboxStoreConformanceOptions {
    * 「生の outbox 行を直接作る」フックを要求する。
    */
   seedJob: (ctx: Ctx, input: SeedOutboxJobInput) => Promise<OutboxJobRecord>;
+  /**
+   * **本物の並行で `claimBatch` を測れる adapter だけが `true` を渡す**（ADR 0206）。
+   *
+   * `true` のとき「並行に撃った `claimBatch` が二重 claim しない」歯が走り、**省略/false の
+   * ときは `it.skip` になる**——⟹ **測っていないことが、緑ではなく skip として見える。**
+   *
+   * ⛔ **`true` にしてよいのは、`Promise.all` で撃った `claimBatch` が実際に別のセッション
+   * （別コネクション）で重なる adapter だけである。**単一プロセス内で逐次化される実装
+   * （例: 本体に `await` を持たない in-memory 実装）が `true` を渡すと、**何も測らずに
+   * 緑が出る。**
+   *
+   * ⚠ **この歯は、複数プロセスが実際にネットワーク越しで撃つ状況までは測らない。**
+   * 測るのは単一プロセス内の複数接続までである。
+   */
+  supportsRealConcurrency?: boolean;
 }
 
 /**
@@ -35,6 +50,30 @@ export interface OutboxStoreConformanceOptions {
 const DEFAULT_LEASE_MS = 60_000;
 
 /**
+ * 並行 claim の歯（ADR 0206）の並行数とラウンド数。
+ *
+ * 🔴 **ラウンド数を減らさないこと。この歯の正しさは、ここにぶら下がっている。**
+ *
+ * 【実測 2026-09-17、`main` = `6daa09c`】`packages/postgres` の `claimBatch` から
+ * `FOR UPDATE SKIP LOCKED` を丸ごと削った状態で、この歯を走らせた:
+ *
+ * | ラウンド数 | 試行 | 結果 |
+ * | --- | --- | --- |
+ * | **1** | 6 | 5 回 RED / **1 回 GREEN** ← 🔴 **壊れた実装を見逃した** |
+ * | **10** | 4 | 4 回 RED（見逃し無し） |
+ *
+ * ⟹ **1ラウンドでは、壊れた実装を実際に取りこぼす。**⛔ **「10は多い、3で十分だろう」と
+ * 減らさないこと**——見逃しは赤くならないので、**減らしたことが表に出ない。**
+ * （変異なしの実装に対しては、10ラウンドで5試行とも緑。**偽陽性は観測していない。**）
+ *
+ * ⚠ **逆向きは保証していない。**`duplicateRounds === 0` は
+ * **「このラウンド数では出なかった」以上を主張しない**——二重 claim が起きないことの
+ * 証明ではない。
+ */
+const CONCURRENT_CLAIM_CONCURRENCY = 8;
+const CONCURRENT_CLAIM_ROUNDS = 10;
+
+/**
  * `OutboxStore` の適合テスト（roadmap.md 段階3、ADR 0005 の transactional outbox「運搬役」側）。
  *
  * 検査する契約:
@@ -43,14 +82,16 @@ const DEFAULT_LEASE_MS = 60_000;
  * - `claimBatch` は `kinds` で絞り込める
  * - `claimBatch` は `limit` を超えない
  * - `claimBatch` で claim したジョブは、同じ claim 条件で二重に返らない
- *   ⚠ **これは検査していない。** この suite の呼び出しはすべて単一プロセス内の逐次
- *   `await store.claimBatch(...)` であり（`Promise.all` 等による並行呼び出しは1件も無い）、
- *   検査しているのは「1回の claim の後に同じジョブが再び現れないこと」（下の complete/fail・
- *   リースの項目）までである。**複数プロセス/複数ワーカーが実際に同時にネットワーク越しで
- *   `claimBatch` を撃ったときに二重 claim が起きないこと**（adapter 実装が
- *   `SELECT ... FOR UPDATE SKIP LOCKED` 相当で担うべき保証、
- *   `packages/core/src/interfaces/outbox-store.ts` の `claimBatch` 契約コメント参照）は、
- *   この suite を全項目通過しても測っていない。詳細は
+ *   （逐次の呼び出しについて。下の complete/fail・リースの項目）
+ * - **並行に撃った `claimBatch` が、同じジョブを二重に claim しない**（ADR 0206）
+ *   ⚠ **これを検査するのは `supportsRealConcurrency: true` を渡した adapter に対してだけである。**
+ *   渡さない adapter では `it.skip` になる——⟹ **測っていないことが緑ではなく skip として
+ *   見える。**理由と、boolean のフラグを採らなかった経緯は同フックの doc と ADR 0206。
+ *   ⛔ **この歯が守っているのは `FOR UPDATE` の行ロックであって `SKIP LOCKED` ではない**
+ *   【実測】——`SKIP LOCKED` だけを外しても赤くならない（ADR 0206 の「測ったこと」）。
+ *   ⟹ **この項目が緑でも、`SKIP LOCKED` は検査されていない。**
+ *   ⚠ **複数プロセスが実際にネットワーク越しで撃つ状況は、いまも測っていない。**
+ *   この歯は単一プロセス内の複数接続までである。詳細は
  *   docs/architecture.md「確かめていないこと」節、ADR 0032「確かめていないこと」節を見ること。
  * - `complete` / `fail` の後、そのジョブは再び `claimBatch` に現れない
  * - テナント分離: 他テナントの未処理ジョブが `claimBatch` に現れない
@@ -60,7 +101,7 @@ const DEFAULT_LEASE_MS = 60_000;
  *   （`claimed_at IS NULL` だけにする案を却下した理由そのもの——見えない停止にしない）。
  */
 export function describeOutboxStoreConformance(options: OutboxStoreConformanceOptions): void {
-  const { name, createStore, seedJob } = options;
+  const { name, createStore, seedJob, supportsRealConcurrency } = options;
 
   describe(`OutboxStore conformance (${name})`, () => {
     it("claimBatch は available_at <= now の未処理ジョブを返す", async () => {
@@ -401,6 +442,53 @@ export function describeOutboxStoreConformance(options: OutboxStoreConformanceOp
         leaseMs,
       });
       expect(finalCheck.map((j) => j.id)).not.toContain(job.id);
+    });
+
+    // 本物の並行で二重 claim を検査する歯（ADR 0206、Issue 205 の1本目）。
+    // `supportsRealConcurrency: true` を渡さない adapter では `it.skip` になる——
+    // ⟹ 「測っていない」が緑ではなく skip として見える。
+    const maybeConcurrentIt = supportsRealConcurrency ? it : it.skip;
+
+    maybeConcurrentIt("並行に撃った claimBatch が、同じジョブを二重に claim しない", async () => {
+      const store = await createStore();
+
+      let duplicateRounds = 0;
+      const samples: string[][] = [];
+      for (let round = 0; round < CONCURRENT_CLAIM_ROUNDS; round++) {
+        // ラウンドごとにテナントを変える。claim 可能なジョブをちょうど1本にして
+        // `limit: 1` で撃つと、二重 claim が起きたときに「同じ id が複数の呼び出しに
+        // 返る」という形で必ず表に出る。
+        const ctx: Ctx = { tenantId: `concurrent-claim-${round}` };
+        await seedJob(ctx, { kind: "extract" });
+
+        const now = new Date();
+        const batches = await Promise.all(
+          Array.from({ length: CONCURRENT_CLAIM_CONCURRENCY }, (_, worker) =>
+            store.claimBatch(ctx, {
+              limit: 1,
+              now,
+              claimedBy: `concurrent-worker-${worker}`,
+              leaseMs: DEFAULT_LEASE_MS,
+            }),
+          ),
+        );
+
+        const claimedIds = batches.flatMap((batch) => batch.map((job) => job.id));
+        // ⛔ 「合計が1本である」ことは検査しない。競合下では `SKIP LOCKED` 相当の実装が
+        // 「ロック中の行を、この呼び出しでは単に飛ばす」だけで、どれか1本が必ず拾う保証は
+        // していない【実測 2026-09-17: ジョブ5本・limit=3・4並行で、合計が5未満になる
+        // ラウンドが出た】。拾い残しは次の tick が拾う——設計上の許容範囲であって故障では
+        // ない。⟹ ここで検査してよいのは「**二重に返らない**」ことだけである。
+        if (new Set(claimedIds).size !== claimedIds.length) {
+          duplicateRounds++;
+          if (samples.length < 3) {
+            samples.push(claimedIds);
+          }
+        }
+      }
+
+      // 失敗時に「何ラウンドで、どの id が重複したか」が出るように、まとめて比較する。
+      expect({ duplicateRounds, samples }).toEqual({ duplicateRounds: 0, samples: [] });
     });
   });
 }

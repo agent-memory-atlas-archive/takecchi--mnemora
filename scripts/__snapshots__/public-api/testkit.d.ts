@@ -388,6 +388,7 @@ export interface OutboxStoreConformanceOptions {
     name: string;
     createStore: () => OutboxStore | Promise<OutboxStore>;
     seedJob: (ctx: Ctx, input: SeedOutboxJobInput) => Promise<OutboxJobRecord>;
+    supportsRealConcurrency?: boolean;
 }
 export declare function describeOutboxStoreConformance(options: OutboxStoreConformanceOptions): void;
 

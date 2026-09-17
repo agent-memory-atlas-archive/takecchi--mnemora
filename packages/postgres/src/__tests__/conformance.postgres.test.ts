@@ -210,6 +210,15 @@ describeOutboxStoreConformance({
     `);
     return rowToOutboxJob(result.rows[0] as unknown as OutboxJobRow);
   },
+  /**
+   * 並行 claim の歯（ADR 0206）を走らせる。`pg.Pool` 上の `Promise.all` は、別の
+   * バックエンドで実際に時間的に重なることを実測してある【2026-09-17: 別 PID
+   * （29583/29584 など）・実行区間が重複・`pool.options.max` の既定値は 10】。
+   *
+   * ⚠ この pool は `getTestClient()` がプロセス内で使い回す単一のものである。
+   * 並行数が `max` を超えると、超えたぶんは接続待ちになり並行度が落ちる。
+   */
+  supportsRealConcurrency: true,
 });
 
 describeTenantSettingsStoreConformance({

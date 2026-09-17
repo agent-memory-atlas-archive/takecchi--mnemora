@@ -239,6 +239,12 @@ describeEventStoreConformance({
 // （`packages/postgres` が同じ理由で単一の共有 DB 接続を使い回すのと同じパターン）。
 let latestMemoryStoreForOutboxSeed: InMemoryMemoryStore | undefined;
 
+// ⛔ `supportsRealConcurrency` は**渡さない**（ADR 0206）——in-memory 実装の
+// `claimBatch` は本体に `await` を1つも含まないため、async 関数は最初の `await` まで
+// 同期実行される ⟹ `Promise.all` で並べても**完全に逐次化される。**渡すと
+// 「何も測っていないのに緑」になる。渡さないことで並行の歯は `it.skip` になり、
+// **測っていないことがログ上で skip として見える。**
+// 🔴 「in-memory でも通るように」とここへ `true` を足さないこと。
 describeOutboxStoreConformance({
   name: "in-memory placeholder",
   createStore: () => {

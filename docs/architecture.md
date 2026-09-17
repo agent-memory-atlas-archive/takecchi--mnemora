@@ -861,6 +861,14 @@ Issue #200 が挙げた2つの読み方のうち「mnemora が*話しかける*�
   `OutboxStore.claimBatch` の同時 claim 安全性（`FOR UPDATE SKIP LOCKED`）は
   `packages/postgres` 側で実装したが、複数ワーカーが実際に競合する状況を再現するテストは
   Phase 1 の時点では書いていない（単一プロセス内の逐次呼び出ししか検査していない）。
+  **2026-09-17 追記（[ADR 0206](./decisions/0206-outbox-concurrent-claim-conformance.md)）**:
+  適合テストに**並行 claim の歯を1本足した**——`supportsRealConcurrency: true` を渡した
+  adapter（いまは `packages/postgres` だけ）に対して、`Promise.all` で8並行に撃った
+  `claimBatch` が同じジョブを二重に claim しないことを検査する。渡さない adapter では
+  `it.skip` になる。⚠ **ただし測るのは単一プロセス内の複数接続までであり、
+  複数プロセスが実際にネットワーク越しに撃つ状況は、いまも測っていない。**
+  ⛔ **この歯が守っているのは `FOR UPDATE` の行ロックであって `SKIP LOCKED` ではない**
+  【実測】——`SKIP LOCKED` だけを外しても赤くならない。
 - **2026-09 追記（roadmap.md 段階3）**: `packages/openai` の `completeStructured` が
   OpenAI の strict モードで実際に「省略可能なフィールドを `null` として返す」という
   前提（ADR 0012 D-ingest-7）は、`OPENAI_API_KEY` が無い開発・CI 環境では検証できていない。
