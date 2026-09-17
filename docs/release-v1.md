@@ -48,7 +48,19 @@ node scripts/ci-green-check.mjs --sha <(a) の sha> --repo takecchi/mnemora
 
 **「何本中何本が緑ならよいか」**: **通過条件は「N 件すべて」であって「13件」ではない。**
 N はジョブが増減すれば変わる値であり、`ci-green-check.mjs` はその時点の check run を数えて
-「すべて success か」だけを判定する。**この日の N は 13 だった**——
+「すべて success か」を判定する。**この日の N は 13 だった**——
+
+⚠ **2026-09-17 追記（ADR 0215）**: **「その時点の check run を数えて、すべて success か」だけでは
+足りない。** 一部しか登録されていない窓では、**登録されているものが全部 success という状態が
+成立してしまう**（【実測】直近の `main` 30本のうち7本で、`needs: postgres` を持つ13本目が
+登録される前に他12本が全部 `completed` かつ `success` になっていた）。
+⟹ **`ci-green-check.mjs` は branch protection の `required_status_checks.contexts`
+（この日は6件）を下限として引き、その集合が全部登録されていて全部 success でなければ
+緑を出さない。** 下限が引けなければ `2`（pending）で止まる。
+⚠ **この下限が守るのは required の6件だけで、残り7本が *登録されたか* について
+この道具は何も保証しない**（見なくてよい、ではなく、**揃うのを待っていない**）。
+⚠ ただし「登録された check は全部 success」は required かどうかに関わらず要求し続ける
+——required でない check が `failure` なら `red` になる（旧来どおり）。
 
 **【実測】2026-09-16、`origin/main` = `6a19d85`**（`6a19d853c605a643bdf0f76c6f2ac9afbe60a993`）**、
 この器で上の2本を走らせた**:

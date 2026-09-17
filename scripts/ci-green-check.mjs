@@ -23,6 +23,23 @@
  *    埋め込んだ `gh pr merge` コマンドをそのまま印字する**——文書で「引き直せ」と
  *    書くだけでなく、道具（`gh`）自身に「見た sha と違う sha はマージさせない」を
  *    強制させる。
+ * 6. **「緑」の下限を branch protection の required status checks に縛る（ADR 0215）。**
+ *    `needs:` で依存元 job を待つ check（例: `postgres-regime-coverage`）は、依存元が
+ *    終わるまで check-run 自体が存在しない。push 直後のこの窓では「登録済みの
+ *    check-runs は全部 success だが、本来の本数にまだ満たない」状態が起こりうる
+ *    （直近 main 30本中7本で観測）。この CLI は判定の直前に対象 base branch の
+ *    branch protection から required status checks の contexts を取得し、
+ *    その集合が check-runs に全部揃っていて、かつ全部 completed かつ success で
+ *    なければ `green` を返さない。**⚠ この下限が守るのは required の集合だけである。
+ *    残りの check（required でないもの）が「登録されたか」については、この道具は
+ *    何も保証しない**——required でない check がまだ1本も登録されていなくても、
+ *    required 側が全部揃って success なら green になる。⛔ **「残りは見なくてよい」
+ *    ではない。「この道具は、残りが揃うのを待っていない」である。**
+ *    なお**登録されている check は required かどうかに関わらず全部 success を要求する**
+ *    （旧来どおり。`summarizeCheckRuns` の `allSuccess`）——required でない check が
+ *    failure なら、このツールは `red` を返す。
+ *    required status checks が取得できなかった場合は、判定を `pending` に落とす
+ *    （`green` にも `red` にもしない）——「取れなかったから従来どおり」には倒さない。
  *
  * **このツールが判定しないこと**: 手元の6つの門（typecheck/lint/format:check/test/
  * build/pack:check）の結果。手元の緑は CI の緑を予測しない（`docs/autonomy.md` §4）
@@ -35,10 +52,17 @@
  * node scripts/ci-green-check.mjs --sha <sha> --repo takecchi/mnemora
  * node scripts/ci-green-check.mjs --pr 132 --recheck-after 30
  * node scripts/ci-green-check.mjs --pr 132 --json
+ * node scripts/ci-green-check.mjs --sha <sha> --repo takecchi/mnemora --base main
  * ```
  *
+ * `--base <branch>`: required status checks を引く先の branch protection の対象
+ * branch を明示する（省略可）。省略時の決め方: `--pr` なら `gh pr view <n> --json
+ * baseRefName` で取った base、それも無ければ `gh repo view --json defaultBranchRef`
+ * のデフォルトブランチ。
+ *
  * 終了コード: `0` = green（`--recheck-after` 付きなら green かつ stable）、
- * `1` = red、`2` = pending（まだ判定できない）、`3` = 実行時エラー（`gh` 呼び出し失敗等）。
+ * `1` = red、`2` = pending（まだ判定できない。required status checks が取得
+ * できなかった場合を含む）、`3` = 実行時エラー（`gh` 呼び出し失敗等）。
  *
  * ## ADR 索引の鮮度への相乗り（ADR 0192）
  *
@@ -76,6 +100,7 @@ function parseArgs(argv) {
     if (a === "--pr") args.pr = argv[++i];
     else if (a === "--sha") args.sha = argv[++i];
     else if (a === "--repo") args.repo = argv[++i];
+    else if (a === "--base") args.base = argv[++i];
     else if (a === "--recheck-after") args.recheckAfter = Number(argv[++i]);
     else if (a === "--json") args.json = true;
     else {
@@ -103,7 +128,7 @@ function resolveRepo(explicitRepo) {
   return run("gh", ["repo", "view", "--json", "nameWithOwner", "-q", ".nameWithOwner"]).trim();
 }
 
-/** @returns {{ sha: string, isDraft: boolean, mergeStateStatus: string } | { sha: string }} */
+/** @returns {{ sha: string, isDraft: boolean, mergeStateStatus: string, baseRefName: string }} */
 function resolvePrHead(repo, prNumber) {
   const out = run("gh", [
     "pr",
@@ -112,14 +137,90 @@ function resolvePrHead(repo, prNumber) {
     "--repo",
     repo,
     "--json",
-    "headRefOid,isDraft,mergeStateStatus",
+    "headRefOid,isDraft,mergeStateStatus,baseRefName",
   ]);
   const parsed = JSON.parse(out);
   return {
     sha: parsed.headRefOid,
     isDraft: parsed.isDraft,
     mergeStateStatus: parsed.mergeStateStatus,
+    baseRefName: parsed.baseRefName,
   };
+}
+
+/**
+ * required status checks を引く先の base branch を決める。
+ * 優先順位: `--base` 明示 > （`--pr` なら PR の base branch）> リポジトリの
+ * デフォルトブランチ。
+ *
+ * @param {string} repo
+ * @param {{ base?: string, pr?: string }} args
+ * @param {{ baseRefName: string } | null} prMeta
+ * @returns {string}
+ */
+function resolveBase(repo, args, prMeta) {
+  if (args.base) return args.base;
+  if (prMeta) return prMeta.baseRefName;
+  return run("gh", [
+    "repo",
+    "view",
+    "--json",
+    "defaultBranchRef",
+    "-q",
+    ".defaultBranchRef.name",
+  ]).trim();
+}
+
+/**
+ * branch protection の required status checks の contexts を取得する（ADR 0215）。
+ *
+ * ⛔ **`gh api` の出力を `-q` で欄だけ絞らない。** `-q` で `.required_status_checks.contexts`
+ * を直接抜くと、「`required_status_checks` 自体が無い（branch protection 未設定 or
+ * required status checks 未設定）」場合と「設定はあるが contexts が空配列」の場合の
+ * 区別がつかなくなる（どちらも `null`/空として出うる）。生 JSON を丸ごと取ってから
+ * `JSON.parse` し、`required_status_checks?.contexts` の**形**を見て判定する。
+ *
+ * `gh` が失敗した（branch protection が無い等で 404 を含む）、または
+ * `required_status_checks.contexts` が配列でない場合は `contexts: null` を返す。
+ * 🔴 **呼び出し側はこれを「取得できなかった」として扱い、絶対に「取れなかったから
+ * 従来どおり判定する」に倒さないこと**——`verdict()` の第2引数に `null` をそのまま
+ * 渡せば `pending` になる。
+ *
+ * @returns {{ contexts: string[] | null, warning: string | null }}
+ */
+function fetchRequiredStatusChecks(repo, base) {
+  const apiPath = `repos/${repo}/branches/${base}/protection`;
+  let out;
+  try {
+    out = run("gh", ["api", apiPath]);
+  } catch (err) {
+    return {
+      contexts: null,
+      warning:
+        `branch protection を取得できなかった（${apiPath}）——required status checks の` +
+        `下限を判定できないため、判定は pending に落とす。gh のエラー: ${String(err.message ?? err)}`,
+    };
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(out);
+  } catch (err) {
+    return {
+      contexts: null,
+      warning: `branch protection の応答が JSON として読めなかった（${apiPath}）: ${String(err.message ?? err)}`,
+    };
+  }
+  const contexts = parsed?.required_status_checks?.contexts;
+  if (!Array.isArray(contexts)) {
+    return {
+      contexts: null,
+      warning:
+        `branch protection の required_status_checks.contexts が配列でない（${apiPath}）` +
+        `——required_status_checks 自体が未設定の可能性がある。実際の値: ` +
+        `${JSON.stringify(parsed?.required_status_checks ?? null)}`,
+    };
+  }
+  return { contexts, warning: null };
 }
 
 function fetchCheckRuns(repo, sha) {
@@ -190,7 +291,7 @@ function main() {
   const args = parseArgs(process.argv.slice(2));
   if (!args.pr && !args.sha) {
     console.error(
-      "使い方: node scripts/ci-green-check.mjs --pr <number> | --sha <sha> [--repo owner/repo] [--recheck-after <seconds>] [--json]",
+      "使い方: node scripts/ci-green-check.mjs --pr <number> | --sha <sha> [--repo owner/repo] [--base <branch>] [--recheck-after <seconds>] [--json]",
     );
     process.exit(3);
   }
@@ -220,6 +321,31 @@ function main() {
     console.log(`sha: ${sha}`);
   }
 
+  let base;
+  try {
+    base = resolveBase(repo, args, prMeta);
+  } catch (err) {
+    console.error(String(err.message ?? err));
+    process.exit(3);
+    return;
+  }
+  const { contexts: requiredContexts, warning: requiredContextsWarning } =
+    fetchRequiredStatusChecks(repo, base);
+  if (requiredContextsWarning) {
+    console.error(`⚠ ${requiredContextsWarning}`);
+  }
+  if (requiredContexts) {
+    console.log(
+      `required status checks（下限。${base} の branch protection）: ${requiredContexts.length}件 — ` +
+        `${requiredContexts.join(", ")}`,
+    );
+  } else {
+    console.log(
+      `required status checks（下限。${base} の branch protection）: 取得できなかった` +
+        "——上の警告を参照。下限が無いので判定は pending に落ちる。",
+    );
+  }
+
   let checkRuns1;
   try {
     checkRuns1 = fetchCheckRuns(repo, sha);
@@ -228,7 +354,7 @@ function main() {
     process.exit(3);
     return;
   }
-  const v1 = verdict(checkRuns1);
+  const v1 = verdict(checkRuns1, requiredContexts);
   printVerdict("1st poll", v1);
 
   let finalVerdict = v1;
@@ -270,7 +396,7 @@ function main() {
         process.exit(3);
         return;
       }
-      const v2 = verdict(checkRuns2);
+      const v2 = verdict(checkRuns2, requiredContexts);
       printVerdict("2nd poll", v2);
       stability = compareCheckRunNameSets(checkRuns1, checkRuns2);
       if (!stability.stable) {
