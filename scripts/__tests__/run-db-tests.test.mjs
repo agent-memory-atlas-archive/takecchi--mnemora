@@ -3,6 +3,8 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
+import { STAGES } from "../root-test-gate.mjs";
+
 /**
  * `scripts/run-db-tests.mjs`（ルートの `test` 門の DB 段）の歯。
  *
@@ -79,16 +81,42 @@ describe("scripts/run-db-tests.mjs（ルートの test 門の DB 段）", () => 
 describe("ルートの test 門の配線", () => {
   /**
    * 上の2つの歯は DB 段そのものを測る。**段が門に繋がっていること**は別の話で、
-   * 繋がりが外れれば（`&& node scripts/run-db-tests.mjs` を消せば）DB は再び黙って
-   * 未実行になる——それが元の欠陥そのものである。だからここで配線を釘付けにする。
+   * 繋がりが外れれば DB は再び黙って未実行になる——それが元の欠陥そのものである。
+   * だからここで配線を釘付けにする。
+   *
+   * ⚠ **配線の場所が変わった（Issue #453 / ADR 0210）。** 以前はルートの
+   * `package.json` の `test` が `&&` で3段を直接連結しており、この歯もそれを
+   * `split("&&")` して検査していた。いまは `package.json` の `test` は
+   * `node scripts/run-root-test-gate.mjs` を呼ぶだけで、3段の配線は
+   * `scripts/run-root-test-gate.mjs` の中に在る（前段の成否に関わらず全部
+   * 起動するため、shell の `&&` では表現できない）。⟹ **検査対象をそちらへ移す。**
    */
-  it("ルートの test は、パッケージのテストのあとに DB 段を呼ぶ", () => {
+  it("ルートの test は run-root-test-gate.mjs を呼ぶ", () => {
     const manifest = JSON.parse(
       readFileSync(fileURLToPath(new URL("../../package.json", import.meta.url)), "utf8"),
     );
-    const stages = manifest.scripts.test.split("&&").map((stage) => stage.trim());
+    expect(manifest.scripts.test).toBe("node scripts/run-root-test-gate.mjs");
+  });
 
-    expect(stages).toContain("pnpm -r --if-present run test");
-    expect(stages).toContain("node scripts/run-db-tests.mjs");
+  /**
+   * ⛔ **ソースを文字列として読んで語の並び順を見る形にしないこと。**
+   * `run-root-test-gate.mjs` の冒頭コメントには3段が同じ順で表になって書いてあるので、
+   * `indexOf` で順序を測ると**コードを並べ替えても緑のまま**になる。
+   * ⟹ 配線の実体（`STAGES`）を import して、そのものを測る。
+   */
+  it("門は、vitest → pnpm -r --no-bail run test → run-db-tests.mjs の順に3段を起動する", () => {
+    const commandLines = STAGES.map((stage) => [stage.command, ...stage.args].join(" "));
+
+    expect(commandLines).toEqual([
+      "pnpm exec vitest run",
+      "pnpm -r --if-present --no-bail run test",
+      "node scripts/run-db-tests.mjs",
+    ]);
+  });
+
+  it("段2には --no-bail が在る（1パッケージ落ちても残りのパッケージを起動し続ける）", () => {
+    const packageStage = STAGES.find((stage) => stage.args.includes("-r"));
+
+    expect(packageStage?.args).toContain("--no-bail");
   });
 });

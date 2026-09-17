@@ -13,7 +13,7 @@
     "lint": "eslint .",
     "format": "prettier --write \"**/*.{ts,tsx,mts,cts,js,mjs,cjs,json}\"",
     "format:check": "prettier --check \"**/*.{ts,tsx,mts,cts,js,mjs,cjs,json}\"",
-    "test": "vitest run && pnpm -r --if-present run test && node scripts/run-db-tests.mjs",
+    "test": "node scripts/run-root-test-gate.mjs",
     "build": "pnpm -r --if-present run build",
     "pack:check": "node scripts/check-publish-pack.mjs",
     "api:check": "node scripts/check-public-api-surface.mjs",
