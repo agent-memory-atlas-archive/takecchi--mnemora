@@ -224,5 +224,6 @@ alteroid (github.com/takecchi/alteroid) を根拠として引く箇所は、確�
 | [0214](./0214-release-candidates-lists-not-judges.md) | リリース当日に「載せるべき候補」をその場で出す道具 — ⛔ 判定ではなく一覧である | 採用 (2026-09) |
 | [0215](./0215-ci-green-check-lower-bound-from-required-status-checks.md) | 「CI が緑」の下限を、branch protection の required status checks から取る（Issue #477 と同じ族） | 採用 (2026-09) |
 | [0216](./0216-north-star-shipped-only-measurement.md) | 北極星の7項目を「出荷物だけ」でどう測るか — ⛔ 物差しは1本では作れない。文面の向きで3類に割り、1類は機械に載せない | 採用 (2026-09) |
+| [0217](./0217-provenance-naming-lost-in-duplication-swept-from-the-population.md) | 「確かめていない主張が、名乗りを落としたまま複製されていないか」を `docs/` 220本の母集合から測った — 複製で名乗りが落ちた例は2件、うち1件は3文書に跨っていた | 採用 (2026-09) |
 
 <!-- ADR-INDEX:GENERATED:END -->

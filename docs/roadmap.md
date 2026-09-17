@@ -200,7 +200,7 @@ Phase 1 で入れた土台が、後続フェーズをどう安くしているか
 | Drizzle 公式ガイドの例（`1 - cosineDistance(...)` を降順で並べる書き方）では HNSW 索引が効かない可能性がある | `EXPLAIN` で Seq Scan が出る、recall のレイテンシがデータ量に比例して悪化する | 規約として、`ORDER BY` には距離演算子の結果をそのまま昇順で書き、式にしない。`testkit` に `EXPLAIN` で索引が使われることを確認する検査を含める（段階2の完了条件と同じもの）。 |
 | `drizzle-kit push` が生成する HNSW の DDL に operator class が欠落する不具合が報告されている | `push` で作成した索引が `EXPLAIN` で使われない、または `CREATE INDEX` の operator class が想定と違う | ベクトル索引の DDL は手書きのマイグレーションで管理し、`push` に任せない。 |
 | フィルタ問題（`tenant_id` / `status` / `decay_floor_at > now()`）とスコア問題（減衰・タグ・鮮度を掛ける再スコア）を混同して対処を誤る | `hnsw.iterative_scan` を有効にしたのにスコアの取りこぼしが直らない（あるいはその逆） | 二つを明確に分けて扱う。フィルタ問題には iterative index scan と `hnsw.ef_search` の調整、スコア問題には over-fetch と段2の再スコアで対処する。片方の対処でもう片方が直ると期待しない。 |
-| pgvector のバージョン要件（iterative scan は 0.8.0 以降、CVE-2026-3172 の修正は 0.8.2） | マネージド Postgres の環境で `hnsw.iterative_scan` が使えない、または既知の脆弱性が残ったバージョンが動いている | `SELECT * FROM pg_available_extensions WHERE name = 'vector'` で各環境のバージョンを確認する運用手順をドキュメントに明記する。要件を `>= 0.8.0`、推奨を `>= 0.8.2` として明文化する。**マネージド Postgres 各社が実際に提供するバージョンは確認できていない**（§6 参照）。 |
+| pgvector のバージョン要件（iterative scan は 0.8.0 以降、CVE-2026-3172 の修正は 0.8.2） | マネージド Postgres の環境で `hnsw.iterative_scan` が使えない、または既知の脆弱性が残ったバージョンが動いている | `SELECT * FROM pg_available_extensions WHERE name = 'vector'` で各環境のバージョンを確認する運用手順をドキュメントに明記する。要件を `>= 0.8.0`、推奨を `>= 0.8.2` として明文化する。**マネージド Postgres 各社が実際に提供するバージョンは確認できていない**（§6 参照）。⚠ **`CVE-2026-3172` という番号自体も裏が取れていない**——名乗りと上流の実測は [`docs/memory-model.md`「前提: pgvector のバージョン」](./memory-model.md#前提-pgvector-のバージョン)の 2026-09-17 追記にまとめた。 |
 | 「計測を見せれば行動が変わる」という前提が、実は未検証のまま採用されてしまう | `usage` を返しているにもかかわらず、呼び出し側のプロンプトが肥大し続ける | 下記「計測と抑止を混同しない」を参照。 |
 
 ### 計測と抑止を混同しない

@@ -563,10 +563,10 @@ git ls-tree --name-only origin/main docs/ | grep release-notes
 
 | # | Actions の画面 | ステップ名（現物） | 何をするか | 成否の見方 |
 |---|---|---|---|---|
-| 1 | 2 | Checkout | tag の指す commit を全履歴付きで取得 | 失敗はまれ。赤ならネットワーク系 |
+| 1 | 2 | Checkout | tag の指す commit を全履歴付きで取得 | 失敗はまれ**【未検証・下記】**。赤ならネットワーク系 |
 | 2 | 3 | Setup Node.js | Node 22 をセットアップし `~/.npmrc` に `registry.npmjs.org` を設定 | 同上 |
 | 3 | 4 | Update npm CLI | `npm install -g npm@latest` | §4.3 で詳述 |
-| 4 | 5 | Enable corepack | `corepack enable` | まれに失敗 |
+| 4 | 5 | Enable corepack | `corepack enable` | まれに失敗**【未検証・下記】** |
 | 5 | 6 | Install dependencies | `pnpm install --frozen-lockfile` | lockfile とpackage.jsonの不一致で失敗しうる |
 | 6 | 7 | Release の tag が main の履歴上に在ることを確かめる（`release` イベントのみ） | tag の commit が `origin/main` の祖先であることを検査 | 赤くなったら「main を通っていない commit から Release を作った」ことを疑う（`publish.yml:76-102`） |
 | 7 | 8 | Release の tag の版を package.json へ書き込む（`release` イベントのみ） | `apply-release-version.mjs` が版を決めて書き込む（下の1.3節で詳述） | tag が semver でないと赤くなる |
@@ -578,6 +578,21 @@ git ls-tree --name-only origin/main docs/ | grep release-notes
 | 12 | 14 | **npm publish（依存の向きの順に、tarball を上げる）** | 6パッケージを順に `npm publish` する。**ここが実際に registry へ書き込む唯一のステップ** | ログに `::group::npm publish <name>@<version>` が6回出るはず（`publish.yml:225`）。**各グループの中身を1つずつ見ること**（§3で詳述） |
 
 （【読んで確かめた】`.github/workflows/publish.yml` 全文、行番号は上表内に記載）
+
+> **⚠ 2026-09-17 追記（名乗りの復元）。** 上の表の「成否の見方」列のうち、
+> **1行目の「失敗はまれ」と 4行目の「まれに失敗」は【未検証】である。**
+> これは `publish.yml` の Checkout / `corepack enable` が**何回中何回失敗したかを測った記録ではない。**
+> ⚠ **表の直後の【読んで確かめた】は「何をするか」列（YAML の記述内容）を裏づけるものであって、
+> 頻度の裏づけにはならない**——YAML を読んでも過去の失敗頻度は分からない。
+>
+> ⭐ **測られているのは `ci.yml` 側の corepack だけである。**
+> [Issue #483](https://github.com/takecchi/mnemora/issues/483) が `main` への push 322本
+> （【実測 2026-09-17 06:33 UTC、`main` = `bedd528`】）を母集合に取り、corepack の `ECONNRESET` は
+> **1本（`de5ed1c`）** と測っている。さらにその1本を再実行して緑になったことも記録されている
+> （[追記](https://github.com/takecchi/mnemora/issues/483#issuecomment-5710601764)、**n=1**）。
+> ⛔ **これは `ci.yml` の話であって、`publish.yml` の同じ step の頻度ではない。**
+> ⚠ **`publish.yml` の run は本数がごく少なく、頻度を出せる母集合がそもそも無い。**
+> ⭐ **当日ここが赤かったら、「まれだから」と流さずログの逐語を読むこと。**
 
 ### 1.3 版の決め方（ADR 0070）
 

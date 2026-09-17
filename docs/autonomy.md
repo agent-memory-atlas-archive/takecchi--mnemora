@@ -64,6 +64,10 @@ ls /usr/share/postgresql/*/extension/vector.control    # pgvector
 ```
 
 🔴 **この一手を飛ばすと、1分で用意できる DB を用意せずに「判定不能」へ倒れる。**
+⚠ **【未検証】「1分」は測っていない**——直後の【実測】は「手順が記述どおり通った」ことの実測であって、
+所要時間の実測ではない。[ADR 0183](./decisions/0183-local-postgres-makes-postgres-mutation-testing-possible.md) に在るのは
+`test:db` 全体（約4分）と CI 1周（4〜9分）の実測で、**DB を立てるまでの時間は測られていない。**
+⭐ **言いたいのは「短い」であって「1分」ではない。数字のほうを根拠にしないこと。**
 **【実測】2026-09-17、`DATABASE_URL` が未設定でありながら上の2つが両方在る器で、
 `AGENTS.md` の手順が `initdb` から `migrate`（0001〜0017 の17本）まで記述どおり通った**
 （[Issue #247](https://github.com/takecchi/mnemora/issues/247) のコメント）。
@@ -226,6 +230,27 @@ success なら緑になる。⛔ **「残り7本は見なくてよい」では�
 あったが、**「緑を確認済み」という記憶のままマージし得た**——道具の欠陥ではなく、
 手順に「いつ引き直すか」が欠けていたことが原因である）。
 
+> **⚠ 2026-09-17 追記（名乗りの復元。元の記述は書き換えていない）。**
+> 上の「**一過性の `ECONNRESET` で、再実行すれば緑に戻る類のもの**」は **【受】** である。
+> 出所は [Issue #294](https://github.com/takecchi/mnemora/issues/294) 本文からの報告で、
+> [ADR 0191](./decisions/0191-ci-green-verdict-bound-to-sha.md) は同じ記述を
+> **「issue 本文からの【受】であり、このセッションでは自分の `gh` 呼び出しで再導出していない」**
+> と正しく名乗っている。**その名乗りが、この節と
+> [ADR 0132](./decisions/0132-ci-green-verdict-procedure.md) には付いてこなかった**
+> ——3文書とも同じ commit（`6fc2afa`、PR #385）で入っている。
+>
+> ⛔ **「再実行すれば通る」を一般の性質として裏づける実測は、いまも無い。**
+> [Issue #483](https://github.com/takecchi/mnemora/issues/483) が `main` への push の failure を
+> 母集合から測っており、そこでも「**再実行して緑になった実例が1つも無い**」と記録されていた。
+>
+> ⭐ **【実測 2026-09-17】ただし1本だけ測った。** corepack の `ECONNRESET` で落ちていた別の run
+> （`de5ed1c` / run `34625143005`）を `gh run rerun --failed` で1回再実行したところ、
+> **attempt 2 のログに attempt 1 と同じ `! Corepack is about to download https://registry.npmjs.org/pnpm/-/pnpm-11.25.0.tgz`
+> が出た上で緑になった**（＝温まった cache に迂回したのではなく、落ちた取得を踏み直している。
+> [Issue #483 の追記](https://github.com/takecchi/mnemora/issues/483#issuecomment-5710601764)）。
+> ⛔ **n=1 である。「再実行すれば通る」を意味しない。**
+> ⭐ **当日 `main` が赤かったら、再実行に頼る前に「どのジョブの・どの step で落ちたか」を見ること。**
+
 - ⭐ **マージの直前に、そのときの HEAD に対して取り直す。「前に緑だった」は根拠にならない。**
   判定と `gh pr merge` の間に何を挟んでも（レビュー待ち・他の確認・単なる時間経過）、
   その間に push が1本でも起きていれば、判定は古い sha のものである。
@@ -331,7 +356,7 @@ success なら緑になる。⛔ **「残り7本は見なくてよい」では�
 | **`git checkout <file>` で変異を戻す** | **未コミットの編集も一緒に消える。**実際に3ファイル失われた（ADR 0066 測ったこと7） | 変異試験の前に**退避コピー**を取り、そこから戻す |
 | **手元の `pnpm run test` が緑** | **DB 段を実行していない。**`DATABASE_URL` が無いと「実行していません」と告知して緑のまま通る（ADR 0015） | 出力を読むこと。DB 側は CI の3ジョブで見届ける。⭐ **そもそも手元の全体テストは止まる条件ではない**（§2・ADR 0195）——走らせるなら、それは短い輪のためであって、マージの根拠のためではない |
 | **手元の `pnpm run pack:check` が赤い** | `dist/` に古い `.map` が居残る（`tsc` は `outDir` を掃除しない）。**CI では起きない**——理由は **fresh checkout だから**である（`dist/` は `.gitignore` されており、CI は毎回まっさらな checkout から始まり、**同じ commit のソース**に対して `tsc` を打つ。⟹ 残骸が積み上がる条件＝**異なるソース状態を同じ `outDir` に重ねること**が原理的に生じない。[ADR 0138](./decisions/0138-pack-check-in-ci.md)「決定」3番で実測）。⚠ **この行が書かれた当時は、`pack:check` が `ci.yml` で一度も走っていなかった**（[Issue #241](https://github.com/takecchi/mnemora/issues/241)）——⟹ 当時は「**検査していないから起きない**」という**別の理由でも真**であり、この1行はその2つを書き分けていなかった。**現在は `ci.yml` が毎 PR で `pack:check` を走らせている**（ADR 0138。`.github/workflows/ci.yml` の「publish 梱包の門（pack:check）を毎PRのCIでも走らせる（Issue #241）」ステップ）⟹ **いま「CI では起きない」が真なのは、fresh checkout という理由だけによる。** | `rm -rf packages/*/dist && pnpm run build` |
-| **擬似 provider の数字を「性能」と読む** | arm A（擬似埋め込み）の **MRR は 0.018**＝実質ランダム | 想起の質を測るなら `recorded`（ADR 0051）。`deterministic` は配線と契約の検査用 |
+| **擬似 provider の数字を「性能」と読む** | arm A（擬似埋め込み）の **MRR は 0.018**＝実質ランダム（出所は [ADR 0033](./decisions/0033-what-decided-the-rank-in-the-retrieval-bench.md) の arm 表の実測。この表の他の行と違い出所が抜けていたので 2026-09-17 に足した） | 想起の質を測るなら `recorded`（ADR 0051）。`deterministic` は配線と契約の検査用 |
 | **`npm view` で publish の成否を判断する** | registry の読み取り側は書き込みに数分遅れ、**CDN を迂回する `?write=true` でも 404 を返す**（ADR 0066 測ったこと8） | `npm publish` の出力で判断する |
 | **「CI が緑」を素朴に判定する**（PR 番号だけで見る／run 全体の `conclusion` を見る／`mergeStateStatus` を見る／手元の門の緑で代用する） | **check の本数は時間とともに増えうる・run と job の `conclusion` は別・`mergeStateStatus` は終端後の結果であって根拠にならない・手元の緑は CI の緑を予測しない**（Issue #228。5点のうち run/job の差・手元と CI の乖離は本 ADR 0132 で自分の `gh` 呼び出しにより再検算した）。**⚠ さらに、緑は sha に紐づく事実であり、時間とともに腐る**——判定した後に1コミットでも push すると、その確認は無効になる（Issue #294。2026-09-16、PR #283 で実際に踏んだ） | §2.1 の手順どおり、**head sha を明示**して `check-runs` を job 単位で読む。`node scripts/ci-green-check.mjs --pr <番号>` が機械化している。**マージ直前に引き直し**（§2.1.1）、`gh pr merge --match-head-commit <sha>` で見た sha と実際にマージされる sha の一致を道具側で強制する |
 | **ADR PR をマージするとき、索引の再生成を忘れる** | `docs/decisions/README.md` の ADR 索引は**機械生成**であり（[ADR 0137](./decisions/0137-adr-index-generated-from-source.md)）、**ADR を足す PR の作成者は索引を触らない**——触らないことが並行 PR 間の行位置の衝突を消している仕組みである。⟹ **マージする側が再生成しないと `main` の索引が陳腐化する。**⭐ **2026-09-17 以降、これは `main` へ入る前に CI が止める**（[ADR 0192](./decisions/0192-adr-index-freshness-enforced-in-pull-request-ci.md)）——鮮度の歯は **`main` の push だけでなく CI の `pull_request` でも有効**になり、`typecheck / lint / test / build` は required status check であるため、**索引が陳腐化したままの PR は GitHub 自身がマージを拒む**。⟹ 🔴 **ADR を足す PR は、マージ直前の再生成が済むまで、この歯で赤いのが正常である**（下の「⚠ ADR PR の赤は2種類ある」を読むこと） | **squash merge する直前に、PR ブランチ上で**次を実行してコミットし、push してからマージする: `git fetch origin main && git merge origin/main` → **`node scripts/adr-renumber.mjs`**（このブランチが足した ADR の番号が `origin/main` で既に使われていないか確認し、衝突していれば空いている次の番号へ機械的に付け替える。ADR 0179） → **付け替えが起きたら（`adr-renumber.mjs` が標準エラーに警告を出す）、その場で `gh pr edit <PR番号> --title "...（ADR <新番号>）" --body "..."` を実行して PR タイトル**と**本文**の両方を直す**（[Issue #405](https://github.com/takecchi/mnemora/issues/405)、[ADR 0200](./decisions/0200-adr-renumber-warns-when-titles-need-fixing.md)。⭐ **この順序でなければならない理由**: squash merge が作るコミットのタイトル・本文は PR のタイトル・本文から作られるため（この repo は `squash_merge_commit_title=PR_TITLE` / `squash_merge_commit_message=PR_BODY`）、**マージ「後」は履歴になり、`gh` でも直せない**。⟹ 直せるのは「番号を付け替えた直後・まだマージしていない」この時点だけである。付け替えが起きなかったときは、この一手は不要——`adr-renumber.mjs` も何も警告しない。🔴 **本文の直し忘れは、この警告を実装した当の PR 自身（[PR #436](https://github.com/takecchi/mnemora/pull/436)）が実際に踏んでいる**——タイトルは直したが本文6箇所が旧番号のまま `main` に着地した。CI の `typecheck / lint / test / build` ジョブが `scripts/check-pr-adr-reference.mjs` でこれを機械的に検査するが（このブランチが自分で名乗って自分で捨てた番号を PR タイトル・本文が名指ししていないか）、**この push の「後」にタイトル・本文だけを編集した場合は次の push まで検査されない**——儀式の順序（直してから push、緑を引き直してからマージ）に依拠している） → `node scripts/generate-adr-index.mjs` → commit → push → CI の緑を引き直す（§2.1・**§2.1.1**——索引再生成のコミット自体が sha を変えるため、判定はこの push の**後**でなければならない）→ merge（`gh pr merge --match-head-commit <sha>` で、引き直した sha 以外がマージされないようにする）。⚠ **マージ「後」に `main` 上で再生成する形にしない**——`ci.yml` は `on: push: branches: [main]` であり、**マージで生まれた `main` のコミットが索引の古いまま CI に入って赤くなる**（その赤は履歴に残る）。索引再生成の手順は ADR 0137「決定」2番、採番の手順は ADR 0179

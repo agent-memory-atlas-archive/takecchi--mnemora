@@ -601,6 +601,22 @@ NOT NULL とし、全ての一意制約・索引の先頭列に置く**（[ADR 0
   フィルタ問題対処に必要なため。
 - **`>= 0.8.2` を推奨**とする（2026-02-26 リリース。CVE-2026-3172 のバッファオーバーフロー
   修正を含む）。
+  > **⚠ 2026-09-17 追記（名乗りの復元。上の行は書き換えていない）。**
+  > 上の1行は **同一文言が3箇所に在る**（この節 / [ADR 0002](./decisions/0002-embedding-space-tables.md) /
+  > [`docs/roadmap.md`](./roadmap.md) §4 の技術リスク表）が、**どこにも一次情報への出典が無かった。**
+  > **【実測 2026-09-17、`gh api repos/pgvector/pgvector/...` で上流を引いた】**:
+  > - ⭐ **「0.8.2 がバッファオーバーフローを直した」は裏が取れた。** 上流の `CHANGELOG.md` に
+  >   `## 0.8.2 (2026-02-25)` / **`Fixed buffer overflow with parallel HNSW index build`**
+  >   （[pgvector#959](https://github.com/pgvector/pgvector/issues/959)）と在る。
+  > - ⭐ **日付のずれは矛盾ではない。** tag `v0.8.2` は commit `cab9da72`、`2026-02-25T18:46:57Z`
+  >   ＝ **JST では 2026-02-26 03:46** なので、本文の「2026-02-26」は JST 読みと整合する。
+  > - ⛔ **`CVE-2026-3172` という番号だけは裏が取れていない。** 上流の `CHANGELOG.md` は CVE 番号を
+  >   1つも書いておらず、GitHub の advisory database をこの CVE ID で引いても該当0件だった。
+  >   ⚠ **「存在しない」とは言えない**（CVE データベースを直接当てていない）。**未確認である、と読むこと。**
+  > - ⚠ **`>= 0.8.2` という推奨の下限は、2026-09-17 時点では古い。** 上流の最新 tag は `v0.8.6` で、
+  >   `0.8.3 (2026-06-17)` が **`Fixed possible index corruption with HNSW vacuuming`** を直している。
+  >   ⛔ **この追記では下限の数字を書き換えない**（数字を直してもまた腐る）。**引くときに上流の
+  >   `CHANGELOG.md` を見ること。**
 - **確かめていないこと**: マネージド Postgres 各社（RDS / Cloud SQL / Supabase 等）が
   実際に提供している pgvector のバージョンは確認していない。導入環境ごとに
   `SELECT * FROM pg_available_extensions WHERE name = 'vector';` で確認すること。
