@@ -241,5 +241,6 @@ alteroid (github.com/takecchi/alteroid) を根拠として引く箇所は、確�
 | [0223](./0223-cross-cutting-disciplines-extracted-from-the-adr-corpus.md) | 繰り返し採られているのに入口の文書に書かれていない判断の規律を、ADR 211本の母集合から抽出した — 残ったのは10。最頻出は「採用済み ADR の本文を書き換えない」で 46/211 | 採用 (2026-09) |
 | [0224](./0224-quality-evaluation-and-acceptance-criteria.md) | 品質評価の証明範囲と合格基準の変更を、自律作業の条件にする | 採用 (2026-09) |
 | [0226](./0226-compare-provenance-reached-vs-information-retained.md) | `compare` の `factStatementSurvived` が測るのは出典到達だけである — 欄名は⭐門の契約として据え置き、意味の是正はコメント・表示・文書で行う（Issue #496） | 採用 (2026-09) |
+| [0227](./0227-fixed-retrieval-probe-gold-presence-gate.md) | 固定した probe ごとの gold 到達を、`example-chat` の必須 CI へ直接繋ぐ回帰ゲート（Issue #497） | 採用 (2026-09) |
 
 <!-- ADR-INDEX:GENERATED:END -->
