@@ -57,8 +57,8 @@ suite ごと・呼び出し元ごとに違う。**この文書が無いと、採
 
 | 呼び出し元 | 当たる実装 | CI で走るか |
 |---|---|---|
-| `packages/testkit/src/__tests__/in-memory-fixtures.conformance.test.ts:26/117/169/210/242/277` | in-memory の擬似物（`__fixtures__/in-memory-*.ts`） | **走る**（常時） |
-| `packages/postgres/src/__tests__/conformance.postgres.test.ts:32/95/110/156/189/215` | **本物の Postgres + pgvector** | **走る**（`DATABASE_URL` 必須。無いと fail する——擬似物へ黙って倒れない） |
+| `packages/testkit/src/__tests__/in-memory-fixtures.conformance.test.ts` の6つの `describe*Conformance({` 呼び出し（`describeMemoryStoreConformance` / `describeVectorStoreConformance` / `describeLexicalStoreConformance` / `describeEventStoreConformance` / `describeOutboxStoreConformance` / `describeTenantSettingsStoreConformance`） | in-memory の擬似物（`__fixtures__/in-memory-*.ts`） | **走る**（常時） |
+| `packages/postgres/src/__tests__/conformance.postgres.test.ts` の6つの `describe*Conformance({` 呼び出し（`describeMemoryStoreConformance` / `describeEventStoreConformance` / `describeVectorStoreConformance` / `describeLexicalStoreConformance` / `describeOutboxStoreConformance` / `describeTenantSettingsStoreConformance`） | **本物の Postgres + pgvector** | **走る**（`DATABASE_URL` 必須。無いと fail する——擬似物へ黙って倒れない） |
 
 ### 2.2 `EmbeddingProvider` suite — 呼び出し元は6箇所
 
@@ -66,7 +66,7 @@ suite ごと・呼び出し元ごとに違う。**この文書が無いと、採
 |---|---|---|---|
 | 1 | `packages/testkit/src/__tests__/embedding-provider-fixtures.conformance.test.ts:17` | `DeterministicEmbeddingProvider` | **走る** |
 | 2 | 同上 `:58` | `RecordedEmbeddingProvider`（**テスト内で合成したカセット**。実 API の記録ではない） | **走る** |
-| 3 | `packages/local-embedding/src/__tests__/local-embedding-provider.conformance.test.ts:113` | `LocalEmbeddingProvider` ＋ 注入した replay pipeline（`fixtures/real-ruri-embeddings.json` = **本物の推論を1回録ったもの**。重みは落とさない） | **走る** |
+| 3 | `packages/local-embedding/src/__tests__/local-embedding-provider.conformance.test.ts` の `describeEmbeddingProviderConformance({` | `LocalEmbeddingProvider` ＋ 注入した replay pipeline（`fixtures/real-ruri-embeddings.json` = **本物の推論を1回録ったもの**。重みは落とさない） | **走る** |
 | 4 | `packages/local-embedding/src/__tests__/live.local-embedding.test.ts:379` | **本物の `LocalEmbeddingProvider`**（実際に ONNX の重みを落としてプロセス内推論） | 🔴 **走らない** |
 | 5 | `packages/openai/src/__tests__/embedding-provider.conformance.test.ts:143` | `OpenAIEmbeddingProvider` ＋ 注入 client（`fixtures/recorded-openai-embeddings.json` の再生） | **走る** |
 | 6 | `packages/openai/src/__tests__/live.openai.test.ts:106` | **実 API** | 🔴 **走らない** |
@@ -172,9 +172,9 @@ ADR 0095 §7 が逐語でこう書いている:
 
 **補足**【現物】: `@huggingface/transformers` の実装は `config.json` の全フィールドを
 実行時にそのまま載せるが（`src/configs.js`）、**「実際に渡した repo 引数」を
-明示的に設定してはいない。**そして `packages/local-embedding/src/pipeline.ts:72-75` の
+明示的に設定してはいない。**そして `packages/local-embedding/src/pipeline.ts` の
 `LocalEmbeddingExtractor` interface は `.model` を**意図的に含めていない**
-（`@huggingface/transformers` の型を公開の型に出さないため。同ファイル `:51-53`）。
+（`@huggingface/transformers` の型を公開の型に出さないため。同ファイルの `LocalEmbeddingTokenizer` の doc コメント、逐語「**`@huggingface/transformers` の型をそのまま公開の型に出さない**」）。
 ⟹ **ライブラリ層には手段が在るが、このパッケージの抽象境界がそれを捨てている。**
 
 ### ⭐ 「強い版」の材料は、既に揃っている

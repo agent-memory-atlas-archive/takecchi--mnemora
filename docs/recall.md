@@ -967,7 +967,7 @@ Issue #200 は**2つの読み方**を挙げていた。
 
 - **既定 off である限り、物差しは動かない。**呼び手が明示しなければ何も変わらない。
 - 🔴 **そして、この一行に依存しているものが別の文書に在る。**[docs/roadmap.md](./roadmap.md) §7.4 の正典項目4「使われない記憶が、静かに遠ざかる」の判定**「在る」は、`association` が既定 off であることに依存している**（同§の ⚠3、[Issue #402](https://github.com/takecchi/mnemora/issues/402)）。
-  段3.5 は**意図的にスコア閾値の外**に在る——`partitionByThreshold` の呼び出しは `recall-runtime.ts:805` の1箇所だけで対象は段1の候補のみであり、**段3.5 はその後に走る**（[ADR 0172](./decisions/0172-association-passes-decay-and-validity-gates.md)「段3.5 の候補は段2の閾値分割を通らない」がこの非対称を逐語で自認している）。
+  段3.5 は**意図的にスコア閾値の外**に在る——`partitionByThreshold` の呼び出しは `recall-runtime.ts` の1箇所だけで対象は段1の候補のみであり、**段3.5 はその後に走る**（[ADR 0172](./decisions/0172-association-passes-decay-and-validity-gates.md)「段3.5 の候補は段2の閾値分割を通らない」がこの非対称を逐語で自認している）。
   ⟹ **段2が `below_threshold` で棄却した記憶が、連想枠 on では `retrievedVia: 'association'` で返る** 【実測 2026-09-17: 窓は「その記憶が段2から落ちた日 → 129.658日」。合成コーパス217件では**連想枠 on の返却の 47.5% が窓の中の記憶**だった】。
   ⛔ **⟹ 既定を on にするときは、物差しが動くかだけでなく、正典項目4 の判定が崩れないかも見ること。**⭐ **忘却ゲートの側は破れていない**——#348（ADR 0172）が段3.5 にも通しており、実測でも 140日では off / on どちらでも返らない。**破れるのは順位の側だけである。**
 - **`examples/chat` の `compare` ベンチは、連想枠の便益を測れない**
