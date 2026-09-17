@@ -6,6 +6,14 @@ ADR (Architecture Decision Record) として記録する。`docs/architecture.md
 ここでは各決定について、検討した選択肢・却下した理由・引き受ける負債・覆る条件までを
 1ファイルにまとめる。**決定そのものをやり直す場ではなく、決定を記録する場である。**
 
+**⛔ 採用済み ADR の本文は書き換えない。訂正が要るなら、その場に追記する。**
+**理由は上の1文である**——ここは記録の場であり、**間違え方それ自体が記録だからである。**
+本文を直すと「何をどう判断して外したか」が消え、**訂正を積んだ経緯も追えなくなる。**
+（**この作法は実際に繰り返し採られている**——根拠と反例は
+[ADR 0223](./0223-cross-cutting-disciplines-extracted-from-the-adr-corpus.md) 決定1。
+⚠ **まだ採用されていない初稿はこの限りではない。**そして
+**`docs/north-star.md` は別の規律で守られている**——`AGENTS.md` を見ること。）
+
 alteroid (github.com/takecchi/alteroid) を根拠として引く箇所は、確認済み/未確認を分けた
 一次調査の記録である [docs/alteroid-findings.md](../alteroid-findings.md) を参照する。
 
