@@ -12,11 +12,48 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          # 下の「PR タイトル/本文が付け替え後の古い ADR 番号を名指ししていないか」の
+          # 検査に origin/main との差分・ログが要る。既定の shallow checkout では
+          # origin/main..HEAD が引けない。
+          fetch-depth: 0
 
       - name: Setup Node.js
         uses: actions/setup-node@v6
         with:
           node-version: "22"
+
+      - name: "PR タイトル/本文が、このブランチが自分で名乗って自分で捨てた ADR 番号を名指ししていないか（Issue #405 の後始末・本文側）"
+        # `adr-renumber.mjs`（ADR 0179）はマージ直前に ADR 番号の衝突をファイル名・
+        # 参照ともに機械的に解消するが、PR タイトル・本文（GitHub 側の状態）は
+        # 書き換えられない。この repo は squash_merge_commit_title=PR_TITLE /
+        # squash_merge_commit_message=PR_BODY のため、直し忘れた古い番号はそのまま
+        # squash commit のタイトル・本文として main の履歴に永久に残る
+        # （実測: 0e287eb・aacb982e の2件。詳細は本 PR が足した ADR を見ること）。
+        #
+        # 判定は scripts/check-pr-adr-reference-lib.mjs の純関数が持ち、CLI 入口
+        # scripts/check-pr-adr-reference.mjs が git から「このブランチが名乗った
+        # 番号」「いま追加している番号」を集めて渡す。
+        #
+        # ⛔ このジョブは required check の文字列（`typecheck / lint / test / build`）
+        # そのものなので、新しいジョブにせず既存ジョブへステップを足す
+        # （下の pack:check ステップのコメントと同じ論拠）。
+        #
+        # `PR_TITLE` / `PR_BODY` は利用者が書く自由記述の文字列なので `${{ }}` の
+        # 直接展開ではなく `env:` 経由で渡す（`scripts/decide-publish-dry-run.mjs` /
+        # `publish.yml` の `dry_run` と同じ理由——shell への注入面を減らす）。
+        #
+        # `origin/main` を明示的に fetch し直す——`.github/workflows/publish.yml` の
+        # 「Release の tag が main の履歴上に在ることを確かめる」ステップと同じ形
+        # （fetch-depth: 0 だけでは、実行環境によっては origin/main という ref 名が
+        # 解決できるとは限らないため、念のため明示する）。
+        if: github.event_name == 'pull_request'
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          git fetch origin main
+          node scripts/check-pr-adr-reference.mjs
 
       - name: Enable corepack
         run: corepack enable

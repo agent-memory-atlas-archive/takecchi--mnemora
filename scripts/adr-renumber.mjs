@@ -44,14 +44,21 @@
  * 選べば衝突しうる。確定させるのは、マージ直前に実行するこのツールの既定動作
  * （引数無し）のほうである。
  *
- * ## 付け替えたときの警告（Issue #405）
+ * ## 付け替えたときの警告（Issue #405。本文についても対象を広げた経緯は
+ * [ADR 0211](../docs/decisions/0211-check-pr-adr-reference-catches-abandoned-numbers-in-title-and-body.md) を見ること）
  *
  * 引数無しの既定動作が**実際に番号を付け替えたとき**（衝突が1件以上あったとき）
- * だけ、標準エラーへ警告を出す——「PR タイトルと squash commit のタイトルは
- * 機械が直せない。`gh pr edit <番号> --title ...` で直すこと」という趣旨。
- * ⛔ **この道具自身は `gh` を呼ばない**——出力で促すだけである。付け替えが
- * 起きなかったとき（衝突なし・追加された ADR が無い）は何も出さない
- * （毎回出ると読み飛ばされるため）。
+ * だけ、標準エラーへ警告を出す——「PR タイトルと PR 本文——squash commit の
+ * タイトルと本文の両方——は機械が直せない。`gh pr edit <番号> --title ... --body ...`
+ * で直すこと」という趣旨。⛔ **この道具自身は `gh` を呼ばない**——出力で促すだけ
+ * である。付け替えが起きなかったとき（衝突なし・追加された ADR が無い）は何も
+ * 出さない（毎回出ると読み飛ばされるため）。
+ *
+ * 本文の直し忘れは `scripts/check-pr-adr-reference.mjs` が CI で機械的に検査する
+ * （このブランチが自分で名乗って自分で捨てた番号を、PR タイトル・本文が名指しして
+ * いないかを見る）。ただしそれも「最後の push の後にタイトル・本文だけを編集した」
+ * 場合までは捕捉できない——この警告はその手前（付け替え直後・push 前）で人に
+ * 気づかせるための、独立した一手である。
  */
 import { readFileSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
@@ -63,7 +70,7 @@ import {
   parseAdrFilename,
   pickNextFreeNumber,
   planRenumbering,
-  renumberedTitleWarning,
+  renumberedReferenceWarning,
   rewriteReferencesInText,
 } from "./adr-renumber-lib.mjs";
 
@@ -342,9 +349,9 @@ function performRenumber() {
     `完了。${conflicts.length} 本の ADR を付け替え、${touchedFiles} ファイルの参照を書き換えました。`,
   );
 
-  // 付け替えが実際に起きたときだけ警告する（Issue #405）——PR タイトルと
-  // squash commit のタイトルは、ここまでの `git mv` / 行の書き換えでは直らない。
-  const warning = renumberedTitleWarning(conflicts);
+  // 付け替えが実際に起きたときだけ警告する（Issue #405）——PR タイトル・本文と
+  // squash commit のタイトル・本文は、ここまでの `git mv` / 行の書き換えでは直らない。
+  const warning = renumberedReferenceWarning(conflicts);
   if (warning) {
     console.error(warning);
   }

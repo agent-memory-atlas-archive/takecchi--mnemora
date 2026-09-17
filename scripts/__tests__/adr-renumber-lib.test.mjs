@@ -4,7 +4,7 @@ import {
   parseAdrFilename,
   pickNextFreeNumber,
   planRenumbering,
-  renumberedTitleWarning,
+  renumberedReferenceWarning,
   rewriteReferencesInText,
 } from "../adr-renumber-lib.mjs";
 
@@ -216,27 +216,29 @@ describe("addedLineNumbers — origin/main から継承した行を巻き込ま�
   });
 });
 
-describe("renumberedTitleWarning — 付け替えたときだけ PR タイトルの警告を出す（Issue #405）", () => {
+describe("renumberedReferenceWarning — 付け替えたときだけ PR タイトル・本文の警告を出す（Issue #405、本文への拡張はこの PR）", () => {
   it("付け替えが無い（空配列）なら null——毎回出ると読み飛ばされるため出さない", () => {
-    expect(renumberedTitleWarning([])).toBeNull();
+    expect(renumberedReferenceWarning([])).toBeNull();
   });
 
   it("undefined/null を渡しても null（呼び出し側の防御）", () => {
-    expect(renumberedTitleWarning(undefined)).toBeNull();
-    expect(renumberedTitleWarning(null)).toBeNull();
+    expect(renumberedReferenceWarning(undefined)).toBeNull();
+    expect(renumberedReferenceWarning(null)).toBeNull();
   });
 
-  it("1件付け替えたら、旧番号->新番号と gh pr edit の使い方を含む警告を返す", () => {
-    const warning = renumberedTitleWarning([{ oldNumber: "0192", newNumber: "0193" }]);
+  it("1件付け替えたら、旧番号->新番号と gh pr edit の使い方（タイトルと本文の両方）を含む警告を返す", () => {
+    const warning = renumberedReferenceWarning([{ oldNumber: "0192", newNumber: "0193" }]);
     expect(warning).not.toBeNull();
     expect(warning).toContain("ADR 0192 -> ADR 0193");
     expect(warning).toContain("PR タイトル");
+    expect(warning).toContain("本文");
     expect(warning).toContain("squash commit");
     expect(warning).toContain("gh pr edit <PR番号> --title");
+    expect(warning).toContain("--body");
   });
 
   it("複数件付け替えたら、両方の旧番号->新番号を列挙する", () => {
-    const warning = renumberedTitleWarning([
+    const warning = renumberedReferenceWarning([
       { oldNumber: "0173", newNumber: "0174" },
       { oldNumber: "0173", newNumber: "0175" },
     ]);
@@ -247,7 +249,12 @@ describe("renumberedTitleWarning — 付け替えたときだけ PR タイトル
   it("⛔ gh を呼べという指示は含むが、この関数自身は gh を実行しない（文字列を返すだけ）", () => {
     // 純関数であることの確認——副作用が無いことは型シグネチャからも自明だが、
     // 「文字列を組み立てるだけ」であることをここでも明示する。
-    const warning = renumberedTitleWarning([{ oldNumber: "0001", newNumber: "0002" }]);
+    const warning = renumberedReferenceWarning([{ oldNumber: "0001", newNumber: "0002" }]);
     expect(typeof warning).toBe("string");
+  });
+
+  it("scripts/check-pr-adr-reference.mjs が CI で本文も検査することを警告文が指す", () => {
+    const warning = renumberedReferenceWarning([{ oldNumber: "0199", newNumber: "0200" }]);
+    expect(warning).toContain("check-pr-adr-reference.mjs");
   });
 });

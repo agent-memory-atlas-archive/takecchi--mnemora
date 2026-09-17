@@ -225,25 +225,42 @@ export function rewriteReferencesInText(text, renames) {
  * 毎回出ると読み飛ばされる。呼び出し側は `null` のとき何も出力しないこと。
  *
  * この警告が要る理由: `adr-renumber.mjs` はファイル名・見出し・このブランチが
- * 追加した行の中の参照を書き換えるが、**PR タイトルと、squash merge が生成する
- * コミットのタイトルだけは書き換えられない**（GitHub 側の状態であり、この
- * リポジトリ内のファイルではないため）。⟹ 付け替えが起きたら、
- * **マージする側が `gh pr edit <PR番号> --title ...` で PR タイトルを直す
+ * 追加した行の中の参照を書き換えるが、**PR タイトルと PR 本文——squash merge が
+ * 生成するコミットのタイトルと本文の両方——だけは書き換えられない**（GitHub 側の
+ * 状態であり、このリポジトリ内のファイルではないため）。このリポジトリは
+ * `squash_merge_commit_title=PR_TITLE` / `squash_merge_commit_message=PR_BODY`
+ * （`gh api repos/takecchi/mnemora` で確認済み）なので、**タイトルだけでなく本文も**
+ * そのまま `main` の履歴に永久に残る。⟹ 付け替えが起きたら、**マージする側が
+ * `gh pr edit <PR番号> --title ... --body ...` で PR タイトルと本文の両方を直す
  * 必要がある**——`docs/autonomy.md` §4 が「マージ前でなければならない」と
- * 説明している理由と同じで、squash commit のタイトルは PR タイトルから
- * 作られるため、マージ後は履歴になって直せない。
+ * 説明している理由と同じで、squash commit のタイトル・本文は PR のタイトル・本文
+ * から作られるため、マージ後は履歴になって直せない。
+ *
+ * ⚠ **この関数自身は「タイトルを直せ」としか言っていなかった**（[ADR
+ * 0200](../docs/decisions/0200-adr-renumber-warns-when-titles-need-fixing.md) の時点）。
+ * 本文の直し忘れは、その警告を実装した当の PR（[PR
+ * #436](https://github.com/takecchi/mnemora/pull/436)、`aacb982e`）自身が
+ * 実際に踏んでいる——タイトルは正しく直したが、本文中の6箇所は旧番号のまま
+ * `main` に着地した。この関数はその実例を受けて、本文についても同じ強さで警告する
+ * ように直した。機械的な検査（読み飛ばされない門）は
+ * `scripts/check-pr-adr-reference.mjs` が CI で持つ——ただしそれも
+ * 「最後の push の後にタイトル・本文だけを編集した」場合までは捕捉できない
+ * （同スクリプトの docstring 参照）。
  *
  * @param {{ oldNumber: string, newNumber: string }[]} renames 実際に付け替えた
  *   ADR の一覧（`planRenumbering` が返す配列のうち `renamed: true` のもの）
  * @returns {string | null}
  */
-export function renumberedTitleWarning(renames) {
+export function renumberedReferenceWarning(renames) {
   if (!renames || renames.length === 0) return null;
   const mappings = renames.map((r) => `ADR ${r.oldNumber} -> ADR ${r.newNumber}`).join(", ");
   return [
     `⚠ ADR 番号を付け替えました（${mappings}）。`,
-    "PR タイトルと squash commit のタイトルは機械が直せません。",
-    'マージ前に次を実行して直すこと: gh pr edit <PR番号> --title "...（ADR <新番号>）"',
+    "PR タイトルと本文——squash commit のタイトルと本文の両方——は機械が直せません" +
+      "（このリポジトリは squash_merge_commit_title=PR_TITLE / squash_merge_commit_message=PR_BODY）。",
+    'マージ前に次を実行して両方直すこと: gh pr edit <PR番号> --title "...（ADR <新番号>）" --body "..."',
+    "本文が旧番号を名指ししたまま残っていないかは scripts/check-pr-adr-reference.mjs が CI で検査します" +
+      "（ただしこの push の後にタイトル・本文だけを編集した場合は、次に push するまで検査されません）。",
   ].join("\n");
 }
 
