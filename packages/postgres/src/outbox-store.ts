@@ -35,6 +35,16 @@ import { isUuidLike, rowToOutboxJob, type OutboxJobRow } from "./mapping.js";
  *
  * ⚠ **`SKIP LOCKED` が実際に詰まりを減らすことは測っていない。** 上が見ているのは正しさ側
  * だけであり、「詰まらないこと」は機構からの推論である。
+ *
+ * 🔴 **上の ⚠ は ADR 0208 が埋めた。** `outbox-skip-locked-non-blocking.postgres.test.ts`
+ * が、`claimBatch` を直接呼んで「詰まらないこと」を肯定側で検査する
+ * ——外部トランザクションが唯一の候補行の行ロックを保持したまま、`lock_timeout=100ms`
+ * を積んだ専用クライアントで撃ち、例外を投げずに0件で解決することを見る。
+ * `SKIP LOCKED` を外すとこの歯は `55P03`（canceling statement due to lock timeout）
+ * で赤くなる（変異試験は ADR 0208「測ったこと」参照）。
+ * ⚠ ただし、この歯が測っているのは「ロックが在るときにブロックせず抜けられるか」という
+ * *機構*であって、**実運用の throughput（単位時間あたりに何件捌けるか）そのものは、
+ * この歯も含めていまだ測っていない。**
  * ⚠ **接続を温めていない `pg.Pool` に対しては、`FOR UPDATE SKIP LOCKED` を丸ごと削っても
  * 二重 claim が再現しない**【実測、同日】——遅延接続のため `Promise.all` の各呼び出しが接続
  * 確立でずれ、競争の窓が閉じる。⟹ **この振る舞いを検査する歯を書くときは、先に
