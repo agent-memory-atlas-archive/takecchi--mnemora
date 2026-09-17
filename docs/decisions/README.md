@@ -205,6 +205,7 @@ alteroid (github.com/takecchi/alteroid) を根拠として引く箇所は、確�
 | [0195](./0195-six-gates-verified-in-ci.md) | 6つの門の緑は CI で確かめる——手元で全体を走らせることを止まる条件にしない（Issue #407） | 採用 (2026-09) |
 | [0196](./0196-locale-c-is-encoding-agnostic.md) | `--locale=C` はどの encoding とも両立する — 表の誤りを実測で正し、`ANY_ENCODING` を入れる（Issue #395） | 採用 (2026-09) |
 | [0197](./0197-set-default-half-life-recalls.md) | `TenantSettingsStore` に `setDefaultHalfLifeRecalls` を本番の経路として足す | 採用 (2026-09) |
+| [0198](./0198-llm-provider-call-failure-tooth.md) | `LLMProvider` が逐語で約束していて一度も測られていなかった1行に、歯を置く — 適合 suite の設計判断には踏み込まない（Issue #389） | 採用 (2026-09) |
 | [0199](./0199-identifier-probes-readme-freshness-tooth.md) | `examples/chat/README.md` の `identifier-probes` 節と基準値 JSON の一致を、既存 vitest に相乗りする歯で見張る | 採用 (2026-09) |
 | [0200](./0200-adr-renumber-warns-when-titles-need-fixing.md) | `adr-renumber.mjs` は付け替えたときに PR タイトルの修正を促す警告を出す — 道具は `gh` を叩かない（Issue #405） | 採用 (2026-09) |
 | [0201](./0201-recall-footprint-char-margin-canary.md) | `recall-footprint` の許容誤差の余白を字数で見る歯を足す — hold-out 5行に限定し、閾値は較正係数から導く（Issue #410） | 採用 (2026-09) |

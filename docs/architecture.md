@@ -227,10 +227,18 @@ interface StructuredRequest<T> {
 }
 
 interface LLMProvider {
-  complete(req: PromptSpec): Promise<LLMResponse>;
-  completeStructured<T>(req: StructuredRequest<T>): Promise<T>;
+  complete(ctx: Ctx, req: PromptSpec): Promise<LLMResponse>;
+  completeStructured<T>(ctx: Ctx, req: StructuredRequest<T>): Promise<T>;
 }
 ```
+
+**⚠ ここに載っているのは §5.4 と同じ1つの interface である**（`packages/core/src/interfaces/llm-provider.ts`）。
+**2箇所に書いてあるが、別物ではない。**この節が見せているのは「ベンダー固有の型が
+core に現れないこと」だけで、**契約の本体（例外を投げる・リトライを内蔵しない）は
+§5.4 にしか書いていない。**⟹ **契約を引くときは §5.4 を見ること。**
+
+⚠ **2026-09-17 まで、この節の署名だけ `ctx` が落ちていた**（Issue #389 / [ADR 0198](./decisions/0198-llm-provider-call-failure-tooth.md)）。
+§5.4 と現物は当時から `complete(ctx, req)` であり、**ずれていたのはこの節のほうである。**
 
 `packages/openai` と `packages/anthropic` はそれぞれ `LLMProvider` を実装し、内部で zod スキーマを
 各社の Structured Output 形式（OpenAI の `response_format: json_schema`、Anthropic の
