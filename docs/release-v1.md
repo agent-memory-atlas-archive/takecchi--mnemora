@@ -462,7 +462,7 @@ git ls-tree --name-only origin/main docs/ | grep release-notes
 2. **GitHub の Release を「published」にする**
 3. **`.github/workflows/publish.yml` が走る**
 
-**⚠ 段1と段2は同時に1つの操作でもよい。**GitHub の Release 作成 UI で新しい tag 名を
+**⚠ 段階1と段階2は同時に1つの操作でもよい。**GitHub の Release 作成 UI で新しい tag 名を
 入力すると、Release の公開と同時に tag も作られる
 （`.github/workflows/publish.yml:13-14` のコメントに明記。【読んで確かめた】）。
 
@@ -473,26 +473,46 @@ git ls-tree --name-only origin/main docs/ | grep release-notes
 同じ版で2本走ってしまう。【読んで確かめた】）。**⟹ Release を作ることが「npm へ出してよい」の
 表明であり、その表明がリリースノートと一緒に GitHub 上に残る**（`publish.yml:9-11`）。
 
-### 1.2 段3（`publish.yml`）の各ステップと、どこを見れば成否が分かるか
+### 1.2 段階3（`publish.yml`）の各ステップと、どこを見れば成否が分かるか
 
 **見る場所**: GitHub の Actions タブ → ワークフロー名 `Publish` → job
 `npm publish（Trusted Publishing / OIDC）`（`publish.yml:38-39`。【読んで確かめた】）。
 
-| # | ステップ名（現物） | 何をするか | 成否の見方 |
-|---|---|---|---|
-| 1 | Checkout | tag の指す commit を全履歴付きで取得 | 失敗はまれ。赤ならネットワーク系 |
-| 2 | Setup Node.js | Node 22 をセットアップし `~/.npmrc` に `registry.npmjs.org` を設定 | 同上 |
-| 3 | Update npm CLI | `npm install -g npm@latest` | §4.3 で詳述 |
-| 4 | Enable corepack | `corepack enable` | まれに失敗 |
-| 5 | Install dependencies | `pnpm install --frozen-lockfile` | lockfile とpackage.jsonの不一致で失敗しうる |
-| 6 | Release の tag が main の履歴上に在ることを確かめる（`release` イベントのみ） | tag の commit が `origin/main` の祖先であることを検査 | 赤くなったら「main を通っていない commit から Release を作った」ことを疑う（`publish.yml:76-102`） |
-| 7 | Release の tag の版を package.json へ書き込む（`release` イベントのみ） | `apply-release-version.mjs` が版を決めて書き込む（下の1.3節で詳述） | tag が semver でないと赤くなる |
-| 7' | 予行のときは package.json の版をそのまま使う（`workflow_dispatch` のみ） | `packages/core/package.json` の版をそのまま読む | — |
-| 8 | Typecheck / Lint / Format / Test / Build | 非DBの門を全部通す（`typecheck`/`lint`/`format:check`/`test`/`build`） | **ここで失敗すれば、まだ1パッケージも publish されていない**（§3.4 で重要） |
-| 9 | publish 梱包の門 | `pnpm run pack:check`（tarball の中身を検査。§2.3） | 同上。まだ publish 段の前 |
-| 10 | pnpm pack | 6パッケージを `pnpm pack` し、`--expect-version` で版のずれを検査 | tag の版と package.json の版がずれていると赤くなる（通常は7で揃えているので起きないはず） |
-| 11 | 予行か本番かを決める | `decide-publish-dry-run.mjs` が `dry_run` 出力を決める（§2.1） | — |
-| 12 | **npm publish（依存の向きの順に、tarball を上げる）** | 6パッケージを順に `npm publish` する。**ここが実際に registry へ書き込む唯一のステップ** | ログに `::group::npm publish <name>@<version>` が6回出るはず（`publish.yml:225`）。**各グループの中身を1つずつ見ること**（§3で詳述） |
+#### ⚠ 段の番号は2系統ある。呼び分けを決めてある
+
+**2026-09-17 時点で、この文書には段の番号が2系統同居している。**どちらも正しい——
+片方は Actions の画面に出る番号、もう片方はこの文書が独自に振った番号である。
+⛔ **どちらも消さない。**次のように呼び分ける:
+
+| 書き方 | 何の番号か | 誰が使っているか |
+|---|---|---|
+| **「段N」** | **Actions の画面に出る段番号**（⭐ **正典**） | **当日、画面を見ながら段を探すときはこれ。**§2.2 の追記と [ADR 0207](./decisions/0207-dry-run-reads-existence-and-coverage-degrades-silently.md) もこれを使っている |
+| 「N番ステップ」「N番目のステップ」「上表のN」 | **下の表の `#` 列**（この文書が独自に振った番号） | §2.1・§3.1・§3.2・§3.4 の既存の記述が指している先 |
+| 「段階N」 | **§1.1 の三段階**（tag を切る / Release を published にする / `publish.yml` が走る） | ⚠ 上の2つとは別物。この節の見出しの「段階3」もこれ |
+
+**⭐ 正典を Actions の画面の番号にした理由**: この節の「見る場所」が示すとおり、
+**当日この表を引く人は Actions の画面を開いている。**画面に出ていない番号で段を探させない。
+
+**2つの番号は1つずれる**——Actions は workflow に書かれていない `Set up job` を
+**段1**として数えるためである。下の表の「Actions の画面」列は実測から取った
+【実測。2026-09-17、`gh api repos/takecchi/mnemora/actions/jobs/<job_id>` の
+`steps[].number` を予行の run で引いた】。
+
+| # | Actions の画面 | ステップ名（現物） | 何をするか | 成否の見方 |
+|---|---|---|---|---|
+| 1 | 2 | Checkout | tag の指す commit を全履歴付きで取得 | 失敗はまれ。赤ならネットワーク系 |
+| 2 | 3 | Setup Node.js | Node 22 をセットアップし `~/.npmrc` に `registry.npmjs.org` を設定 | 同上 |
+| 3 | 4 | Update npm CLI | `npm install -g npm@latest` | §4.3 で詳述 |
+| 4 | 5 | Enable corepack | `corepack enable` | まれに失敗 |
+| 5 | 6 | Install dependencies | `pnpm install --frozen-lockfile` | lockfile とpackage.jsonの不一致で失敗しうる |
+| 6 | 7 | Release の tag が main の履歴上に在ることを確かめる（`release` イベントのみ） | tag の commit が `origin/main` の祖先であることを検査 | 赤くなったら「main を通っていない commit から Release を作った」ことを疑う（`publish.yml:76-102`） |
+| 7 | 8 | Release の tag の版を package.json へ書き込む（`release` イベントのみ） | `apply-release-version.mjs` が版を決めて書き込む（下の1.3節で詳述） | tag が semver でないと赤くなる |
+| 7' | 9 | 予行のときは package.json の版をそのまま使う（`workflow_dispatch` のみ） | `packages/core/package.json` の版をそのまま読む | — |
+| 8 | 10 | Typecheck / Lint / Format / Test / Build | 非DBの門を全部通す（`typecheck`/`lint`/`format:check`/`test`/`build`） | **ここで失敗すれば、まだ1パッケージも publish されていない**（§3.4 で重要） |
+| 9 | 11 | publish 梱包の門 | `pnpm run pack:check`（tarball の中身を検査。§2.3） | 同上。まだ publish 段の前 |
+| 10 | 12 | pnpm pack | 6パッケージを `pnpm pack` し、`--expect-version` で版のずれを検査 | tag の版と package.json の版がずれていると赤くなる（通常は7で揃えているので起きないはず） |
+| 11 | 13 | 予行か本番かを決める | `decide-publish-dry-run.mjs` が `dry_run` 出力を決める（§2.1） | — |
+| 12 | 14 | **npm publish（依存の向きの順に、tarball を上げる）** | 6パッケージを順に `npm publish` する。**ここが実際に registry へ書き込む唯一のステップ** | ログに `::group::npm publish <name>@<version>` が6回出るはず（`publish.yml:225`）。**各グループの中身を1つずつ見ること**（§3で詳述） |
 
 （【読んで確かめた】`.github/workflows/publish.yml` 全文、行番号は上表内に記載）
 
@@ -1575,9 +1595,10 @@ provenance が付いているか / 押したのが OIDC（`publish.yml`）か。
 
 **(A) `版=無い` が出たとき**
 
-1. **先に Actions のログを見る。**段12（`npm publish`）の `::group::` を**1本ずつ**開く
-   （§1.2 の表）。⛔ **判断材料は `npm publish` 自身の出力が優先で、`npm view` は後である**
-   （§3.1 の戒め）。
+1. **先に Actions のログを見る。**段14（`npm publish`）の `::group::` を**1本ずつ**開く
+   （⚠ §1.2 の表では **12** 番。画面に出る番号のほうが正典である——呼び分けは
+   §1.2 の冒頭）。⛔ **判断材料は `npm publish` 自身の出力が優先で、`npm view` は後で
+   ある**（§3.1 の戒め）。
 2. ログの末尾が `✗ … の publish が失敗した` なら、**partial publish が再発している。**
    ⟹ **同じ tag のまま Actions で Re-run する。**既に上がった分は `E403` を
    「上がっていた」として飲み込んで飛ばされ、残りだけが同じ版で publish される
