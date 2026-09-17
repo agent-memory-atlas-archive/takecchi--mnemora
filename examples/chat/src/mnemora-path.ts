@@ -48,7 +48,7 @@ export function externalIdForTurn(index: number): string {
  *
  * `buildConversation` は事実表明を必ず先頭（index 0）に置く（`scenario.ts`）。
  * **その前提をここで1箇所に閉じ込める**——`compare.ts` が系譜を辿って
- * 「冒頭の事実が残ったか」を判定するのに使う（ADR 0052）。
+ * 「冒頭の事実の出典に到達したか」を判定するのに使う（ADR 0052）。
  */
 export function factStatementExternalId(): string {
   return externalIdForTurn(0);

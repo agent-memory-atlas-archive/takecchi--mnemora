@@ -13,18 +13,21 @@ import { factStatementExternalId, reportMemoryUsage, runMnemoraPath } from "./mn
 import { resultContainsObservation } from "./provenance-trace.js";
 
 /**
- * `recall().memories` の中に、冒頭の事実表明が残っているかを判定する。
+ * `recall().memories` の中に、冒頭の事実表明の**出典に到達しているか**を判定する
+ * （経緯: 当初は `digest.includes("青")` という文字列一致だったが、本物の LLM の要約・
+ * 言い換えに耐えないため ADR 0052 で系譜追跡へ置き換えた）。
  *
- * ⚠ **かつてここは `digest.includes("青")` という文字列一致だった**（ADR 0052 で置き換えた）。
- * その判定は `@mnemora/testkit` の擬似 LLM が「digest ＝ 発話の本文そのもの」を作ることに
- * 依存しており、**本物の LLM では成立しない**——digest は要約・言い換えされるので、
- * 「青」という語を使わずに要約されれば偽陰性、無関係な記憶がその語を含めば偽陽性になる。
- * その限界は当時のコメントにも書かれていたが、**限界を書いたまま使い続けていた。**
+ * 🔴 **`sourceObservationId` を辿って `externalId` で照合するだけであり
+ * （`./provenance-trace.js`）、digest の中身は一切見ない。** ⟹ 要約で答えの情報が
+ * 失われていても、出典が同じなら true になる——**情報が残ったこと・全文なしで
+ * 答えられたことの証明ではない**（`docs/autonomy.md` §2.2 の2番、ADR 0226）。
  *
- * ⟹ **`sourceObservationId` を辿って `externalId` で照合する**（`./provenance-trace.js`）。
- * digest の中身を一切見ないため、擬似・記録の再生・実 API のどれでも同じ意味になる。
+ * ⚠ **この関数名・返り値は `ComparisonRow.factStatementSurvived` として公開 JSON へ
+ * そのまま写る（⭐門、ADR 0133）。関数名（呼び出し側にしか見えないローカル名）は
+ * 出典到達と分かる名前に変えたが、JSON のキー名は変えていない**——理由は
+ * `ComparisonRow.factStatementSurvived` の docstring を見ること。
  */
-async function factStatementSurvived(
+async function factStatementSourceReached(
   memoryStore: MemoryStore,
   ctx: Ctx,
   memories: readonly { memoryId: string }[],
@@ -85,9 +88,26 @@ export interface ComparisonRow {
    */
   annCandidateCount: number;
   /**
-   * 冒頭の事実表明（`FACT_STATEMENT`）が `recall().memories` に残っているか。
-   * 判定方法とその限界は `factStatementSurvived` のコメントを見ること——
-   * **このシナリオと擬似 provider に固有の近似判定であり、一般的な判定ではない。**
+   * 冒頭の事実表明（`FACT_STATEMENT`）の出典（`sourceObservationId` → `externalId`）に、
+   * `recall().memories` が到達しているか。判定方法は `factStatementSourceReached`
+   * （このファイル）を見ること。
+   *
+   * 🔴 **測っているのは出典への到達だけである。情報保持・最終回答の正誤は測っていない**
+   * （`docs/autonomy.md` §2.2 の2番、ADR 0226）。要約で答えの情報が失われていても、
+   * 出典が同じなら true になる。
+   *
+   * ⚠ **かつてここには「このシナリオと擬似 provider に固有の近似判定であり、一般的な
+   * 判定ではない」と書かれていたが、これは陳腐化していた**——`resultContainsObservation`
+   * は provider が擬似か本物かに依らず同じ意味になる（`provenance-trace.ts`）。`compare`
+   * は ADR 0133 により `recorded`（記録した実 API 応答の再生）で走り、「擬似だから
+   * 質を主張しない」という理由自体を ADR 0146 が「正解集合を持たない器だから」へ
+   * 差し替えている。
+   *
+   * 🔴 **欄名（`factStatementSurvived`）は据え置いている。** 意味は「生存」ではなく
+   * 「到達」だが、⭐門（ADR 0133）と `examples/chat/compare-baseline.json` がこの
+   * 名前を JSON のキーとして参照しており、改名すると単なる改名のために契約と検査を
+   * 破壊することになる（Issue #496 完了条件2）。名前と意味のずれの是正は、改名では
+   * なくこのコメント・表示・文書で行う——詳細は ADR 0226。
    */
   factStatementSurvived: boolean;
   /**
@@ -107,7 +127,7 @@ export interface CompareOptions {
   /** テナントIDの接頭辞。テスト側から重複を避けるために差し替えられるようにしてある。 */
   tenantPrefix?: string;
   /**
-   * 冒頭の事実が残ったかを `sourceObservationId` で辿るために必要（ADR 0052）。
+   * 冒頭の事実の出典に到達したかを `sourceObservationId` で辿るために必要（ADR 0052）。
    *
    * **省略可能にしていない。**省略を許すと文字列一致へ倒れる経路が残り、
    * 「どちらの判定で出た ❌ なのか」が表から読めなくなる。
@@ -152,7 +172,7 @@ export async function runComparison(
     const conversation = buildConversation(fillerPairs);
     const naive = measureNaive(conversation, heuristicTokenCounter);
     const { recall } = await runMnemoraPath(runtime, ctx, conversation);
-    const survived = await factStatementSurvived(options.memoryStore, ctx, recall.memories);
+    const survived = await factStatementSourceReached(options.memoryStore, ctx, recall.memories);
 
     // ⭐ Issue #301 / ADR 0163: この行の測定(上の `recall`/`survived`)が終わった
     // あとに使用報告する。`reportMemoryUsage` は recall を撃たない(受け取るだけ)
@@ -234,17 +254,21 @@ function formatOmittedSummary(omitted: Omission[]): string {
 /**
  * 北極星の物差し（「会話ログを全部プロンプトへ積むのをやめられたか」）に直接答える表。
  *
- * `formatComparisonTable`（量だけの表）と違い、こちらは「削っても目的の記憶が
- * 落ちていないか」——README「⭐ 削減率だけでは意味を持たない」節の表に対応する。
- * 「返った件数」だけでなく「実際に ANN の候補になれた件数」を並べることで、
+ * `formatComparisonTable`（量だけの表）と違い、こちらは「削っても目的の記憶の
+ * 出典に到達できなくなっていないか」——README「⭐ 削減率だけでは意味を持たない」節の
+ * 表に対応する。「返った件数」だけでなく「実際に ANN の候補になれた件数」を並べることで、
  * 「スコープ内 totalInScope 件と競ったのか、それより少ない候補としか競っていないのか」
  * を1行で読めるようにしてある（ADR 0021 が直した欠陥の再発を、この表だけで検知できる
  * ——`annCandidateCount` が `totalInScope` を下回れば、`omitted` 列の
  * `not_indexed(pending):N` がその内訳を示す）。
+ *
+ * 🔴 「冒頭の事実の出典に到達したか」列が測るのは出典到達だけである。情報保持・
+ * 最終回答の正誤はこの表に載っていない（`ComparisonRow.factStatementSurvived` の
+ * docstring、`docs/autonomy.md` §2.2 の2番、ADR 0226）。
  */
 export function formatRecallQualityTable(rows: ComparisonRow[]): string {
   const header =
-    "| 会話ターン数 | スコープ内の Memory | ANN の候補になれた件数 | 返った件数 | 冒頭の事実が残っているか | `omitted` の内訳 |";
+    "| 会話ターン数 | スコープ内の Memory | ANN の候補になれた件数 | 返った件数 | 冒頭の事実の出典に到達したか | `omitted` の内訳 |";
   const sep = "|---|---|---|---|---|---|";
   const body = rows.map((r) => {
     const survived = r.factStatementSurvived ? "✅" : "❌";

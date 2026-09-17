@@ -32,6 +32,16 @@ export interface CompareRowJson {
   omitted: Omission[];
   returnedCount: number;
   annCandidateCount: number;
+  /**
+   * 冒頭の事実表明の出典（`sourceObservationId` → `externalId`）に到達したかだけを
+   * 測る。情報保持・最終回答の正誤はこの欄に含まれない（`ComparisonRow.factStatementSurvived`
+   * の docstring、`docs/autonomy.md` §2.2 の2番、ADR 0226）。
+   *
+   * 🔴 **キー名はここでは変えていない。** ⭐門（ADR 0133）と
+   * `examples/chat/compare-baseline.json` がこのキー名に依存しているため、
+   * `schemaVersion` を上げずに据え置いている——意味のずれはこのコメントと
+   * ADR 0226 で名乗る。
+   */
   factStatementSurvived: boolean;
 }
 

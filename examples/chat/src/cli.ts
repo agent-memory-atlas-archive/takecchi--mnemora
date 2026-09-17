@@ -442,7 +442,8 @@ async function runCompare(decayClock: DecayClock | undefined): Promise<void> {
 
     console.log(
       "\n量を削っただけでは北極星の物差しに答えられない——" +
-        "「削っても冒頭の事実が残っているか」「実際に何件と競って絞ったか」を測る:\n",
+        "「削っても冒頭の事実の出典に到達できるか」「実際に何件と競って絞ったか」を測る" +
+        "（出典への到達だけであり、情報保持・最終回答の正誤は測っていない）:\n",
     );
     console.log(formatRecallQualityTable(rows));
     console.log(
