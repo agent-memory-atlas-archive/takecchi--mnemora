@@ -219,5 +219,6 @@ alteroid (github.com/takecchi/alteroid) を根拠として引く箇所は、確�
 | [0209](./0209-dry-run-short-circuit-predates-adr-0207-and-is-counted-by-machine.md) | 予行の短絡は 2026-09-08 に既に起きていた — ADR 0207 決定2 の【受】を訂正し、「何本が経路を通ったか」を機械に数えさせる | 採用 (2026-09) |
 | [0210](./0210-root-test-gate-runs-all-stages-regardless-of-failure.md) | ルートの `test` 門は、前段が落ちても後段を必ず起動する（Issue #453） | 採用 (2026-09) |
 | [0211](./0211-check-pr-adr-reference-catches-abandoned-numbers-in-title-and-body.md) | PR タイトル/本文が付け替え後の古い ADR 番号を名指ししていないかを CI が検査する — 本文は誰も警告していなかった | 採用 (2026-09) |
+| [0213](./0213-live-docs-cite-adrs-by-anchor-not-line-number.md) | 行番号での引用は、この repo 自身の「ADR は書き換えず追記する」作法によって腐る — 生きた文書はアンカーで指し、歯で止める | 採用 (2026-09) |
 
 <!-- ADR-INDEX:GENERATED:END -->
