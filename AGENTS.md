@@ -42,7 +42,7 @@
 | `packages/postgres` | `MemoryStore` / `VectorStore` / `LexicalStore` / `EventStore` / `OutboxStore` / `TenantSettingsStore`。手書きマイグレーション |
 | `packages/openai` | `EmbeddingProvider` / `LLMProvider` |
 | `packages/anthropic` | `LLMProvider` の Anthropic 実装。**`EmbeddingProvider` は実装しない**（Anthropic は埋め込み API を提供していないため。[ADR 0072](./docs/decisions/0072-anthropic-llm-provider.md)） |
-| `packages/local-embedding` | **外部サービスに繋がない `EmbeddingProvider`**。ONNX のモデルをプロセス内・CPU で推論する（[ADR 0085](./docs/decisions/0085-local-embedding-provider.md)）。⚠ **鍵は要らないが、モデルの重み36MBを実行時に落とす** |
+| `packages/local-embedding` | **外部サービスに繋がない `EmbeddingProvider`**。ONNX のモデルをプロセス内・CPU で推論する（[ADR 0085](./docs/decisions/0085-local-embedding-provider.md)）。⚠ **鍵は要らないが、実行時に4ファイル計42MB（うち重み本体36MB）を落とす**（ADR 0085 決定7の実測） |
 | `examples/chat` | サンプル CLI と、**naive（会話ログ全部）と mnemora を実測比較する `compare`** |
 
 **Phase 1 に入っていないもの**は `docs/roadmap.md` §1.3 の通り（関係グラフ本体・reranking・
