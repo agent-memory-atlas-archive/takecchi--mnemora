@@ -1438,6 +1438,38 @@ Memory を1件も作らない・ラウンドを反復しない**（1回 sweep �
 
 ---
 
+## `answer`: naive と mnemora の最終回答・入力量を対で出す（Issue #506 / 親 #498）
+
+⭐ **この器は回答品質をまだ測っていない。** 同じ会話・同じ質問・同じ回答モデル・同じ採点
+基準で、naive（会話ログ全文）経路と mnemora（記憶の列）経路を両方回し、最終回答と
+`complete()` へ渡した入力量（chars・`heuristicTokenCounter` の概算トークン）を対で出す
+——ここまでが本コマンドの範囲である。
+
+🔴 **これは配線の検査であって、回答品質の測定ではない。** `answerQualityClaimable(llmMode)`
+が `false`（`llmMode=deterministic`）のときは、正誤の列を `—` にし、集計（何件中何件
+pass）も出さない。`deterministic` の LLM（`@mnemora/testkit` の `DeterministicLLMProvider`）
+は意味を持たない stub——`complete()` は渡した最後のメッセージをそのままエコーするだけで、
+質問に「答えて」いない。実際に品質を主張できるのは `recorded`/`openai` のときだけであり、
+`answer` 用のカセットは本 PR ではまだ記録していない（`docs/decisions/` に追加した ADR の
+「引き受けた負債」参照）。
+
+```
+DATABASE_URL=... pnpm --filter @mnemora/example-chat run answer
+MNEMORA_ANSWER_JSON=/tmp/answer.json DATABASE_URL=... pnpm --filter @mnemora/example-chat run answer
+```
+
+- ケース集合は `src/answer-case-set.dev.ts`（development、調整に使ってよい）と
+  `src/answer-case-set.eval.ts`（held-out、⛔ 見て調整しない）の2ファイルに手書きで
+  分けてある。6類（好み・予定変更・否定・別人の事実・別期間の事実・未知の質問）を
+  それぞれ最低1件ずつ持つ。
+- 一次判定（`gradeAnswer`、`src/answer-case.ts`）は文字列の包含判定であり、LLM を
+  呼ばない。**`digest`（自由な要約）への文字列一致ではない**——対象は「答えが短く
+  閉じる質問への最終回答」だけであり、評価ケースはその制約とセットでのみ成立する。
+- 追加費用（取り込み時の抽出 LLM 呼び出し・埋め込み呼び出し・回答生成の LLM 呼び出し）は
+  別ブロックで出す。⛔ 削減率からは差し引かない。
+
+---
+
 ## この会話生成（`src/scenario.ts`）について
 
 `buildConversation(fillerPairs)` は乱数を使わない決定的な関数——同じ `fillerPairs` を

@@ -79,6 +79,15 @@ import { buildTimeTermJson } from "./time-term-json.js";
 import { formatValidityReport, runValidityArm } from "./validity-arm.js";
 import { buildValidityJson } from "./validity-json.js";
 import { formatNoApiCallsNotice } from "./usage-meter.js";
+import { createAnswerBenchRuntime, runAnswerBench } from "./answer-bench.js";
+import { ANSWER_CASE_SET_DEV } from "./answer-case-set.dev.js";
+import { ANSWER_CASE_SET_EVAL } from "./answer-case-set.eval.js";
+import { buildAnswerJson } from "./answer-json.js";
+import {
+  formatAnswerCostTable,
+  formatAnswerQualityBanner,
+  formatAnswerTable,
+} from "./answer-format.js";
 
 /** `chat` サブコマンドで使う会話の長さ(filler 往復数)。サンプルアプリの裁量値。 */
 const DEFAULT_CHAT_FILLER_PAIRS = 8;
@@ -1490,6 +1499,72 @@ async function runArchiveSweepCostCommand(decayClock: DecayClock | undefined): P
   }
 }
 
+/**
+ * `answer` サブコマンド(Issue #506 / 親 #498)。
+ *
+ * 🔴 **これは配線の検査であって、回答品質の測定ではない。** 同じ会話・同じ質問・
+ * 同じ回答モデル・同じ採点基準で、naive(全文経路)と mnemora(記憶経路)の最終回答と
+ * 入力量を対で出す——着地しても回答品質は未評価のままである(`AGENTS.md` 冒頭)。
+ *
+ * **provider は `compare`/`retrieval` と同じ規律**(`createAnswerBenchRuntime` 内部の
+ * `createProviders` が、`MNEMORA_LLM`/`MNEMORA_EMBEDDING` の明示指定か、
+ * 無指定なら `OPENAI_API_KEY` の有無で決める)。⛔ **本 PR ではカセットを新規に
+ * 記録していない**——`MNEMORA_LLM=recorded` を指定しても、カセットが無いので
+ * `createProviders` の `requireCassette` がそのまま落ちる(既存の挙動のまま)。
+ *
+ * `runtime-factory.ts` の `createExampleRuntime` を使わない理由は
+ * `answer-bench.ts` の `createAnswerBenchRuntime` の docstring を見ること
+ * (呼び出し回数を数える decorator を `createRuntime()` へ渡す前に噛ませる必要があるため)。
+ */
+async function runAnswer(): Promise<void> {
+  const databaseUrl = requireDatabaseUrl();
+  const measuredAt = new Date();
+  const commit = tryGitRevParseHead(process.cwd());
+  const handle = await createAnswerBenchRuntime(databaseUrl, process.env);
+  // ⭐ 品質を主張できないモードでは、stdout の先頭で目立たせる(AGENTS.md §5)。
+  const banner = formatAnswerQualityBanner(handle.llmMode);
+  if (banner) {
+    console.log(banner);
+  }
+  printProviderMode(handle.llmMode, handle.embeddingMode);
+  try {
+    console.log(
+      "\n同じ会話・同じ質問・同じ回答モデル・同じ採点基準で、naive(全文経路)と" +
+        "mnemora(記憶経路)の最終回答・入力量を対で出す(Issue #506)。\n" +
+        "🔴 これは配線の検査であり、回答品質は測っていない。\n",
+    );
+    const cases = [...ANSWER_CASE_SET_DEV, ...ANSWER_CASE_SET_EVAL];
+    const results = await runAnswerBench(
+      handle.runtime,
+      handle.llmProvider,
+      handle.embeddingProvider,
+      cases,
+      "answer-bench",
+    );
+
+    console.log(formatAnswerTable(results, handle.llmMode));
+    console.log("\n--- 追加費用(別ブロック。⛔ 削減率からは差し引かない) ---");
+    console.log(formatAnswerCostTable(results));
+
+    // `MNEMORA_ANSWER_JSON` が設定されたときだけ書く。未設定なら1バイトも挙動を
+    // 変えない(既存の `MNEMORA_COMPARE_JSON` 等と同じ規約)。
+    const jsonPath = process.env.MNEMORA_ANSWER_JSON;
+    if (jsonPath) {
+      const json = buildAnswerJson({
+        results,
+        llmMode: handle.llmMode,
+        embeddingMode: handle.embeddingMode,
+        measuredAt,
+        commit,
+      });
+      writeFileSync(jsonPath, `${JSON.stringify(json, null, 2)}\n`, "utf-8");
+      console.log(`\n[answer] 機械可読な結果を書き出した: ${jsonPath}`);
+    }
+  } finally {
+    await handle.close();
+  }
+}
+
 function printHelp(): void {
   console.log(
     [
@@ -1521,6 +1596,9 @@ function printHelp(): void {
       "                                                                      # 掃引(Runtime.sweepArchive)が「載る量」/hit@k をどう動かすかを実測する(Issue #209)",
       "                                                                      #   鍵・カセット不要(deterministic LLM + local embedding)。MNEMORA_ARCHIVE_SWEEP_JSON で機械可読出力",
       "                                                                      #   -- --decay-clock <wall|activity|either> で対象テナントの decay_clock を設定する(ADR 0165、既定は未指定=何も書かない)",
+      "  DATABASE_URL=... pnpm --filter @mnemora/example-chat run answer      # naive/mnemora の最終回答・入力量を対で出す(Issue #506)",
+      "                                                                      #   🔴 配線の検査であり、回答品質は測っていない(llmMode=deterministic のとき集計を出さない)",
+      "                                                                      #   MNEMORA_ANSWER_JSON で機械可読出力",
       "  DATABASE_URL=... OPENAI_API_KEY=... pnpm --filter @mnemora/example-chat run record",
       "                                                                      # retrieval の応答を記録する(ADR 0051)",
       "  DATABASE_URL=... OPENAI_API_KEY=... pnpm --filter @mnemora/example-chat run record:compare",
@@ -1565,6 +1643,8 @@ async function main(): Promise<void> {
     await runConsolidationCostCommand();
   } else if (command === "archive-sweep-cost") {
     await runArchiveSweepCostCommand(parseDecayClockFlag(process.argv.slice(3)));
+  } else if (command === "answer") {
+    await runAnswer();
   } else if (command === "record") {
     await runRecord(parseCassetteTarget(process.argv[3]));
   } else if (command === "verify") {

@@ -21,6 +21,7 @@
     "association-probes": "tsx src/cli.ts association-probes",
     "consolidation-cost": "tsx src/cli.ts consolidation-cost",
     "archive-sweep-cost": "tsx src/cli.ts archive-sweep-cost",
+    "answer": "tsx src/cli.ts answer",
     "record": "tsx src/cli.ts record retrieval",
     "verify": "tsx src/cli.ts verify retrieval",
     "record:compare": "tsx src/cli.ts record compare",
