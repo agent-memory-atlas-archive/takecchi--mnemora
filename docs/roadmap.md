@@ -148,7 +148,7 @@ Phase 1 で入れた土台が、後続フェーズをどう安くしているか
 
 **⚠ 2026-09-16 追加訂正（Issue #282）: 上の表の「忘却の実処理（`decay_floor_at` を使った検索時フィルタとアーカイブ掃引）」は、束ねられた二つの機構のうち片方だけが前倒しされている。**
 
-- **アーカイブ掃引**は前倒しで実装済み（[ADR 0114](./decisions/0114-archive-sweep-for-decayed-memories.md)、PR #214、2026-09-15）。`MemoryStore.archiveDecayed?`（任意メソッド）を `Runtime.sweepArchive` がそのまま素通しし、`decay_floor_at <= now()` の範囲走査で `active`/`contested` を `archived` へ倒す。**ただし `tick()`/`observe()` には配線しておらず、呼び出し側が明示的に呼んだときだけ走る**（`packages/core/src/runtime.ts` の doc コメントが「🔴 この掃引は自動では一度も走らない」と明記している）。
+- **アーカイブ掃引**は前倒しで実装済み（[ADR 0114](./decisions/0114-archive-sweep-for-decayed-memories.md)、PR #214、2026-09-15）。`MemoryStore.archiveDecayed?`（任意メソッド）を `Runtime.sweepArchive` がそのまま素通しし、`decay_floor_at <= now()` の範囲走査で **`active` だけ**を `archived` へ倒す（⚠ **2026-09-17 訂正**: この行は当初「`active`/`contested`」と書いていたが、**現物は `active` のみである**——[ADR 0114](./decisions/0114-archive-sweep-for-decayed-memories.md) 決定2 が逐語で「対象は `status = 'active'` のみ。`superseded`/`contested` はこの口では触らない」と決めており、適合テストの `archiveDecayed は active 以外（contested/superseded/forgotten/既に archived）を対象にしない` が両 adapter でそれを固定している。[Issue #465](https://github.com/takecchi/mnemora/issues/465)）。**ただし `tick()`/`observe()` には配線しておらず、呼び出し側が明示的に呼んだときだけ走る**（`packages/core/src/runtime.ts` の doc コメントが「🔴 この掃引は自動では一度も走らない」と明記している）。
 - **検索時フィルタ**（本文が言う `WHERE decay_floor_at > now()` 側）は**依然として未実装のままである**。`VectorFilter.decayFloorAtAfter` という口自体は在る（`packages/core/src/interfaces/vector-store.ts`）が、`recall-runtime.ts` は「ADR 0011: `decayFloorAtAfter` は Phase 1 では読み取りフィルタに使わない」というコメントのとおり実際には値を渡していない。【実測】2026-09-16、`grep -rn "decayFloorAtAfter:" packages/core/src packages/postgres/src` はテストを除いて0件。
 
 **⟹ この行は「部分的に前倒し」である**（アーカイブ掃引は済み・検索時フィルタは未着手）。
