@@ -660,6 +660,36 @@ run はログ上に1本も見当たらない。
 本番の入り口は Release を作る経路（§1.1）であり、`workflow_dispatch` はあくまで
 予行専用として使われてきた、という実績しかない。
 
+🔴 **訂正の追記（2026-09-17、[ADR 0209](./decisions/0209-dry-run-short-circuit-predates-adr-0207-and-is-counted-by-machine.md)）— すぐ上の追記と、この節の冒頭に、誤りが1つずつ在る。**
+⚠ **どちらも消していない**（この文書の作法。ADR 0064）。訂正の中身は [ADR 0209](./decisions/0209-dry-run-short-circuit-predates-adr-0207-and-is-counted-by-machine.md)。
+
+**1. 「`workflow_dispatch` 契機の run は2件だけ」は、書かれた後に腐った。**
+**ADR 0207 の PR 自身が3件目（run `35169553262`）を作っている。**
+⛔ **ここに新しい数を書き直さない——また腐る。**⟹ **読む人がその場で数えること**:
+
+```bash
+# workflow_dispatch 契機の run を全部出す（数を焼き込まない）
+gh api "repos/takecchi/mnemora/actions/workflows/publish.yml/runs?per_page=100" --paginate \
+  --jq '.workflow_runs[] | select(.event=="workflow_dispatch") | "\(.id)\t\(.created_at)\t\(.conclusion)"'
+```
+
+⚠ **「`dry_run: false` で起動した run が1本も無い」ことも、同じ理由でその場で確かめること**
+——各 run のログに `予行（--dry-run）です。registry へは何も上がりません。` が出ているかを見る
+（`gh api repos/takecchi/mnemora/actions/jobs/<job id>/logs`）。
+**⟹ 上の「当日この経路を使わないこと」という戒めは、そのまま生きている。**
+
+**2. 🔴 「唯一の違いは12番目のステップで `npm publish` に `--dry-run` が付くことだけ」は誤りである。**
+**予行では、次の2段も走らない**（どちらも `if: github.event_name == 'release'`。
+**上表の6番・7番＝ Actions の画面の段7・段8。**呼び分けは §1.2 の冒頭）:
+
+- **「Release の tag が main の履歴上に在ることを確かめる」**
+- **「Release の tag の版を package.json へ書き込む（ADR 0070）」**
+
+**【実測】**run `35169553262` の step を引くと、**この2つだけが `skipped`** である
+（`gh api repos/takecchi/mnemora/actions/runs/35169553262/jobs --jq '.jobs[].steps[]|"\(.conclusion)\t\(.name)"'`）。
+⟹ **版を決める経路が予行で一度も走らない**ことの意味は §2.2 の追記3 と ADR 0207 決定3。
+⟹ **だから「予行が緑」は、版の決定について何も言っていない。**
+
 ### 2.2 🔴 何が本番 tag まで分からないか（ADR 0067、逐語）
 
 **ADR 0067 の核心をそのまま引く**（`docs/decisions/0067-dry-run-fail-open-and-does-not-verify-trusted-publisher.md:118-134`）:
@@ -764,6 +794,76 @@ npm error You cannot publish over the previously published versions: 0.1.1.
 
 ⟹ 🔴 **`v1.0.0` という tag 文字列が正しく `1.0.0` になることは、予行では確かめられていない。**
 予行が使うのは木の値をそのまま読む段9 だけである（§1.2 の 7'）。
+
+#### 🔴 訂正の追記（2026-09-17、[ADR 0209](./decisions/0209-dry-run-short-circuit-predates-adr-0207-and-is-counted-by-machine.md)）— 上の3点すべてに、現物と食い違う記述が在った
+
+⚠ **上の追記は1行も消していない**（この文書の作法。ADR 0064）。訂正の中身は [ADR 0209](./decisions/0209-dry-run-short-circuit-predates-adr-0207-and-is-counted-by-machine.md)。
+
+**1. 🔴 「2026-09-08 の予行2件では、対象パッケージ全部が publish の経路を通っていた」は誤りである。**
+
+**【実測】**run [`34248494960`](https://github.com/takecchi/mnemora/actions/runs/34248494960)
+（2026-09-08T16:01:31Z、予行）の publish 段は、逐語で:
+
+```
+##[group]npm publish @mnemora/core@0.1.0
+✔ @mnemora/core@0.1.0 は既に registry に在る（飛ばした）
+```
+
+**`testkit` / `openai` / `postgres` も同じ形である。**⟹ **4本中4本が短絡しており、
+この予行は publish 段について1本も確かめていない（網羅率 0/4）。**
+
+**食い違いの原因**: 2件の予行は**別の版を梱包していた。**【実測】`head_sha` で木の `version` を読むと
+`34248494960` は **`0.1.0`**（registry に既に在った）、`34262743432` は **`0.1.1`**（まだ無い）。
+版を上げたコミット `e988f03` は**1件目の52分後・2件目の90分前**である。
+⟹ 上の「`package.json` の `version` は4つとも `0.1.1`」という根拠は、
+**版を上げた後のスナップショットを、版を上げる前に走った run に当てていた。**
+
+🔴 **⟹ 短絡は「今回はじめて」ではない。**この repo の予行3件のうち、**通ったのは真ん中の1件だけ**である
+（1件目 0/4・2件目 4/4・3件目 2/6）。⟹ **これは今回に固有の劣化ではなく、
+木の `version` と registry の関係で決まる、予行の構造的な性質である。**
+
+**2. 🔴 「6本のうち4本は、`npm publish` の経路を1歩も通っていない」は誤りである。**
+
+**【現物】**`publish.yml` の publish 段は、`PUBLISH_TARGETS` の順に**6本すべてに対して**
+`npm publish` を打つ。「飛ばした」の文言は、**npm が返した出力を shell が `grep` して**初めて出る:
+
+```bash
+elif echo "${OUT}" | grep -q "cannot publish over the previously published"; then
+  echo "✔ ${spec} は既に registry に在る（飛ばした）"
+```
+
+⟹ **短絡しているのは `publish.yml` の分岐であって、`npm publish` の起動ではない。**
+⚠ **上の追記1（「予行は registry の存在状態を読んでいた」）は、
+まさに npm が起動して registry に問い合わせた証拠である**——追記1 と追記2 は同じブロックの中で矛盾していた。
+⭐ **正しい言い方**: 短絡した4本は、**publish 段を最後まで通っていない。**
+⚠ **npm がどこまで進んだか（OIDC のトークン交換を済ませたか）は、この器では観測していない。**
+
+**3. ⚠ 「全14段 success」は誤りである。**
+
+**【実測】**run `35169553262` の step は **2つが `skipped`** である（上の §2.1 の訂正2 と同じ2段）。
+⚠ 上の追記3 は **`apply-release-version.mjs` の段だけ**を `skipped` と書いており、
+**「Release の tag が main の履歴上に在ることを確かめる」段を落としている。**
+🔴 **`docs/autonomy.md` §2.1 が逐語で「`skipped`…はどれも緑ではない」と定めている。**
+⟹ **「全段 success」と書くときは、`skipped` を数え直すこと。**
+
+#### ⭐ そして、ここからは人が読まない — `check-publish-run-coverage.mjs`
+
+🔴 **上の3つの誤りは、どれも「段のログを人が1本ずつ読む」経路で入った。**
+⟹ [ADR 0209](./decisions/0209-dry-run-short-circuit-predates-adr-0207-and-is-counted-by-machine.md) が、**その数え上げを機械に移した**（ADR 0207 が「引き受けた負債」に設計だけ書いて置かなかった歯）。
+
+```bash
+node scripts/check-publish-run-coverage.mjs <run id>
+```
+
+publish 段のログを引き、**`PUBLISH_TARGETS` の各本について「publish した / 飛ばした / 失敗 / ログに無い」を
+出し、全本が経路を通っていなければ非0 で終わる。**
+**本数も名前も `PUBLISH_TARGETS` から読む**（7つ目が増えたら自動で追随する）。
+⚠ **段の番号は一切見ない**——`::group::npm publish <spec>` を探すだけなので、
+段が増えても番号が振り直されても壊れない。
+
+⭐ **予行の fail は「壊れている」ではない。**「その予行は N 本についてしか確かめていない」という意味である
+——**それを読み違えないために置いた歯である。**
+⚠ **このスクリプトはログの*文言*を読んでいるだけで、npm が実際に何をしたかは見ていない。**
 
 ### 2.3 手元で事前に走らせられる検査（`pnpm run pack:check`）
 
@@ -1488,6 +1588,11 @@ npm audit signatures
 出力を先に確認すること。**
 
 ### 5.4 ⭐ 6パッケージをまとめて検算する（**当日の正規経路**）
+
+⚠ **この節が見ているのは registry の側である。**「その run の publish 段を、6本とも最後まで
+通ったか」は run の側の話であり、**`node scripts/check-publish-run-coverage.mjs <run id>` が見る**
+（[ADR 0209](./decisions/0209-dry-run-short-circuit-predates-adr-0207-and-is-counted-by-machine.md)。説明は §2.2 の末尾に在る——ここには重複させない）。
+**両方見ること**——registry に版が在っても、その run が上げたとは限らない（§3.4 の実例）。
 
 **当日はここ（§5.4）だけ打てばよい。**§5.1〜5.3 は、ここで `✗` が出た箇所を
 **個別に掘るときに**読む。

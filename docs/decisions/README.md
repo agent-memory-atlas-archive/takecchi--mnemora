@@ -216,5 +216,6 @@ alteroid (github.com/takecchi/alteroid) を根拠として引く箇所は、確�
 | [0206](./0206-outbox-concurrent-claim-conformance.md) | 同時 claim の適合テストを `supportsRealConcurrency` で切り替える（Issue #205 の1本目） | 採用 (2026-09) |
 | [0207](./0207-dry-run-reads-existence-and-coverage-degrades-silently.md) | 予行は registry の「既に在るか」を読む — そして予行の網羅性は、木の版と registry の関係で黙って落ちる | 採用 (2026-09) |
 | [0208](./0208-outbox-skip-locked-non-blocking-tooth.md) | `SKIP LOCKED` が「詰まらないこと」を守っている、という主張に歯を足す（ADR 0206 の宿題） | 採用 (2026-09) |
+| [0209](./0209-dry-run-short-circuit-predates-adr-0207-and-is-counted-by-machine.md) | 予行の短絡は 2026-09-08 に既に起きていた — ADR 0207 決定2 の【受】を訂正し、「何本が経路を通ったか」を機械に数えさせる | 採用 (2026-09) |
 
 <!-- ADR-INDEX:GENERATED:END -->
