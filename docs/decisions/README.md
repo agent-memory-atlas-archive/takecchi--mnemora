@@ -242,5 +242,6 @@ alteroid (github.com/takecchi/alteroid) を根拠として引く箇所は、確�
 | [0224](./0224-quality-evaluation-and-acceptance-criteria.md) | 品質評価の証明範囲と合格基準の変更を、自律作業の条件にする | 採用 (2026-09) |
 | [0226](./0226-compare-provenance-reached-vs-information-retained.md) | `compare` の `factStatementSurvived` が測るのは出典到達だけである — 欄名は⭐門の契約として据え置き、意味の是正はコメント・表示・文書で行う（Issue #496） | 採用 (2026-09) |
 | [0227](./0227-fixed-retrieval-probe-gold-presence-gate.md) | 固定した probe ごとの gold 到達を、`example-chat` の必須 CI へ直接繋ぐ回帰ゲート（Issue #497） | 採用 (2026-09) |
+| [0228](./0228-accept-the-extra-ci-round-for-adr-pull-requests.md) | ADR を持つ PR が CI をもう1周する費用を受容する — 方向4 を選び直す（Issue #267） | 採用 (2026-09) |
 
 <!-- ADR-INDEX:GENERATED:END -->
