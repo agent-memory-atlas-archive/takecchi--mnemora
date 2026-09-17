@@ -228,5 +228,6 @@ alteroid (github.com/takecchi/alteroid) を根拠として引く箇所は、確�
 | [0218](./0218-shipping-security-claims-checked-against-primary-sources.md) | 出荷文書の「セキュリティの主張」に一次情報を当てた — CVE 番号は実在した（引く先が違っただけ）。ただし推奨下限は「既知の CVE が残らない下限」ではない | 採用 (2026-09) |
 | [0219](./0219-adr-corpus-swept-for-unsourced-assertions.md) | ADR 208本を逆向きに掃いた — 母集合 59,554行から候補171件、残った未裏づけの断定は17件。その3/4は「外部の挙動」だった | 採用 (2026-09) |
 | [0220](./0220-issue-comment-author-does-not-distinguish-owner-from-agent.md) | OPEN な ISSUE のコメント投稿者名は、オーナーと担い手（エージェント）を見分けない — 見分けられるのは本文中の逐語の名乗りだけである | 採用 (2026-09) |
+| [0221](./0221-memories-analyze-on-write.md) | `PostgresMemoryStore` の書き込み経路が閾値越えのときだけ `memories` を `ANALYZE` する — ADR 0194 と同じ設計を、JOIN の相手側にも入れる（Issue #269） | 採用 (2026-09) |
 
 <!-- ADR-INDEX:GENERATED:END -->
