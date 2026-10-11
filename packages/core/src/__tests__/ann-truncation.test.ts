@@ -297,6 +297,47 @@ describe("decideAnnTruncation — safetyRatio は kind の名乗りと食い違�
   });
 });
 
+describe("decideAnnTruncation — safetyRatio は有限（AnnTruncatedOmission の出力スキーマ）", () => {
+  // `ann_truncated.safetyRatio` の出力スキーマは `z.number()` で、zod 4 では ±Infinity を通さない。
+  // 比が有限に収まらない入力で、どの kind に倒すかは縛らない。safetyRatio を載せるなら有限であることだけを見る。
+  it.each([
+    ["分母が 0 に潰れ、bar が 0", 0, 1e-200, 1e-200],
+    ["分母が 0 に潰れ、bar が正（正 / 0 は Infinity）", 0.5, 1e-200, 1e-200],
+    ["分母が 0 に潰れ、bar が負（負 / 0 は -Infinity）", -0.5, 1e-200, 1e-200],
+    ["分母が 0 に潰れ、bar が Number.MIN_VALUE", Number.MIN_VALUE, 1e-200, 1e-200],
+    ["比が上に桁あふれする", 1e300, 1e-10, 1],
+    ["比が下に桁あふれする（負）", -1e300, 1e-10, 1],
+  ])("比が有限に収まらなくても、safetyRatio を載せるなら有限: %s", (_label, bar, sim, value) => {
+    const v = decideAnnTruncation({
+      ...base,
+      strategy: declaring(value),
+      lastAnnSimilarity: sim,
+      lastReturnedTotal: bar,
+    });
+    if (v.kind !== "undecidable") {
+      expect(Number.isFinite(v.safetyRatio)).toBe(true);
+    }
+  });
+
+  it.each([
+    ["Number.MAX_VALUE", Number.MAX_VALUE, "provably_safe"],
+    ["-Number.MAX_VALUE", -Number.MAX_VALUE, "loss_possible"],
+  ])(
+    "やりすぎ: 比が %s でも有限なら undecidable にせず判定し、比をそのまま載せる",
+    (_label, bar, kind) => {
+      const v = decideAnnTruncation({
+        ...base,
+        strategy: declaring(1),
+        lastAnnSimilarity: 1,
+        lastReturnedTotal: bar,
+      });
+      expect(v.kind).toBe(kind);
+      if (v.kind === "undecidable") throw new Error("unreachable");
+      expect(v.safetyRatio).toBe(bar);
+    },
+  );
+});
+
 describe("decideAnnTruncation — 前提を戻り値で名乗る（ADR 0069 §6）", () => {
   // 🔴 **コメントは検査されない。**だから前提は戻り値に載せ、その中身をここで測る。
   it.each([
