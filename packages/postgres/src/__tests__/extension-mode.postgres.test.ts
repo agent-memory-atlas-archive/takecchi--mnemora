@@ -1,3 +1,7 @@
+import { execFile } from "node:child_process";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
 import { Pool } from "pg";
 import { afterAll, describe, expect, it } from "vitest";
 import { MissingExtensionsError, REQUIRED_EXTENSIONS, runMigrations } from "../migrate.js";
@@ -19,6 +23,7 @@ const DB_ALL_PRESENT = "mnemora_extmode_all_present";
 const DB_SCHEMA_VERIFY = "mnemora_extmode_schema_verify";
 const DB_MISSING_VERIFY = "mnemora_extmode_missing_verify";
 const DB_MISSING_CREATE_DEFAULT = "mnemora_extmode_missing_create_default";
+const DB_MISSING_VERIFY_CLI = "mnemora_extmode_missing_verify_cli";
 const DB_RESTRICTED_ROLE = "mnemora_extmode_restricted_role";
 const DB_ALL_PRESENT_RESTRICTED_ROLE = "mnemora_extmode_all_present_restricted_role";
 
@@ -57,6 +62,32 @@ async function createBlankDatabase(database: string): Promise<Pool> {
   const pool = new Pool({ connectionString: connectionStringFor(database), max: 5 });
   openedPools.push(pool);
   return pool;
+}
+
+const execFileAsync = promisify(execFile);
+const PACKAGE_ROOT = fileURLToPath(new URL("../../", import.meta.url));
+const TSX_BIN = path.join(PACKAGE_ROOT, "node_modules", ".bin", "tsx");
+const MIGRATE_ENTRY = path.join("src", "bin", "migrate.ts");
+
+/**
+ * CLI を子プロセスとして起動する（`migrate-cli-schema.postgres.test.ts` と同じ形。`dist` に依存しないよう `tsx` で `src` を叩く）。
+ * `env` は `process.env` をそのまま渡さない——`PATH` と、渡したものだけ。
+ */
+async function runMigrateCli(
+  args: readonly string[],
+  env: Readonly<Record<string, string>>,
+): Promise<{ exitCode: number; stdout: string; stderr: string }> {
+  try {
+    const { stdout, stderr } = await execFileAsync(TSX_BIN, [MIGRATE_ENTRY, ...args], {
+      cwd: PACKAGE_ROOT,
+      env: { PATH: process.env.PATH ?? "", ...env },
+    });
+    return { exitCode: 0, stdout, stderr };
+  } catch (err) {
+    const failure = err as NodeJS.ErrnoException & { stdout?: string; stderr?: string };
+    const code = typeof failure.code === "number" ? failure.code : 1;
+    return { exitCode: code, stdout: failure.stdout ?? "", stderr: failure.stderr ?? "" };
+  }
 }
 
 /** `table`（裸の名前、既定の search_path = public）が存在するかどうか。 */
@@ -150,6 +181,24 @@ describe("extensionMode: 'verify'（ADR 0093、本物の PostgreSQL）", () => {
 
     expect(result.extensionCheck).toBeUndefined();
     expect(await tableExists(pool, "observations")).toBe(true);
+  });
+
+  // `packages/postgres/README.md` の CLI の節: `--extension-mode verify` は何も発行せず `pg_extension` を読み、
+  // 足りない拡張があれば拡張名と実行すべき SQL を示して失敗する。測定2と同じ状況を、CLI の配線ごと見る。
+  it("測定2b: CLI の --extension-mode verify も、拡張が足りない DB では拡張名と SQL を示して終了コード1で止まり、拡張も表も作らない", async () => {
+    const pool = await createBlankDatabase(DB_MISSING_VERIFY_CLI);
+    await pool.query(`CREATE EXTENSION IF NOT EXISTS btree_gin`);
+    await pool.query(`CREATE EXTENSION IF NOT EXISTS pgcrypto`);
+
+    const cli = await runMigrateCli(["--extension-mode", "verify"], {
+      DATABASE_URL: connectionStringFor(DB_MISSING_VERIFY_CLI),
+    });
+
+    expect(cli.exitCode).toBe(1);
+    expect(cli.stderr).toContain("CREATE EXTENSION IF NOT EXISTS vector;");
+    const { rows } = await pool.query(`SELECT 1 FROM pg_extension WHERE extname = 'vector'`);
+    expect(rows).toEqual([]);
+    expect(await tableExists(pool, "observations")).toBe(false);
   });
 
   it("測定4: CREATE EXTENSION 権限を持たない実ロールで virchamate の状況を再現する——create モードは生の権限エラーで落ち、verify モードは制御されたエラーで落ち、拡張が揃った後は同じロールで成功する", async () => {
