@@ -228,6 +228,57 @@ describe("decideAnnTruncation — 宣言された上界 value は正の有限値
   });
 });
 
+describe("decideAnnTruncation — safetyRatio は kind の名乗りと食い違わない（AnnTruncationVerdict の TSDoc）", () => {
+  // sim と value はどちらも正の有限値だが、積が 0 に潰れる組。
+  const tinySim = 1e-200;
+  const tinyValue = 1e-200;
+
+  it("前提: この組では分母 sim × value が 0 に潰れる", () => {
+    expect(tinySim * tinyValue).toBe(0);
+    expect(tinySim).toBeGreaterThan(0);
+    expect(tinyValue).toBeGreaterThan(0);
+  });
+
+  it.each([
+    ["bar が 0（0 / 0）", 0],
+    ["bar が正（正 / 0）", 0.5],
+    ["bar が負（負 / 0）", -0.5],
+  ])(
+    "分母が 0 に潰れても、loss_possible なら比は 1 未満、provably_safe なら 1 以上: %s",
+    (_label, bar) => {
+      const v = decideAnnTruncation({
+        ...base,
+        strategy: declaring(tinyValue),
+        lastAnnSimilarity: tinySim,
+        lastReturnedTotal: bar,
+      });
+      if (v.kind === "loss_possible") {
+        expect(v.safetyRatio).toBeLessThan(1);
+      }
+      if (v.kind === "provably_safe") {
+        expect(v.safetyRatio).toBeGreaterThanOrEqual(1);
+      }
+    },
+  );
+
+  it("やりすぎ: 比が大きくても有限なら undecidable にせず provably_safe と判定する", () => {
+    const sim = 1e-300;
+    const bar = 1;
+    const expected = bar / (sim * 1);
+    expect(Number.isFinite(expected)).toBe(true);
+
+    const v = decideAnnTruncation({
+      ...base,
+      strategy: declaring(1),
+      lastAnnSimilarity: sim,
+      lastReturnedTotal: bar,
+    });
+    expect(v.kind).toBe("provably_safe");
+    if (v.kind !== "provably_safe") throw new Error("unreachable");
+    expect(v.safetyRatio).toBe(expected);
+  });
+});
+
 describe("decideAnnTruncation — 前提を戻り値で名乗る（ADR 0069 §6）", () => {
   // 🔴 **コメントは検査されない。**だから前提は戻り値に載せ、その中身をここで測る。
   it.each([
