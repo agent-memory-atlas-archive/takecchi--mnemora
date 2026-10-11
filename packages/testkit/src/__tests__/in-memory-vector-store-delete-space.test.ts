@@ -53,4 +53,47 @@ describe("InMemoryVectorStore.delete は渡した space の行だけを消す", 
     expect(hitsA.map((h) => h.memoryId)).toEqual([]);
     expect(hitsB.map((h) => h.memoryId)).toEqual([target.id]);
   });
+
+  it("同じ space の、他の memoryId の行は残る", async () => {
+    const memoryStore = new InMemoryMemoryStore();
+    const vectorStore = new InMemoryVectorStore(memoryStore);
+    const target = await memoryStore.createMemory(
+      ctx,
+      buildNewMemoryFixture({ tenantId: ctx.tenantId, contentHash: "delete-space-target" }),
+    );
+    const other = await memoryStore.createMemory(
+      ctx,
+      buildNewMemoryFixture({ tenantId: ctx.tenantId, contentHash: "delete-space-other" }),
+    );
+    await vectorStore.upsert(ctx, SPACE_A, target.id, [1, 0, 0]);
+    await vectorStore.upsert(ctx, SPACE_A, other.id, [0, 1, 0]);
+    const beforeOther = await vectorStore.getVectors!(ctx, SPACE_A, [other.id]);
+    expect(beforeOther).toHaveLength(1);
+
+    await vectorStore.delete(ctx, SPACE_A, target.id);
+
+    expect(await vectorStore.getVectors!(ctx, SPACE_A, [target.id])).toEqual([]);
+    expect(await vectorStore.getVectors!(ctx, SPACE_A, [other.id])).toEqual(beforeOther);
+  });
+});
+
+// `Ctx.tenantId` は「store はこの値で行を分ける。跨いだら事故である」（ctx.ts の TSDoc）。
+// Postgres の `tenant-boundary-reads-and-writes.postgres.test.ts` と同じ形を、InMemory にも当てる。
+describe("InMemoryVectorStore.delete は他のテナントの行を消さない", () => {
+  it("A の ctx で B の memoryId を delete しても、B の行は残る", async () => {
+    const memoryStore = new InMemoryMemoryStore();
+    const vectorStore = new InMemoryVectorStore(memoryStore);
+    const ctxB: Ctx = { tenantId: "in-memory-delete-space-b" };
+    const ofB = await memoryStore.createMemory(
+      ctxB,
+      buildNewMemoryFixture({ tenantId: ctxB.tenantId, contentHash: "delete-space-of-b" }),
+    );
+    await vectorStore.upsert(ctxB, SPACE_A, ofB.id, [1, 0, 0]);
+    const beforeB = await vectorStore.getVectors!(ctxB, SPACE_A, [ofB.id]);
+    expect(beforeB).toHaveLength(1);
+
+    await vectorStore.delete(ctx, SPACE_A, ofB.id);
+
+    expect(await vectorStore.getVectors!(ctxB, SPACE_A, [ofB.id])).toEqual(beforeB);
+  });
 });

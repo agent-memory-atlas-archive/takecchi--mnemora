@@ -20,15 +20,20 @@ async function setup(): Promise<{
   target: MemoryId;
 }> {
   const stores = createFakeRuntimeStores();
+  const created = await stores.memoryStore.createMemory(ctx, newMemory("fake-delete-space"));
+  return { stores, target: created.id };
+}
+
+function newMemory(contentHash: string): NewMemory {
   const recordedAt = new Date("2026-06-01T00:00:00.000Z");
   const halfLifeHours = 24 * 365;
-  const input: NewMemory = {
+  return {
     tenantId: ctx.tenantId,
     subjectId: null,
     sourceObservationId: null,
     extractorVersion: null,
     content: "本文",
-    contentHash: "fake-delete-space",
+    contentHash,
     digest: "要旨",
     digestSource: "llm",
     provenance: { kind: "imported", batchId: "fake-delete-space" },
@@ -46,8 +51,6 @@ async function setup(): Promise<{
     }),
     embeddingStatus: "ready",
   };
-  const created = await stores.memoryStore.createMemory(ctx, input);
-  return { stores, target: created.id };
 }
 
 describe("FakeVectorStore.delete は渡した space の行だけを消す", () => {
@@ -82,5 +85,43 @@ describe("FakeVectorStore.delete は渡した space の行だけを消す", () =
     const hitsB = await vs.search(ctx, SPACE_B, [1, 0, 0], { limit: 10, filter });
     expect(hitsA.map((h) => h.memoryId)).toEqual([]);
     expect(hitsB.map((h) => h.memoryId)).toEqual([target]);
+  });
+
+  it("同じ space の、他の memoryId の行は残る", async () => {
+    const { stores, target } = await setup();
+    const vs = stores.vectorStore;
+    const other = (await stores.memoryStore.createMemory(ctx, newMemory("fake-delete-other"))).id;
+    await vs.upsert(ctx, SPACE_A, target, [1, 0, 0]);
+    await vs.upsert(ctx, SPACE_A, other, [0, 1, 0]);
+    const beforeOther = await vs.getVectors!(ctx, SPACE_A, [other]);
+    expect(beforeOther).toHaveLength(1);
+
+    await vs.delete(ctx, SPACE_A, target);
+
+    expect(await vs.getVectors!(ctx, SPACE_A, [target])).toEqual([]);
+    expect(await vs.getVectors!(ctx, SPACE_A, [other])).toEqual(beforeOther);
+  });
+});
+
+// `Ctx.tenantId` は「store はこの値で行を分ける。跨いだら事故である」（ctx.ts の TSDoc）。
+// Postgres の `tenant-boundary-reads-and-writes.postgres.test.ts` と同じ形を、Fake にも当てる。
+describe("FakeVectorStore.delete は他のテナントの行を消さない", () => {
+  it("A の ctx で B の memoryId を delete しても、B の行は残る", async () => {
+    const stores = createFakeRuntimeStores();
+    const vs = stores.vectorStore;
+    const ctxB: Ctx = { tenantId: "fake-delete-space-b" };
+    const ofB = (
+      await stores.memoryStore.createMemory(ctxB, {
+        ...newMemory("fake-delete-of-b"),
+        tenantId: ctxB.tenantId,
+      })
+    ).id;
+    await vs.upsert(ctxB, SPACE_A, ofB, [1, 0, 0]);
+    const beforeB = await vs.getVectors!(ctxB, SPACE_A, [ofB]);
+    expect(beforeB).toHaveLength(1);
+
+    await vs.delete(ctx, SPACE_A, ofB);
+
+    expect(await vs.getVectors!(ctxB, SPACE_A, [ofB])).toEqual(beforeB);
   });
 });
