@@ -17,6 +17,12 @@ describe("CtxSchema", () => {
     expect(result.success).toBe(false);
   });
 
+  // `Ctx` の TSDoc: 「CtxSchema は min(1) を書いている」（Runtime と store はこの schema で ctx を検査しない）。
+  it("rejects 空文字の subjectId", () => {
+    const result = CtxSchema.safeParse({ tenantId: "tenant-1", subjectId: "" });
+    expect(result.success).toBe(false);
+  });
+
   it("rejects tenantId が無い入力", () => {
     const result = CtxSchema.safeParse({});
     expect(result.success).toBe(false);
