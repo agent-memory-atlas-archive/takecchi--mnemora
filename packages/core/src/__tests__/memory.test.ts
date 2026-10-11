@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   DigestSourceSchema,
   EmbeddingStatusSchema,
+  isStrengthInRange,
+  MAX_STRENGTH,
   MemorySchema,
   MemoryStatusSchema,
   NewMemorySchema,
@@ -54,6 +56,24 @@ describe("MemorySchema", () => {
     const memory = validMemory();
     memory.digest = "";
     expect(MemorySchema.safeParse(memory).success).toBe(false);
+  });
+});
+
+// `Memory.strength` の値域は `(0, MAX_STRENGTH]`（ADR 0078）。0 は含めない（`status: 'forgotten'` と同じことを言う道を作らない）。
+describe("strength の値域は (0, MAX_STRENGTH]", () => {
+  it.each([
+    ["0", 0, false],
+    ["Number.MIN_VALUE", Number.MIN_VALUE, true],
+    ["MAX_STRENGTH", MAX_STRENGTH, true],
+  ])("%s", (_label, strength, inRange) => {
+    expect(isStrengthInRange(strength)).toBe(inRange);
+
+    const memory = validMemory();
+    memory.strength = strength;
+    expect(MemorySchema.safeParse(memory).success).toBe(inRange);
+
+    const { id, createdAt, updatedAt, status, supersededById, contestedWithId, ...rest } = memory;
+    expect(NewMemorySchema.safeParse(rest).success).toBe(inRange);
   });
 });
 
