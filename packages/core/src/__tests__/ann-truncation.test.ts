@@ -261,6 +261,24 @@ describe("decideAnnTruncation — safetyRatio は kind の名乗りと食い違�
     },
   );
 
+  // 浮動小数の比が使えなくても、真の比 R = bar / (sim × value) の側は bar の符号で決まる。
+  // bar が 0 以下なら R は 0 以下。bar が正なら、bar は Number.MIN_VALUE 以上で、0 に丸まった積は
+  // Number.MIN_VALUE / 2 以下なので、R は 2 以上。どちらに決めるか・undecidable に倒すかは縛らない。
+  it.each([
+    ["bar が 0（真の R は 0）", 0, "provably_safe"],
+    ["bar が負（真の R は負）", -0.5, "provably_safe"],
+    ["bar が正（真の R は 1 を超える）", 0.5, "loss_possible"],
+    ["bar が Number.MIN_VALUE（真の R はなお 1 を超える）", Number.MIN_VALUE, "loss_possible"],
+  ])("分母が 0 に潰れても、真の R と逆の kind を名乗らない: %s", (_label, bar, contradicting) => {
+    const v = decideAnnTruncation({
+      ...base,
+      strategy: declaring(tinyValue),
+      lastAnnSimilarity: tinySim,
+      lastReturnedTotal: bar,
+    });
+    expect(v.kind).not.toBe(contradicting);
+  });
+
   it("やりすぎ: 比が大きくても有限なら undecidable にせず provably_safe と判定する", () => {
     const sim = 1e-300;
     const bar = 1;
