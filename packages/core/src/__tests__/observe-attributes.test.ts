@@ -155,4 +155,23 @@ describe("runtime.observe() — attributes が Memory まで素通しされる�
       }),
     ).rejects.toThrow();
   });
+
+  // 上限は ADR 0312 の上限の表のとおり両端を含む（キー数は最大16、キー長は1〜64、値長は0〜256で空文字は許す）。
+  it.each([
+    [
+      "キーが16個ちょうど",
+      Object.fromEntries(Array.from({ length: 16 }, (_, i) => [`k${i}`, "v"])),
+    ],
+    ["キーが64文字ちょうど", { ["k".repeat(64)]: "v" }],
+    ["値が256文字ちょうど", { k: "v".repeat(256) }],
+    ["値が空文字", { k: "" }],
+  ])("attributes の上限ちょうどは受け付け、Memory まで届く: %s", async (_label, attributes) => {
+    const { runtime, stores } = buildRuntime();
+
+    const result = await runtime.observe(ctx, { kind: "utterance", text: "x", attributes });
+
+    expect(result.memoryIds.length).toBeGreaterThan(0);
+    const memory = await stores.memoryStore.get(ctx, result.memoryIds[0]!);
+    expect(memory?.attributes).toEqual(attributes);
+  });
 });
